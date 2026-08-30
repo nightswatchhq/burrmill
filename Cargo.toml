@@ -1,0 +1,30 @@
+# Burrmill: a query engine-layer for sealed Parquet segments plus a live tip.
+#
+# Two members, and the split is load-bearing rather than tidy-minded. `burrmill` is the shipped
+# library and its dependency graph is **pure Rust** - no DuckDB, no DataFusion, no C++. `burrmill-bench`
+# is where the oracles live, and it is `publish = false` precisely so that the incumbent engines we
+# are measuring against can never reach the release graph. RFC-0042 §3a's binary rule, expressed as
+# a workspace layout rather than as a promise.
+[workspace]
+resolver = "2"
+members = ["crates/burrmill", "crates/burrmill-bench"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nightswatchhq/burrmill"
+
+[workspace.dependencies]
+# 59.x, matching DataFusion 55's Arrow. df-gate deliberately carried two Arrows (nuthatch's 58 for
+# the fixture writer, DataFusion's 59 for reading results) because it lived inside nuthatch's graph.
+# Burrmill does not, so it can hold one - and a sealed segment is a Parquet file, not an Arrow
+# version, so reading what nuthatch writes with 58 is unaffected.
+arrow = "59"
+parquet = { version = "59", default-features = false, features = ["arrow", "snap"] }
+rustc-hash = "2"
+# The SwissTable the RFC names. Raw-entry access is what lets keys live in an arena instead of one
+# heap allocation each, which is the difference between owning an aggregation and renting std's.
+hashbrown = "0.16"
+rayon = "1"
+sqlparser = "0.62"

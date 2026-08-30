@@ -1,0 +1,9 @@
+RESULT	rows=2000000	segments=1	addrs=512	repeats=5	order=duck_first	duck_ms=31	df_ms=26	burrmill_ms=36	df_ratio=0.84	burrmill_ratio=1.16	parity=verified	groups=509	rss_mb=241
+RESULT	rows=2000000	segments=1	addrs=512	repeats=5	order=burrmill_first	duck_ms=30	df_ms=25	burrmill_ms=37	df_ratio=0.83	burrmill_ratio=1.23	parity=verified	groups=509	rss_mb=236
+RESULT	rows=2000000	segments=100	addrs=512	repeats=5	order=duck_first	duck_ms=17	df_ms=29	burrmill_ms=15	df_ratio=1.71	burrmill_ratio=0.88	parity=verified	groups=509	rss_mb=269
+RESULT	rows=2000000	segments=100	addrs=512	repeats=5	order=burrmill_first	duck_ms=17	df_ms=29	burrmill_ms=16	df_ratio=1.71	burrmill_ratio=0.94	parity=verified	groups=509	rss_mb=262
+RESULT	rows=2000000	segments=1000	addrs=512	repeats=5	order=duck_first	duck_ms=71	df_ms=51	burrmill_ms=90	df_ratio=0.72	burrmill_ratio=1.27	parity=verified	groups=509	rss_mb=338
+RESULT	rows=2000000	segments=1000	addrs=512	repeats=5	order=burrmill_first	duck_ms=70	df_ms=51	burrmill_ms=90	df_ratio=0.73	burrmill_ratio=1.29	parity=verified	groups=509	rss_mb=320
+RESULT	rows=2000000	segments=10000	addrs=512	repeats=5	order=duck_first	duck_ms=674	df_ms=607	burrmill_ms=855	df_ratio=0.90	burrmill_ratio=1.27	parity=verified	groups=509	rss_mb=1116
+RESULT	rows=2000000	segments=10000	addrs=512	repeats=5	order=burrmill_first	duck_ms=674	df_ms=626	burrmill_ms=857	df_ratio=0.93	burrmill_ratio=1.27	parity=verified	groups=509	rss_mb=1071
+DONE

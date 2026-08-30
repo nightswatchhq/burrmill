@@ -1,0 +1,8 @@
+parity:  verified on 309664 parties  (346288 rows read across 2985 morsels, 0 skipped)
+NEST	table=staking_legacy__stake_delegated	segments=2985	rows=346288	groups=309664	duck_ms=788	burrmill_ms=559	ratio=0.71	parity=verified	rss_mb=737
+parity:  verified on 96353 parties  (102766 rows read across 2875 morsels, 0 skipped)
+NEST	table=staking__stake_delegated_withdrawn	segments=2875	rows=102766	groups=96353	duck_ms=762	burrmill_ms=467	ratio=0.61	parity=verified	rss_mb=466
+parity:  verified on 69 parties  (67004 rows read across 905 morsels, 0 skipped)
+NEST	table=escrow__escrow_collected	segments=905	rows=67004	groups=69	duck_ms=622	burrmill_ms=182	ratio=0.29	parity=verified	rss_mb=165
+parity:  verified on 104 parties  (6712 rows read across 869 morsels, 0 skipped)
+NEST	table=escrow__deposit	segments=869	rows=6712	groups=104	duck_ms=619	burrmill_ms=67	ratio=0.11	parity=verified	rss_mb=156

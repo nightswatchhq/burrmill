@@ -1,0 +1,23 @@
+[package]
+name = "burrmill"
+version = "0.0.1"
+description = "SQL over sealed Parquet segments with exact integer arithmetic and refuse-on-overflow."
+keywords = ["sql", "parquet", "arrow", "query-engine", "blockchain"]
+categories = ["database"]
+readme = "../../README.md"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# **The whole dependency list, and it is meant to stay short.** Arrow and Parquet are rented
+# permanently (RFC-0044 §4.2): nobody solo-maintains a better SIMD kernel library or Parquet decoder,
+# and there is no evidence trying would pay. Everything above them - semantics, planning, the folds -
+# is owned. There is no DuckDB here and no DataFusion here, which is the point.
+[dependencies]
+arrow.workspace = true
+parquet.workspace = true
+rustc-hash.workspace = true
+hashbrown.workspace = true
+rayon.workspace = true
+sqlparser.workspace = true

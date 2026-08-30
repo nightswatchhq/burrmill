@@ -1,0 +1,21 @@
+[package]
+name = "burrmill-bench"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# **The oracles live here and nowhere else.** DuckDB and DataFusion are the incumbents Burrmill is
+# measured against, so they must never reach the shipped library's dependency graph - not for the
+# licence audit, not for the build-time numbers, and not for the C++-free claim. `publish = false`
+# plus a separate member is that rule expressed as a manifest rather than as a note in a README.
+[dependencies]
+burrmill = { path = "../burrmill" }
+arrow.workspace = true
+parquet.workspace = true
+datafusion = "55"
+duckdb = { version = "1", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anyhow = "1"
+tempfile = "3"
