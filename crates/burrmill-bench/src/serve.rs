@@ -178,8 +178,8 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
     println!("parity:  verified on {ours} parties, {secs}s per point, {} threads per query\n",
         crate::oracles::thread_budget());
     println!(
-        "{:<8} {:<12} {:>8} {:>8} {:>10} {:>7}  {}",
-        "clients", "engine", "qps", "p50_ms", "worstp99", "fair", "queries per client: min..max"
+        "{:<8} {:<12} {:>8} {:>8} {:>10} {:>7}  queries per client: min..max",
+        "clients", "engine", "qps", "p50_ms", "worstp99", "fair"
     );
 
     for &n in &counts {
