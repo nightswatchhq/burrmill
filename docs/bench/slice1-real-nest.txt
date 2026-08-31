@@ -1,8 +1,56 @@
-parity:  verified on 309664 parties  (346288 rows read across 2985 morsels, 0 skipped)
-NEST	table=staking_legacy__stake_delegated	segments=2985	rows=346288	groups=309664	duck_ms=788	burrmill_ms=559	ratio=0.71	parity=verified	rss_mb=737
-parity:  verified on 96353 parties  (102766 rows read across 2875 morsels, 0 skipped)
-NEST	table=staking__stake_delegated_withdrawn	segments=2875	rows=102766	groups=96353	duck_ms=762	burrmill_ms=467	ratio=0.61	parity=verified	rss_mb=466
-parity:  verified on 69 parties  (67004 rows read across 905 morsels, 0 skipped)
-NEST	table=escrow__escrow_collected	segments=905	rows=67004	groups=69	duck_ms=622	burrmill_ms=182	ratio=0.29	parity=verified	rss_mb=165
+# Real nest, corrected. Roadmap 1.1.
+#
+# The previous version of this file is wrong and is kept in git history rather than deleted.
+# It reported DuckDB at a flat ~620 ms across tables whose row counts differ fifty-twofold,
+# and ratios of 0.11-0.71 in Burrmill's favour. Both were artefacts of the harness: a nest
+# keeps every table's segments in one directory - 38,429 files here - and DuckDB re-expanded
+# '<dir>/<prefix>-*.parquet' inside every timed repeat while Burrmill's open_nest_table did
+# its one read_dir outside the timer. DuckDB was being charged for catalog construction that
+# Burrmill was given free.
+#
+# duck_ms      DuckDB by glob, catalog rebuilt per run. Kept for continuity with the old file.
+# duck_list_ms DuckDB handed the same explicit file list Burrmill's catalog holds. LIKE FOR LIKE.
+# burr_cold_ms Burrmill building its own catalog inside the timer. Cold against DuckDB's cold.
+# list_ratio   burrmill_ms / duck_list_ms. This is the number the <=1.0x gate applies to.
+#
+# Machine: Apple M5 Pro, 18 threads. 2026-08-31T08:35:21Z
+# Segments read read-only from /Users/pepe/Projects/graph-allocations-nest/segments
+# Also fixed here: the fold had no projection pushdown and decoded every column in the
+# segment to read three. The 4-column synthetic fixture hid it; a real event is 12-14 columns.
+
 parity:  verified on 104 parties  (6712 rows read across 869 morsels, 0 skipped)
-NEST	table=escrow__deposit	segments=869	rows=6712	groups=104	duck_ms=619	burrmill_ms=67	ratio=0.11	parity=verified	rss_mb=156
+catalog: 38429 entries in /Users/pepe/Projects/graph-allocations-nest/segments, 869 match escrow__deposit-*.parquet  (2.3% of the directory)
+NEST	table=escrow__deposit	segments=869	rows=6712	groups=104	duck_ms=398	burrmill_ms=29	ratio=0.07	parity=verified	rss_mb=215
+PHASE	table=escrow__deposit	dir_entries=38429	matched=869	duck_glob_ms=88	duck_bind_ms=174	duck_exec_ms=224	duck_list_ms=61	burr_plan_ms=9	burr_scan_ms=18	burr_merge_ms=0	burr_cold_ms=114	list_ratio=0.48	cold_ratio=0.29
+duck_all=[396, 397, 398, 402, 403]
+burrmill_all=[29, 29, 29, 30, 30]
+duck_list_all=[60, 61, 61, 62, 64]
+duck_glob_all=[86, 87, 88, 89, 90]
+
+parity:  verified on 69 parties  (67004 rows read across 905 morsels, 0 skipped)
+catalog: 38429 entries in /Users/pepe/Projects/graph-allocations-nest/segments, 905 match escrow__escrow_collected-*.parquet  (2.4% of the directory)
+NEST	table=escrow__escrow_collected	segments=905	rows=67004	groups=69	duck_ms=427	burrmill_ms=51	ratio=0.12	parity=verified	rss_mb=223
+PHASE	table=escrow__escrow_collected	dir_entries=38429	matched=905	duck_glob_ms=95	duck_bind_ms=181	duck_exec_ms=234	duck_list_ms=65	burr_plan_ms=10	burr_scan_ms=39	burr_merge_ms=0	burr_cold_ms=138	list_ratio=0.78	cold_ratio=0.32
+duck_all=[412, 414, 427, 428, 448]
+burrmill_all=[50, 51, 51, 51, 52]
+duck_list_all=[63, 64, 65, 67, 67]
+duck_glob_all=[87, 88, 95, 96, 128]
+
+parity:  verified on 309664 parties  (346288 rows read across 2985 morsels, 0 skipped)
+catalog: 38429 entries in /Users/pepe/Projects/graph-allocations-nest/segments, 2985 match staking_legacy__stake_delegated-*.parquet  (7.8% of the directory)
+NEST	table=staking_legacy__stake_delegated	segments=2985	rows=346288	groups=309664	duck_ms=569	burrmill_ms=198	ratio=0.35	parity=verified	rss_mb=982
+PHASE	table=staking_legacy__stake_delegated	dir_entries=38429	matched=2985	duck_glob_ms=90	duck_bind_ms=179	duck_exec_ms=391	duck_list_ms=256	burr_plan_ms=32	burr_scan_ms=129	burr_merge_ms=29	burr_cold_ms=279	list_ratio=0.77	cold_ratio=0.49
+duck_all=[566, 567, 569, 574, 575]
+burrmill_all=[195, 197, 198, 198, 198]
+duck_list_all=[245, 250, 256, 257, 260]
+duck_glob_all=[88, 89, 90, 90, 92]
+
+parity:  verified on 96353 parties  (102766 rows read across 2875 morsels, 0 skipped)
+catalog: 38429 entries in /Users/pepe/Projects/graph-allocations-nest/segments, 2875 match staking__stake_delegated_withdrawn-*.parquet  (7.5% of the directory)
+NEST	table=staking__stake_delegated_withdrawn	segments=2875	rows=102766	groups=96353	duck_ms=553	burrmill_ms=171	ratio=0.31	parity=verified	rss_mb=674
+PHASE	table=staking__stake_delegated_withdrawn	dir_entries=38429	matched=2875	duck_glob_ms=91	duck_bind_ms=186	duck_exec_ms=361	duck_list_ms=226	burr_plan_ms=31	burr_scan_ms=123	burr_merge_ms=7	burr_cold_ms=253	list_ratio=0.76	cold_ratio=0.46
+duck_all=[543, 552, 553, 555, 556]
+burrmill_all=[166, 167, 171, 171, 173]
+duck_list_all=[223, 225, 226, 227, 233]
+duck_glob_all=[90, 90, 91, 92, 94]
+

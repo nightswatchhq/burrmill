@@ -4,6 +4,93 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Roadmap 1.1 — the real-nest comparison was measuring the wrong thing — 2026-08-31
+
+**The published real-nest ratios were wrong and are restated.** They are also, after a defect the
+correction exposed, still under the gate — but by a different margin and for a different reason, and
+the two facts have to be reported in that order.
+
+### What the flat ~620 ms was
+
+DuckDB's time on the real nest did not move with rows. Fitting the four recorded points against
+segment count alone gives 553 ms fixed plus 0.076 ms per segment, with residuals of 0.2, 0.4, -9.0
+and +8.7 ms — a 1.2% fit against file count while row counts ranged over fifty-twofold. A query
+engine's time does not do that. Something other than the query was being measured.
+
+It was the catalog. A nest keeps every table's segments in **one** directory, and that directory
+holds **38,429 files**; the four tables under test are 2.3% to 7.8% of it. DuckDB's
+`read_parquet('<dir>/<prefix>-*.parquet')` re-enumerated and re-matched all 38,429 inside every
+timed repeat, while Burrmill's `open_nest_table` did its one `read_dir` *outside* the timer. The
+harness was charging one engine for catalog construction and handing the other the same work free.
+
+Decomposed, DuckDB's fixed cost is ~88 ms of `glob()` plus ~178 ms of bind, before a row is read.
+
+### The correction, before any fix
+
+Handing DuckDB the identical file list — same bytes, same plan, no pattern to expand — and running
+Burrmill unchanged:
+
+| table | published | like-for-like |
+|---|---:|---:|
+| `escrow__deposit` | 0.11 | **1.00** |
+| `escrow__escrow_collected` | 0.29 | **2.98** |
+| `staking__stake_delegated_withdrawn` | 0.61 | **2.12** |
+| `staking_legacy__stake_delegated` | 0.71 | **2.24** |
+
+Burrmill was 2.1x to 3.0x *slower* than DuckDB on three of four real tables and level on the fourth.
+The 0.11 was 869 files' worth of fold against 38,429 files' worth of directory scan.
+
+### The fifth defect found by measurement: no projection pushdown
+
+The gap the correction exposed had a cause. `fold_morsel` built its reader with `with_row_groups`
+and no `ProjectionMask`, so the fold decoded **every column in the segment** and used three. The
+synthetic fixture is four columns wide, so this cost essentially nothing and was invisible for the
+whole of slice 1. A real nest event is twelve to fourteen columns, two of them 64-character hex
+hashes.
+
+Adding the mask cut `scan_ms` by 2.7x to 4.4x: 504 ms to 129 ms on `staking_legacy__stake_delegated`,
+173 ms to 39 ms on `escrow__escrow_collected`.
+
+### Corrected figures
+
+Apple M5 Pro, 18 threads, median of 5, parity verified first and separately between DuckDB's glob
+and its own explicit file list. `list_ratio` is the like-for-like number the gate applies to.
+
+| table | segments | rows | groups | list_ratio | cold_ratio | published (void) |
+|---|---:|---:|---:|---:|---:|---:|
+| `escrow__deposit` | 869 | 6,712 | 104 | **0.48** | 0.29 | 0.11 |
+| `escrow__escrow_collected` | 905 | 67,004 | 69 | **0.78** | 0.32 | 0.29 |
+| `staking__stake_delegated_withdrawn` | 2,875 | 102,766 | 96,353 | **0.76** | 0.46 | 0.61 |
+| `staking_legacy__stake_delegated` | 2,985 | 346,288 | 309,664 | **0.77** | 0.49 | 0.71 |
+
+`cold_ratio` is both engines building their own catalog, which is the honest reading of a
+cold process; Burrmill wins it because a parallel `read_dir` plus parallel footer parse beats a glob
+plus a serial bind. That is a real win and it is a *catalog* win, not a fold win, and it should never
+again be quoted as though it were the latter.
+
+The synthetic sweep is unaffected — it uses a purpose-built fixture directory and never touched this
+path — and re-running it after the projection change shows no regression: 0.48 at a million groups,
+0.82 at 200k, 0.54 at 1000 segments, against 0.46, 0.79 and 0.63 published. `BREAK_PARITY=1` still
+refuses with no RESULT line.
+
+### What this does not change
+
+**Peak RSS still fails.** 982 MB on `staking_legacy__stake_delegated` against a 256 MB gate.
+Projection pushdown does not touch it, because the memory is in twelve thread-local tables each
+spanning the whole key space, not in the decoded columns. Item 1.2 remains the blocker and slice 1
+remains unpassed.
+
+### Owed, added
+
+- **The harness gave one engine a catalog and charged the other for it, for a whole slice, and the
+  tell was sitting in the results file** — a constant where a slope belonged. Worth a gate that
+  refuses a comparison whose timings do not vary with input size, since the parity guard cannot see
+  this class of error at all.
+- **Projection pushdown existed nowhere and no test would have caught it.** The fixture cannot: it is
+  four columns wide by construction. A fixture with a realistic schema width is owed.
+
+---
+
 ## Slice 1 — owned operator, in-graph — 2026-08-31
 
 **Gate: PASS on latency, FAIL on peak RSS.** The thesis reproduces; the memory budget does not.

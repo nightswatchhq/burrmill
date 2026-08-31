@@ -270,6 +270,29 @@ fn fold_only() -> anyhow::Result<()> {
 ///
 ///     burrmill-bench nest <segments-dir> <table-prefix>
 ///     CREDIT=receiver DEBIT=payer VALUE=tokens burrmill-bench nest ... escrow__deposit
+///
+/// # Phase decomposition (roadmap 1.1)
+///
+/// The first version of this harness reported one number per engine and the real-nest ratios it
+/// produced were not measuring the fold. DuckDB's time was flat at roughly 620 ms across tables
+/// whose row counts differed fifty-twofold, which is not what a query engine's time does. The cause
+/// is that a nest keeps every table's segments in **one** directory - 38,429 files in the nest this
+/// was run against - and `read_parquet('<dir>/<prefix>-*.parquet')` enumerates and pattern-matches
+/// all of them on every execution, while Burrmill's `open_nest_table` did its one `read_dir`
+/// *outside* the timed region. The harness was charging DuckDB for catalog construction and giving
+/// Burrmill the same work for free.
+///
+/// So both are now measured both ways, and the phases are printed rather than summed:
+///
+/// - `glob` - DuckDB's own `glob()` over the pattern, i.e. directory enumeration alone.
+/// - `bind` / `exec` - `prepare()` against row iteration, splitting planning from execution.
+/// - `list` - the same query with the file list materialised once and passed explicitly, which is
+///   the catalog Burrmill is given.
+/// - Burrmill's `plan` / `scan` / `merge` come from `FoldMetrics` and were always there.
+///
+/// A server answering a query holds a catalog; it does not re-stat the directory per request. That
+/// makes `list` against Burrmill's existing figure the like-for-like comparison, and the glob
+/// figure a measurement of how much a nest directory costs to enumerate.
 fn nest() -> anyhow::Result<()> {
     let dir = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: nest <dir> <prefix>"))?;
     let prefix = std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: nest <dir> <prefix>"))?;
@@ -296,6 +319,36 @@ fn nest() -> anyhow::Result<()> {
     // harness parses. Burrmill returns the i128 as an i128, which is the point.
     let duck_sql = sql.replace("SUM(d) AS net", "SUM(d)::VARCHAR AS net");
 
+    // How big is the haystack the glob searches, as against the needles it returns? This is the
+    // whole of the 1.1 question and it costs one `read_dir` to answer.
+    let (dir_entries, prefix_files) = {
+        let mut total = 0usize;
+        let mut matched: Vec<PathBuf> = Vec::new();
+        for e in std::fs::read_dir(&dir)?.flatten() {
+            total += 1;
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "parquet")
+                && p.file_name()
+                    .and_then(|f| f.to_str())
+                    .is_some_and(|f| f.starts_with(&format!("{prefix}-")))
+            {
+                matched.push(p);
+            }
+        }
+        matched.sort();
+        (total, matched)
+    };
+
+    // DuckDB reading the identical files, named explicitly instead of by pattern. This is the same
+    // bytes and the same plan with the directory scan removed - the catalog handed over rather than
+    // rediscovered.
+    let file_list = prefix_files
+        .iter()
+        .map(|p| format!("'{}'", p.display()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let list_sql = duck_sql.clone();
+
     let run_duck = || -> anyhow::Result<(oracles::Rows, u128)> {
         let conn = duckdb::Connection::open_in_memory()?;
         conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"))?;
@@ -311,11 +364,72 @@ fn nest() -> anyhow::Result<()> {
         Ok((out, t.elapsed().as_millis()))
     };
 
+    // The same run, split at `prepare()`. Binding a Parquet scan is where DuckDB expands the glob
+    // and unifies the schema across every matched file; execution is where it reads rows.
+    let run_duck_split = || -> anyhow::Result<(u128, u128)> {
+        let conn = duckdb::Connection::open_in_memory()?;
+        conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"))?;
+        let t = std::time::Instant::now();
+        let mut stmt = conn.prepare(&duck_sql)?;
+        let bind_ms = t.elapsed().as_millis();
+        let t2 = std::time::Instant::now();
+        let mut rows = stmt.query([])?;
+        let mut n = 0u64;
+        while let Some(r) = rows.next()? {
+            let _: String = r.get(0)?;
+            let _: String = r.get(1)?;
+            n += 1;
+        }
+        std::hint::black_box(n);
+        Ok((bind_ms, t2.elapsed().as_millis()))
+    };
+
+    // Directory enumeration alone, using DuckDB's own glob function so the number is DuckDB's cost
+    // and not this harness's `read_dir`.
+    let run_duck_glob = || -> anyhow::Result<u128> {
+        let conn = duckdb::Connection::open_in_memory()?;
+        let t = std::time::Instant::now();
+        let mut stmt = conn.prepare(&format!("SELECT count(*) FROM glob('{glob}')"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let n: i64 = r.get(0)?;
+            std::hint::black_box(n);
+        }
+        Ok(t.elapsed().as_millis())
+    };
+
+    // The catalog handed over: an explicit file list, no pattern to expand.
+    let run_duck_list = || -> anyhow::Result<(oracles::Rows, u128)> {
+        let conn = duckdb::Connection::open_in_memory()?;
+        conn.execute_batch(&format!(
+            "CREATE VIEW t AS SELECT * FROM read_parquet([{file_list}]);"
+        ))?;
+        let t = std::time::Instant::now();
+        let mut stmt = conn.prepare(&list_sql)?;
+        let mut out = Vec::new();
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let addr: String = r.get(0)?;
+            let net: String = r.get(1)?;
+            out.push((addr, net.parse::<i128>()?));
+        }
+        Ok((out, t.elapsed().as_millis()))
+    };
+
     let run_burrmill = || -> anyhow::Result<(oracles::Rows, u128, burrmill::FoldMetrics)> {
         let t = std::time::Instant::now();
         let a = db.query(&sql, burrmill::Limits::default())?;
         let ms = t.elapsed().as_millis();
         Ok((a.rows().iter().map(|(k, v)| (k.to_string(), *v)).collect(), ms, a.metrics()))
+    };
+
+    // Burrmill paying for its own catalog, which the previous harness did outside the timer.
+    let run_burrmill_cold = || -> anyhow::Result<u128> {
+        let t = std::time::Instant::now();
+        let db = burrmill::Burrmill::open_nest_table("t", Path::new(&dir), &format!("{prefix}-"))?;
+        let a = db.query(&sql, burrmill::Limits::default())?;
+        std::hint::black_box(a.rows().len());
+        Ok(t.elapsed().as_millis())
     };
 
     // Parity first, untimed, as everywhere else.
@@ -336,6 +450,17 @@ fn nest() -> anyhow::Result<()> {
             d0.len()
         );
     }
+    // The explicit-list variant reads the same files by another name, so it must agree too. If it
+    // does not, the file list is not the set the glob matched and every figure below is void.
+    let (l0, _) = run_duck_list()?;
+    if l0 != d0 {
+        anyhow::bail!(
+            "PARITY FAILED between DuckDB's glob and its explicit file list on {prefix}: {} rows \
+             against {}. The two are not reading the same segments; no timing is reported.",
+            l0.len(),
+            d0.len()
+        );
+    }
     println!(
         "parity:  verified on {} parties  ({} rows read across {} morsels, {} skipped)",
         d0.len(),
@@ -343,16 +468,49 @@ fn nest() -> anyhow::Result<()> {
         metrics.morsels,
         metrics.rows_skipped
     );
+    println!(
+        "catalog: {} entries in {dir}, {} match {prefix}-*.parquet  ({:.1}% of the directory)",
+        dir_entries,
+        prefix_files.len(),
+        100.0 * prefix_files.len() as f64 / dir_entries.max(1) as f64
+    );
 
     let mut ds = Vec::new();
     let mut bs = Vec::new();
+    let mut binds = Vec::new();
+    let mut execs = Vec::new();
+    let mut globs = Vec::new();
+    let mut lists = Vec::new();
+    let mut colds = Vec::new();
+    let mut plans = Vec::new();
+    let mut scans = Vec::new();
+    let mut merges = Vec::new();
     for _ in 0..repeats {
         ds.push(run_duck()?.1);
-        bs.push(run_burrmill()?.1);
+        let (b_ms, m) = {
+            let (_, ms, m) = run_burrmill()?;
+            (ms, m)
+        };
+        bs.push(b_ms);
+        plans.push(m.plan_ms);
+        scans.push(m.scan_ms);
+        merges.push(m.merge_ms);
+        let (bind, exec) = run_duck_split()?;
+        binds.push(bind);
+        execs.push(exec);
+        globs.push(run_duck_glob()?);
+        lists.push(run_duck_list()?.1);
+        colds.push(run_burrmill_cold()?);
     }
-    ds.sort_unstable();
-    bs.sort_unstable();
-    let (dm, bm) = (ds[ds.len() / 2], bs[bs.len() / 2]);
+    let median = |v: &mut Vec<u128>| {
+        v.sort_unstable();
+        v[v.len() / 2]
+    };
+    let (dm, bm) = (median(&mut ds), median(&mut bs));
+    let (bind_m, exec_m) = (median(&mut binds), median(&mut execs));
+    let (glob_m, list_m, cold_m) = (median(&mut globs), median(&mut lists), median(&mut colds));
+    let (plan_m, scan_m, merge_m) =
+        (median(&mut plans), median(&mut scans), median(&mut merges));
     println!(
         "NEST\ttable={prefix}\tsegments={}\trows={}\tgroups={}\tduck_ms={dm}\tburrmill_ms={bm}\tratio={:.2}\tparity=verified\trss_mb={}",
         metrics.morsels,
@@ -361,6 +519,12 @@ fn nest() -> anyhow::Result<()> {
         bm as f64 / dm.max(1) as f64,
         rss_mb()
     );
-    println!("duck_all={ds:?}\nburrmill_all={bs:?}");
+    println!(
+        "PHASE\ttable={prefix}\tdir_entries={dir_entries}\tmatched={}\tduck_glob_ms={glob_m}\tduck_bind_ms={bind_m}\tduck_exec_ms={exec_m}\tduck_list_ms={list_m}\tburr_plan_ms={plan_m}\tburr_scan_ms={scan_m}\tburr_merge_ms={merge_m}\tburr_cold_ms={cold_m}\tlist_ratio={:.2}\tcold_ratio={:.2}",
+        prefix_files.len(),
+        bm as f64 / list_m.max(1) as f64,
+        cold_m as f64 / dm.max(1) as f64
+    );
+    println!("duck_all={ds:?}\nburrmill_all={bs:?}\nduck_list_all={lists:?}\nduck_glob_all={globs:?}");
     Ok(())
 }

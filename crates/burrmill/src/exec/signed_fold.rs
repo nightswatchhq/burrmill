@@ -18,6 +18,7 @@ use arrow::array::{Array, ArrayRef, Decimal128Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::ProjectionMask;
 use rayon::prelude::*;
 
 use crate::error::{BurrmillError, Result};
@@ -227,15 +228,24 @@ impl<'a> SignedFoldExec<'a> {
         // and re-parsing it per morsel would put the cost back that parallelising the scan removed.
         // Sound because a sealed segment is content-addressed and immutable - the footer cannot go
         // stale under us the way a live file's could.
-        let reader = ParquetRecordBatchReaderBuilder::new_with_metadata(file, m.meta.clone())
+        let builder = ParquetRecordBatchReaderBuilder::new_with_metadata(file, m.meta.clone())
             // 8192, not Arrow's 1024 default. DuckDB's vector is 2048; the fold is a tight loop over
             // three string columns and larger batches amortise the per-batch downcast without
             // pushing the working set out of L2.
             .with_batch_size(8192)
             .with_row_groups(vec![m.row_group])
             .with_offset(m.offset)
-            .with_limit(m.len)
-            .build()?;
+            .with_limit(m.len);
+        // **Read three columns, not fourteen.** Without this the fold decodes every column in the
+        // segment and uses the three it asked for. The synthetic fixture is four columns wide so the
+        // waste was invisible; a real nest event is twelve to fourteen, two of them 64-character hex
+        // hashes, and on `staking_legacy__stake_delegated` this was the difference between 2.2x
+        // DuckDB and parity. Measured on the real nest, which is the only place it shows.
+        let builder = match projection_mask(&m.meta, self.plan) {
+            Some(mask) => builder.with_projection(mask),
+            None => builder,
+        };
+        let reader = builder.build()?;
 
         let mut rows_read = 0u64;
         let mut rows_skipped = 0u64;
@@ -339,6 +349,33 @@ pub fn to_record_batch(rows: &[(Box<str>, i128)], plan: &SignedFold) -> Result<R
 /// A batch therefore targets a row budget rather than a file. The budget is derived from the
 /// available parallelism rather than fixed, because a batch large enough to amortise allocation is
 /// also large enough to starve the thread pool if the table is small.
+/// The leaf columns the fold actually reads, as a Parquet projection.
+///
+/// `None` when the schema is not flat or a name is missing, in which case the reader falls back to
+/// decoding everything - slower, never wrong. A sealed segment's schema is flat today, so this is a
+/// guard against a future layout rather than a live branch, and [`SealedSegments`] has no path
+/// dependency that would warn us if that changed.
+fn projection_mask(
+    meta: &parquet::arrow::arrow_reader::ArrowReaderMetadata,
+    plan: &SignedFold,
+) -> Option<ProjectionMask> {
+    let descr = meta.metadata().file_metadata().schema_descr();
+    let root = descr.root_schema();
+    // Flat only. A nested group would make root index and leaf index disagree, and a projection that
+    // silently selects the wrong column is exactly the failure this project exists to refuse.
+    if root.get_fields().iter().any(|f| !f.is_primitive()) {
+        return None;
+    }
+    let index_of = |name: &str| root.get_fields().iter().position(|f| f.name() == name);
+    let mut idx = Vec::with_capacity(3);
+    for name in [&plan.credit_col, &plan.debit_col, &plan.value_col] {
+        idx.push(index_of(name)?);
+    }
+    idx.sort_unstable();
+    idx.dedup();
+    Some(ProjectionMask::roots(descr, idx))
+}
+
 fn coalesce(morsels: &[Morsel]) -> Vec<&[Morsel]> {
     let total: usize = morsels.iter().map(|m| m.len).sum();
     let threads = rayon::current_num_threads().max(1);
