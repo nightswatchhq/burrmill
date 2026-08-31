@@ -701,8 +701,26 @@ fn coalesce(morsels: &[(usize, Morsel)], degree: Option<usize>) -> Vec<&[(usize,
     // Sharing - `degree` is `Some(d)` - and the group count **is** the width cap, because rayon
     // cannot run more groups at once than there are. So it must be exactly `d`. Over-decomposing
     // here would hand the query the whole pool again and undo the point of admitting it narrowly.
+    // **Over-decomposed even when sharing, and the gate is why that is safe.** The first version
+    // used exactly `d` groups, which caps the width perfectly and balances terribly: two coarse
+    // groups of 250k rows leave a worker idle for whatever the slower one runs over by. Measured,
+    // that idling was most of the gap - eight threads were only 66% busy against a work-bound of
+    // 151 qps. Splitting each share four ways costs nothing in fairness because **admission** is
+    // what bounds concurrency now, not decomposition.
+    // Two, swept rather than picked, at 32 clients on a 32-core box (two runs each):
+    //
+    // | groups per share | qps | worst p99 | fair |
+    // |---|---:|---:|---:|
+    // | d x 1 | 101, 104 | 432, 451 ms | 0.89, 0.94 |
+    // | **d x 2** | **112, 113** | **446, 402 ms** | **0.95** |
+    // | d x 3 | 89, 91 | 515, 526 ms | 0.81 |
+    //
+    // A sharp optimum rather than a trend: one group per worker balances badly, three brings the
+    // per-group fixed cost back. It is a constant and not a setting, because a library that claims
+    // nothing to configure should not grow a knob the moment a number is inconvenient.
+    const OVERSUB: usize = 2;
     let (groups, target) = match degree {
-        Some(d) => (d, (total / d.max(1)).max(1)),
+        Some(d) => (d * OVERSUB, (total / (d * OVERSUB).max(1)).max(1)),
         None => (
             usize::MAX,
             (total / (threads * 4)).clamp(4_096, crate::segment::MORSEL_ROWS),

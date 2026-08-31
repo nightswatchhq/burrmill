@@ -4,6 +4,58 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 5.4 — the throughput gap was utilisation, not work — 2026-08-31
+
+The obvious suspects were per-query fixed cost: footers parsed afresh on every query, no plan cache,
+no metadata cache. All wrong, and the measurement that settled it took two minutes.
+
+**The fold is 53 ms at one thread.** DuckDB's implied serial cost at 168 qps on eight threads is
+~48 ms. The work is comparable; we are not doing more of it. What we were doing was using eight
+threads to get **3.3x** — scaling saturates at four and the eighth thread buys nothing.
+
+Under load that compounds. A sharing query was split into exactly `d` coarse groups, so two groups of
+250k rows each left a worker idle for however much the slower one ran over by. Eight threads were
+about two thirds busy against a work-bound of ~151 qps.
+
+Splitting each admitted share **twice** recovers most of it. Swept, two runs each, 32 clients:
+
+| groups per share | qps | worst p99 | fair |
+|---|---:|---:|---:|
+| d × 1 | 101, 104 | 432, 451 ms | 0.89, 0.94 |
+| **d × 2** | **112, 113** | **446, 402 ms** | **0.95** |
+| d × 3 | 89, 91 | 515, 526 ms | 0.81 |
+
+A sharp optimum rather than a trend: one group per worker balances badly, three brings the per-group
+fixed cost back. Two is a constant in the code and not a setting, because a library that claims
+nothing to configure should not grow a knob the moment a number is inconvenient.
+
+Over-decomposing is only safe **because admission bounds concurrency now**. Before the gate, it was
+precisely what let one query take the whole pool and starve the queue. The same change would have
+made things worse two items ago.
+
+### Where the serving picture stands
+
+| clients | duck_multi | burrmill |
+|---:|---|---|
+| 1 | 56 qps | **77 qps** |
+| 4 | 109 qps, fair 0.88 | **123 qps**, fair 0.85 |
+| 16 | **149 qps**, fair 0.49 | 123 qps, **fair 0.93** |
+| 32 | **167 qps**, fair 0.57 | 112 qps, **fair 0.89** |
+
+Burrmill wins outright to four clients, is markedly fairer at every count, and has a comparable tail
+(410 ms against 400 at thirty-two). It trails on raw throughput above eight clients.
+
+Single query unchanged: `181 188 189 189 190` ms against a baseline band of 185-199.
+
+### What is left, costed rather than guessed
+
+112 qps against a work-bound of ~151 is about 74% utilisation. DuckDB reaches 168, which is *above*
+our work-bound, so it is both roughly 10% cheaper per query and better utilised. Closing that means
+work-stealing **across** queries instead of nested rayon pools — a scheduler, not a tuning constant —
+and it is filed as 5.5 to be costed before anyone starts it.
+
+---
+
 ## 5.3a — a sharing query takes a slice of the pool, not all of it — 2026-08-31
 
 The gate fixed *how many* queries start. It did nothing about how **wide** each one got, so four
