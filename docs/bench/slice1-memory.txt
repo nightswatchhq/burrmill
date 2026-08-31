@@ -8,6 +8,9 @@
 #
 # Box:      32-core Debian 6.12, 62 GB. `nproc` = 32.
 # Fixture:  ROWS=2000000 SEGMENTS=100 ADDRS=1000000 -> 989,690 groups, 42-byte keys.
+#           NEST-SHAPED, 12 columns (roadmap 1.1a). The `before` column below was measured on the
+#           old 4-column fixture and is kept because the shape change it documents is far larger
+#           than the fixture difference; the `after` column has been re-measured on the wide one.
 # Measure:  peak RSS, operator only (no DuckDB linked, no DataFusion session), REPEATS=1,
 #           median of three separate processes. Spread is +-3%.
 # before:   commit eec0699, one aggregation per worker, Box<str> per output row.
@@ -16,11 +19,19 @@
 # Gate: 256 MB. THE GATE DOES NOT NAME A THREAD COUNT, AND THAT IS NOW THE PROBLEM (roadmap 1.2c).
 
 threads   before_mb   after_mb   before_ms   after_ms   verdict_after
-1         538         146        870         575        pass
-4         557         186        286         221        pass
-8         584         210        192         185        pass
-16        608         259        183         162        FAIL by 1%
-32        769         349        194         167        FAIL by 36%
+1         538         147        870         578        pass
+4         557         180        286         220        pass
+8         584         204        192         163        pass
+16        608         259        183         183        ON THE LINE (251-259 across runs, gate 256)
+32        769         339        194         153        FAIL by 32%
+
+# Sixteen threads straddles the budget: separate runs give 251 and 259 against a 256 MB gate. It is
+# not a pass and it is not a comfortable fail, and saying which it is would be picking the run that
+# suits. This is the sharpest argument for roadmap 1.2c: a gate with no stated parallelism cannot
+# even be evaluated here.
+#
+# Widening the fixture to twelve columns did NOT cost memory, which is itself the projection
+# pushdown working: three columns are decoded whatever the file holds.
 
 # agg_bytes, the aggregation's own live bytes, is 99 MB at EVERY thread count above. That is the
 # whole claim of 1.2 stated as a measurement: the aggregate's size is a property of the data and not

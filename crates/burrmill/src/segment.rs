@@ -70,6 +70,17 @@ impl SealedSegments {
         Ok(Self { name: name.into(), files })
     }
 
+    /// A set over an explicit list of files, in the order given after sorting.
+    ///
+    /// `discover` is the ordinary path; this is for when the caller already knows which segments it
+    /// wants. The bench uses it to build a half-sized catalog for the scale check, and the seam will
+    /// want it to pin a query to the segments sealed before a boundary.
+    pub fn from_files(name: impl Into<String>, files: impl IntoIterator<Item = PathBuf>) -> Self {
+        let mut files: Vec<PathBuf> = files.into_iter().collect();
+        files.sort();
+        Self { name: name.into(), files }
+    }
+
     /// A set restricted to the segments whose file name starts with `prefix`.
     ///
     /// A real nest keeps every table in one `segments/` directory, named

@@ -69,3 +69,48 @@ here it errs pessimistic, which is no better. Use `fold` against a kept fixture 
 DataFusion is known to be weakest: its two-phase aggregation re-hashes across phases and its memory
 grows with core count (#6937, #11680). An owned operator that did the same under a 256 MB budget
 would not deserve to ship, so it is measured rather than asserted.
+
+## The fixture is as wide as a real event, not as wide as the query
+
+Segment sizes were nest-shaped from the start; the *schema* was not. The first fixture had four
+columns and a real nuthatch event has twelve, two of them 66-character hex hashes. The fold reads
+three columns, so on a four-column fixture projection pushdown is worth nothing - and the operator
+shipped for an entire slice with **no projection at all**, decoding fourteen columns to read three
+on the real nest and running 2.2x DuckDB because of it. Not one measurement noticed.
+
+Measured both ways, with the projection deliberately disabled to reproduce the defect:
+
+| fixture | projection on | projection off | penalty |
+|---|---:|---:|---:|
+| narrow, 512 groups | 14 ms | 15 ms | 1.07x |
+| **nest-shaped**, 512 groups | 14 ms | 35 ms | **2.5x** |
+| narrow, 200k groups | 35 ms | 35 ms | 1.00x |
+| **nest-shaped**, 200k groups | 34 ms | 55 ms | **1.6x** |
+
+On the narrow fixture the defect is unmeasurable. A fixture that cannot exhibit a defect cannot
+guard against it, and the general rule this is an instance of is that **the fixture has to be
+unrealistic only in the ways the experiment is about**. `NARROW=1` writes the old schema, and exists
+only so this table can be reproduced.
+
+## A ratio dominated by fixed cost is not printed as a number
+
+The parity guard compares answers. It cannot see a timing that is measuring the wrong thing, and
+three separate times in one day it did not: a harness that charged DuckDB for a 38,429-file directory
+scan Burrmill was given free, an RSS gate that counted a million of its own `String`s, and an
+`rss_mb()` that reported current RSS on macOS and a peak high-water mark on Linux. In every case both
+engines agreed on the answer, so parity said nothing.
+
+The nest harness now halves its input and checks whether each engine's time follows. Fixed cost is
+estimated by linear extrapolation from the two points - crude, and quite enough to tell 5% fixed from
+90%. If more than half of either engine's time is independent of how much data it read, **no ratio is
+printed**: the field reads `UNSAFE_fixed_duck=66pct_burr=17pct` and a warning goes to stderr. RFC-0004's
+discipline is to make the wrong figure unavailable rather than merely discouraged, because a number
+that is merely discouraged is a number somebody will paste into a README.
+
+The headline `ratio` is the like-for-like one, DuckDB handed the same catalog Burrmill holds. The
+glob-path number is reported beside it as `glob_ratio` and carries its own gate, which it fails on
+the small tables - correctly, since that is precisely the figure that was published and wrong.
+
+The first version of this check measured the list path and then gated the glob-path ratio, which is a
+different quantity: the same mistake in miniature as the one it exists to prevent. It was caught the
+first time it ran, which is at least the intended failure mode.

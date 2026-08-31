@@ -9,6 +9,22 @@
 //! An even split across files is a different problem, and it would flatter whichever engine handles
 //! uniform work best. That is precisely the confound a segment sweep exists to remove, so this
 //! writer does not offer one.
+//!
+//! # Schema width (roadmap 1.1a)
+//!
+//! **The first version of this fixture was four columns wide and a real nest event is twelve.** That
+//! is not a cosmetic difference: the fold reads three columns, so a four-column fixture makes
+//! projection pushdown worth almost nothing, and the operator shipped for a whole slice with **no
+//! projection at all** without a single measurement noticing. On the real nest it was decoding
+//! fourteen columns to read three and running 2.2x DuckDB because of it.
+//!
+//! A fixture that cannot exhibit a defect cannot guard against it. This one now mirrors what
+//! nuthatch actually seals - `_seq`, the contract address, both 66-character hex hashes, the block
+//! triple, `log_index`, the table tag, and a second uint256-as-text column the fold does not read -
+//! so the columns the query ignores cost something to ignore, exactly as they do in production.
+//!
+//! `NARROW=1` writes the old four-column schema. It exists so the projection win can be measured
+//! rather than asserted, and for no other reason.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -24,6 +40,9 @@ pub struct FixtureSpec {
     /// aggregation is known to grow memory with core count at high cardinality (#6937, #11680), and
     /// an owned operator that did the same under a 256 MB budget would not deserve to ship.
     pub addrs: usize,
+    /// Write the old four-column schema instead of a nest-shaped twelve. Only for measuring what
+    /// projection pushdown is worth; never the default, because it hides the thing it is measuring.
+    pub narrow: bool,
 }
 
 pub fn write(dir: &Path, spec: &FixtureSpec) -> anyhow::Result<usize> {
@@ -74,21 +93,78 @@ fn write_offset(path: &Path, spec: &FixtureSpec, rows: usize, offset: usize) -> 
         .collect();
     let block: Vec<u64> = (0..rows).map(|i| idx(i) as u64 / 100).collect();
 
+    if spec.narrow {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("block_number", DataType::UInt64, false),
+            Field::new("from", DataType::Utf8, false),
+            Field::new("to", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(block)),
+                Arc::new(StringArray::from(from)),
+                Arc::new(StringArray::from(to)),
+                Arc::new(StringArray::from(
+                    value.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                )),
+            ],
+        )?;
+        return finish(path, schema, batch);
+    }
+
+    // The columns the fold never looks at, and which a real event always has. Two of them are
+    // 66-character hex, which is why decoding what you did not ask for is expensive.
+    let seq: Vec<u64> = (0..rows).map(|i| idx(i) as u64).collect();
+    let log_index: Vec<u64> = (0..rows).map(|i| (idx(i) % 8) as u64).collect();
+    let timestamp: Vec<u64> = (0..rows).map(|i| 1_700_000_000 + idx(i) as u64 / 100 * 12).collect();
+    let block_hash: Vec<String> = (0..rows).map(|i| format!("0x{:064x}", idx(i) / 100)).collect();
+    let tx_hash: Vec<String> = (0..rows).map(|i| format!("0x{:064x}", idx(i))).collect();
+    // A second uint256-as-text the fold does not read. `shares` on the real staking table.
+    let shares: Vec<String> =
+        (0..rows).map(|i| format!("{}", 3_141_592_653_589u128 * (idx(i) as u128 % 89 + 1))).collect();
+    let contract = "0xf55041e37e12cd407ad00ce2910b8269b01263b9";
+    let table_tag = "staking__stake_delegated";
+
     let schema = Arc::new(Schema::new(vec![
+        Field::new("_seq", DataType::UInt64, false),
+        Field::new("address", DataType::Utf8, false),
+        Field::new("block_hash", DataType::Utf8, false),
         Field::new("block_number", DataType::UInt64, false),
+        Field::new("block_timestamp", DataType::UInt64, false),
         Field::new("from", DataType::Utf8, false),
+        Field::new("log_index", DataType::UInt64, false),
+        Field::new("shares", DataType::Utf8, false),
+        Field::new("table", DataType::Utf8, false),
         Field::new("to", DataType::Utf8, false),
+        Field::new("tx_hash", DataType::Utf8, false),
         Field::new("value", DataType::Utf8, false),
     ]));
+    let str_col = |v: &[String]| -> Arc<StringArray> {
+        Arc::new(StringArray::from(v.iter().map(|s| s.as_str()).collect::<Vec<_>>()))
+    };
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
+            Arc::new(UInt64Array::from(seq)),
+            Arc::new(StringArray::from(vec![contract; rows])),
+            str_col(&block_hash),
             Arc::new(UInt64Array::from(block)),
+            Arc::new(UInt64Array::from(timestamp)),
             Arc::new(StringArray::from(from)),
+            Arc::new(UInt64Array::from(log_index)),
+            str_col(&shares),
+            Arc::new(StringArray::from(vec![table_tag; rows])),
             Arc::new(StringArray::from(to)),
-            Arc::new(StringArray::from(value.iter().map(|s| s.as_str()).collect::<Vec<_>>())),
+            str_col(&tx_hash),
+            str_col(&value),
         ],
     )?;
+    finish(path, schema, batch)
+}
+
+fn finish(path: &Path, schema: Arc<Schema>, batch: RecordBatch) -> anyhow::Result<()> {
     let file = std::fs::File::create(path)?;
     let props = parquet::file::properties::WriterProperties::builder()
         .set_compression(parquet::basic::Compression::SNAPPY)

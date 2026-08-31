@@ -126,6 +126,9 @@ async fn bench() -> anyhow::Result<()> {
         rows: env_usize("ROWS", 2_000_000),
         segments: env_usize("SEGMENTS", 1).max(1),
         addrs: env_usize("ADDRS", 512),
+        // Nest-shaped by default. NARROW=1 writes the old four-column schema, which is only useful
+        // for measuring what projection pushdown is worth - see fixture.rs.
+        narrow: env_flag("NARROW"),
     };
     let repeats = env_usize("REPEATS", 1).max(1);
     let burrmill_first = matches!(std::env::var("ORDER").as_deref(), Ok("burrmill_first"));
@@ -413,6 +416,38 @@ fn nest() -> anyhow::Result<()> {
     };
 
     // The catalog handed over: an explicit file list, no pattern to expand.
+    let duck_over = |files: &[PathBuf]| -> anyhow::Result<u128> {
+        let list = files
+            .iter()
+            .map(|p| format!("'{}'", p.display()))
+            .collect::<Vec<_>>()
+            .join(",");
+        let conn = duckdb::Connection::open_in_memory()?;
+        conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet([{list}]);"))?;
+        let t = std::time::Instant::now();
+        let mut stmt = conn.prepare(&duck_sql)?;
+        let mut n = 0u64;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let _: String = r.get(0)?;
+            let _: String = r.get(1)?;
+            n += 1;
+        }
+        std::hint::black_box(n);
+        Ok(t.elapsed().as_millis())
+    };
+
+    let burrmill_over = |files: &[PathBuf]| -> anyhow::Result<u128> {
+        let segs = burrmill::SealedSegments::from_files("t", files.to_vec());
+        let mut cat = burrmill::Catalog::new();
+        cat.register(segs);
+        let db = burrmill::Burrmill::new(cat);
+        let t = std::time::Instant::now();
+        let a = db.query(&sql, burrmill::Limits::default())?;
+        std::hint::black_box(a.rows().len());
+        Ok(t.elapsed().as_millis())
+    };
+
     let run_duck_list = || -> anyhow::Result<(oracles::Rows, u128)> {
         let conn = duckdb::Connection::open_in_memory()?;
         conn.execute_batch(&format!(
@@ -525,12 +560,63 @@ fn nest() -> anyhow::Result<()> {
     let (glob_m, list_m, cold_m) = (median(&mut globs), median(&mut lists), median(&mut colds));
     let (plan_m, scan_m, merge_m) =
         (median(&mut plans), median(&mut scans), median(&mut merges));
+    // **The scale check (roadmap 1.1b).** Halve the input and see whether the time follows. An
+    // engine whose time barely moves is not being measured on the query; it is being measured on
+    // something fixed, and that is exactly how the real-nest ratios came to be a statement about a
+    // 38,429-file directory scan. Fixed cost is estimated by linear extrapolation from two points -
+    // crude, and enough to tell 5% fixed from 90%.
+    let half = &prefix_files[..prefix_files.len() / 2];
+    let (dh, bh) = (duck_over(half)?, burrmill_over(half)?);
+    let (df, bf) = (duck_over(&prefix_files)?, burrmill_over(&prefix_files)?);
+    let fixed = |t_half: u128, t_full: u128| -> u128 { (2 * t_half).saturating_sub(t_full) };
+    let (duck_fixed, burr_fixed) = (fixed(dh, df), fixed(bh, bf));
+    let frac = |f: u128, t: u128| -> f64 { f as f64 / t.max(1) as f64 };
+    let (duck_frac, burr_frac) = (frac(duck_fixed, df), frac(burr_fixed, bf));
     println!(
-        "NEST\ttable={prefix}\tsegments={}\trows={}\tgroups={}\tduck_ms={dm}\tburrmill_ms={bm}\tratio={:.2}\tparity=verified\trss_mb={}",
+        "SCALE\ttable={prefix}\tduck_half_ms={dh}\tduck_full_ms={df}\tduck_fixed_ms={duck_fixed}\tduck_fixed_pct={:.0}\tburr_half_ms={bh}\tburr_full_ms={bf}\tburr_fixed_ms={burr_fixed}\tburr_fixed_pct={:.0}",
+        duck_frac * 100.0,
+        burr_frac * 100.0
+    );
+
+    // **A ratio dominated by fixed cost is not printed as a number.** RFC-0004's discipline is to
+    // make the wrong figure unavailable rather than merely discouraged: if more than half of either
+    // engine's time is independent of how much data it read, there is no ratio here that means
+    // "faster on this query", and a reader must not be able to copy one out.
+    //
+    // **The gate covers the number it publishes.** The first version of this check measured the
+    // explicit-list path and then gated the glob-path ratio, which is a different quantity - the
+    // same mistake in miniature as the one 1.1b exists to prevent, caught the first time it ran. The
+    // headline `ratio` is therefore the like-for-like one, DuckDB handed the same catalog Burrmill
+    // holds, and it is the one the scale check measured.
+    let safe = |frac_d: f64, frac_b: f64, num: f64| -> String {
+        if frac_d > 0.5 || frac_b > 0.5 {
+            format!("UNSAFE_fixed_duck={:.0}pct_burr={:.0}pct", frac_d * 100.0, frac_b * 100.0)
+        } else {
+            format!("{num:.2}")
+        }
+    };
+    let ratio_field = safe(duck_frac, burr_frac, bm as f64 / list_m.max(1) as f64);
+
+    // The glob path's fixed cost is not estimated, it is measured: `glob()` plus bind, before a row
+    // is read. On a nest whose segments directory holds tens of thousands of files this is most of
+    // the number, which is why the published real-nest ratios were wrong for a whole slice.
+    let glob_fixed_frac = (glob_m + bind_m) as f64 / dm.max(1) as f64;
+    let glob_ratio_field = safe(glob_fixed_frac, burr_frac, bm as f64 / dm.max(1) as f64);
+    if ratio_field.starts_with("UNSAFE") || glob_ratio_field.starts_with("UNSAFE") {
+        eprintln!(
+            "WARNING: {prefix}: a ratio was withheld because most of an engine's time does not vary \
+             with input size. glob path: {:.0}% fixed. list path: DuckDB {:.0}%, Burrmill {:.0}%. \
+             Use the PHASE and SCALE lines and say what the fixed cost is.",
+            glob_fixed_frac * 100.0,
+            duck_frac * 100.0,
+            burr_frac * 100.0
+        );
+    }
+    println!(
+        "NEST\ttable={prefix}\tsegments={}\trows={}\tgroups={}\tduck_list_ms={list_m}\tduck_glob_ms={dm}\tburrmill_ms={bm}\tratio={ratio_field}\tglob_ratio={glob_ratio_field}\tparity=verified\trss_mb={}",
         metrics.morsels,
         metrics.rows_read,
         d0.len(),
-        bm as f64 / dm.max(1) as f64,
         rss_mb()
     );
     println!(

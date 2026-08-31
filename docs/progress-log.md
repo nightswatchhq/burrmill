@@ -4,6 +4,84 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Roadmap 1.1a and 1.1b — making the harness able to catch what it missed — 2026-08-31
+
+Three measurement defects turned up in one day and the parity guard saw none of them, because in
+every case both engines agreed on the answer. These two items are the guards for that class, and both
+are demonstrated rather than asserted.
+
+### 1.1a — the fixture is now as wide as a real event
+
+The fixture had four columns; a real nuthatch event has twelve, two of them 66-character hex hashes.
+The fold reads three, so on a four-column table projection pushdown is worth nothing — which is why
+the operator shipped for an entire slice with **no projection at all** and not one measurement
+noticed.
+
+Reproduced by deliberately disabling the projection again:
+
+| fixture | projection on | projection off | penalty |
+|---|---:|---:|---:|
+| narrow, 512 groups | 14 ms | 15 ms | 1.07x |
+| **nest-shaped**, 512 groups | 14 ms | 35 ms | **2.5x** |
+| narrow, 200k groups | 35 ms | 35 ms | 1.00x |
+| **nest-shaped**, 200k groups | 34 ms | 55 ms | **1.6x** |
+
+On the old fixture the defect is unmeasurable. The general rule, worth stating because it is not only
+about columns: **a fixture may be unrealistic only in the ways the experiment is about.** Segment
+sizes were nest-shaped from day one and the schema was not, and the schema is where the bug lived.
+
+**It also changed the competitive picture, in Burrmill's favour and honestly.** On the wide table
+DataFusion goes from roughly 0.8-0.9x DuckDB to **2.0-3.9x**, because a wide table punishes an engine
+that decodes columns nobody asked for. Burrmill's ratios improved for the mirror-image reason, to
+0.17-0.67. Every published sweep number is restated on the new fixture, and the old ones should not
+be compared against: they were measured on a table no nest ever writes.
+
+Widening the schema cost no memory at all, which is the projection working: three columns are decoded
+whatever the file holds.
+
+### 1.1b — a ratio dominated by fixed cost is not printed as a number
+
+The nest harness now halves its input and checks whether each engine's time follows, estimating fixed
+cost by linear extrapolation from the two points. Crude, and quite enough to tell 5% fixed from 90%.
+If more than half of either engine's time is independent of how much data it read, **no ratio is
+printed**: the field reads `UNSAFE_fixed_duck=66pct_burr=17pct` and a warning goes to stderr.
+
+On `escrow__deposit` — the table whose 0.11 was this morning's most flattering published figure —
+`glob_ratio` is now withheld at 66% fixed, while the like-for-like `ratio=0.48` passes at 8% and 17%.
+It refuses exactly the number that was wrong and passes the ones that are not.
+
+Making the wrong figure *unavailable* rather than discouraged is the point. A number that is merely
+discouraged is a number somebody pastes into a README.
+
+**Its own first version was wrong in the same way it exists to prevent**: it measured the
+explicit-list path and then gated the glob-path ratio, which is a different quantity. Caught the first
+time it ran, which is at least the intended failure mode.
+
+### Also fixed: the gate script was inflating its own headline
+
+`run-gate.sh` measured operator RSS with `REPEATS=5`. Allocator retention accumulates across folds
+inside one process, so it reported 608 MB where a single fold reports 339. The script now uses
+`REPEATS=1` and sweeps thread count, since parallelism is the load-bearing variable the gate does not
+name.
+
+### Where the gate stands on the realistic fixture
+
+1M groups, 32-core box, true peak, single fold:
+
+| threads | peak RSS | verdict |
+|---:|---:|---|
+| 1 | 147 MB | pass |
+| 4 | 180 MB | pass |
+| 8 | 204 MB | pass |
+| 16 | 251-259 MB | **straddles the 256 MB line** |
+| 32 | 339 MB | fail |
+
+Sixteen threads gives 251 on one run and 259 on another. That is not a pass and not a comfortable
+fail, and declaring either would be picking the run that suits. It is the sharpest argument yet for
+1.2c: **a budget with no stated parallelism cannot be evaluated at all.**
+
+---
+
 ## Roadmap 1.2 — one aggregate for the query, not one per worker — 2026-08-31
 
 **The shape change is done and holds. The gate is met up to eight threads and missed above sixteen.**
