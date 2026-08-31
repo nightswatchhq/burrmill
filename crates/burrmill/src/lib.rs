@@ -303,7 +303,11 @@ impl Burrmill {
         // **Through the gate, then into the pool.** The gate is taken before `install` and released
         // when this scope ends, so a query waits in a queue whose order we control rather than in
         // rayon's injector, which under load is a queue nobody is obliged to visit.
-        let pass = self.gate.enter();
+        let Some(pass) = self.gate.enter_cancellable(&cancel) else {
+            // Cancelled while queued. Refusing here rather than after a turn is what keeps §3.5's
+            // one-morsel bound true for a query that never reached a morsel.
+            return Err(BurrmillError::Cancelled);
+        };
         // A query sharing the pool takes a slice of it; alone, it takes all of it and **nothing
         // about the single-query path changes** - `None` says so outright rather than leaving the
         // executor to infer it from a thread count that may not be the one divided by here.

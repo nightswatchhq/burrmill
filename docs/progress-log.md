@@ -4,6 +4,54 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 5.1 — the cancellation contract, and the gate that had quietly broken it — 2026-08-31
+
+RFC-0044 §3.5 makes a specific promise: **the delay between asking a query to stop and it stopping is
+bounded by one morsel.** It contrasts this with DataFusion, whose joins do not yield to cancellation
+at all (#19358). It is one of the reasons given for owning an operator rather than renting one.
+
+It had **never been tested**. There was no cancellation test in the repository.
+
+### Half of it was true
+
+A query already folding stops promptly: the check sits at the top of `fold_morsel` and does what it
+says.
+
+### The other half had been broken three items earlier, by me
+
+Roadmap 5.3 put an admission gate in front of the pool to fix a starvation bug. A yield point *inside*
+the fold says nothing about a query that has not reached the fold — and with the gate occupied, a
+cancelled newcomer sat in the queue until admitted and only then noticed.
+
+Measured: **57 ms to notice, against a whole query of 110 ms.** "Bounded by one morsel" had become
+"bounded by however long everybody ahead of you takes", silently, in a commit whose own tests all
+passed.
+
+The gate is a yield point now: a timed wait with a two-millisecond notice, well inside a morsel, paid
+only by threads that are already blocked. Serving throughput and single-query latency are both
+unchanged — 136/136/117 qps at 4/16/32 clients against 133-143/127-135/115-124, and 173-195 ms
+against a band of 185-199.
+
+### The subtle half of the fix
+
+Admission is a ticket queue, so a waiter that gives up must **forfeit** its turn rather than merely
+walk away. A ticket taken and never completed holds the line up for everyone behind it: the gate
+would lose one slot per cancellation and seize after `width` of them. That has its own test, and the
+test would *hang* rather than fail if the forfeit were wrong — which is why the comment says so
+beside it.
+
+### The lesson, which is the day's most-repeated one in yet another costume
+
+A fix for one property broke another, and nothing caught it because **the broken property had no
+test**. Not "the test was weak" — there was no test at all, for a guarantee written into the RFC and
+into the crate's own documentation. Three sessions of work sat on top of it.
+
+The first version of the test also passed while proving nothing: the query hogging the gate ran in a
+loop, so it released its turn between iterations and let the queued query straight in. A test that
+cannot fail is not evidence, and it took making it adversarial before the bug appeared.
+
+---
+
 ## 5.5 — it did not need a scheduler, it needed the constant tuned at the right size — 2026-08-31
 
 5.5 was filed as "work-stealing across queries; a scheduler, not a constant". Before costing that,

@@ -59,15 +59,45 @@ impl Gate {
     /// Wait for a turn. The returned guard releases it on drop, **including on panic**, which is why
     /// it is a guard and not a pair of calls.
     pub fn enter(&self) -> Pass<'_> {
+        self.enter_cancellable(&crate::CancelToken::new())
+            .expect("a fresh token is never cancelled")
+    }
+
+    /// Wait for a turn, **giving up promptly if the caller is cancelled meanwhile**.
+    ///
+    /// **The gate has to be a yield point, and the first version was not.** RFC-0044 §3.5 promises
+    /// that the delay between asking a query to stop and it stopping is bounded by one morsel, and
+    /// the fold honours that. Roadmap 5.3 then put this queue in front of the fold, so a query that
+    /// had not reached a morsel yet had no yield point at all: measured, a cancelled query sat here
+    /// for **57 ms against a 110 ms query**, waiting for a turn it was never going to use. A bound
+    /// of "one morsel" had quietly become "however long everybody ahead of you takes".
+    ///
+    /// Waiting is therefore timed rather than open-ended. The poll interval is the worst-case
+    /// notice, and at two milliseconds it is well inside a morsel; the cost is borne only by threads
+    /// that are already blocked and have nothing else to do.
+    pub fn enter_cancellable(&self, cancel: &crate::CancelToken) -> Option<Pass<'_>> {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let ticket = st.next;
         st.next += 1;
         while ticket >= st.released + self.width as u64 {
-            st = self.cv.wait(st).unwrap_or_else(|e| e.into_inner());
+            if cancel.is_cancelled() {
+                // **Forfeit the turn, do not merely abandon it.** Admission is a ticket queue, so a
+                // ticket that never completes would hold the line up for everyone behind it: the
+                // queue would silently lose a slot per cancellation and eventually seize.
+                st.released += 1;
+                drop(st);
+                self.cv.notify_all();
+                return None;
+            }
+            let (guard, _) = self
+                .cv
+                .wait_timeout(st, std::time::Duration::from_millis(2))
+                .unwrap_or_else(|e| e.into_inner());
+            st = guard;
         }
         st.in_flight += 1;
         st.peak = st.peak.max(st.in_flight);
-        Pass { gate: self, in_flight: st.in_flight }
+        Some(Pass { gate: self, in_flight: st.in_flight })
     }
 
     pub fn peak_in_flight(&self) -> usize {
@@ -167,6 +197,47 @@ mod tests {
             }
         });
         assert!(worst.load(Ordering::SeqCst) <= 3, "saw {} in flight", worst.load(Ordering::SeqCst));
+    }
+
+    /// **A cancelled waiter gives its turn back, and the queue keeps moving.**
+    ///
+    /// Admission is a ticket queue: a ticket that is taken and never completed holds the line up for
+    /// everybody behind it. So a waiter that gives up must forfeit its turn rather than merely walk
+    /// away, or the gate loses a slot per cancellation and seizes after `width` of them. Here every
+    /// other waiter cancels while queued, and the rest must still all get through.
+    #[test]
+    fn a_cancelled_waiter_forfeits_its_turn_and_does_not_seize_the_queue() {
+        let gate = Arc::new(Gate::new(2));
+        let hold = Arc::new(Gate::new(1)); // just a convenient way to keep the gate busy
+        let _ = &hold;
+        let served = Arc::new(AtomicUsize::new(0));
+        let gave_up = Arc::new(AtomicUsize::new(0));
+        std::thread::scope(|s| {
+            for i in 0..24 {
+                let (gate, served, gave_up) = (gate.clone(), served.clone(), gave_up.clone());
+                s.spawn(move || {
+                    let token = crate::CancelToken::new();
+                    if i % 2 == 0 {
+                        // Cancelled before it ever asks: it must forfeit rather than queue forever.
+                        token.cancel();
+                    }
+                    match gate.enter_cancellable(&token) {
+                        Some(_pass) => {
+                            std::thread::sleep(std::time::Duration::from_micros(300));
+                            served.fetch_add(1, Ordering::Relaxed);
+                        }
+                        None => {
+                            gave_up.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                });
+            }
+        });
+        // Every uncancelled waiter got through. If a forfeited ticket had stalled the line, the
+        // scope would never join and this test would hang rather than fail - which is why the
+        // forfeit is a `released += 1` and not a bare `return`.
+        assert_eq!(served.load(Ordering::Relaxed) + gave_up.load(Ordering::Relaxed), 24);
+        assert!(served.load(Ordering::Relaxed) >= 12, "uncancelled waiters were not all served");
     }
 
     /// A panicking holder must not wedge the gate. The guard releases on unwind, so the next ticket
