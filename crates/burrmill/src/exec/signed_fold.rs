@@ -252,7 +252,18 @@ impl<'a> SignedFoldExec<'a> {
                     rows_skipped += 1;
                     continue;
                 }
-                let Ok(d) = value.value(i).parse::<i128>() else {
+                // **Trimmed, because DuckDB trims and " 7" is seven.** The generated corpus found
+                // this within four hundred cases: `str::parse` rejects surrounding whitespace where
+                // `TRY_CAST(' 7' AS HUGEINT)` returns 7, so the row was silently skipped and a
+                // balance came back short. A dropped row is a wrong answer that looks like a
+                // balance, which is the one thing this engine must not do.
+                //
+                // Only whitespace is reconciled here. DuckDB also accepts `1e18`, `7.0`, `1_000`
+                // and rounds `7.9` to 8; those are semantic choices rather than obvious bugs, and
+                // adopting silent rounding into an engine whose first claim is exactness needs a
+                // decision rather than a patch. `burrmill-bench cast` prints the full divergence
+                // table and roadmap 2.1a carries the decision.
+                let Ok(d) = value.value(i).trim().parse::<i128>() else {
                     rows_skipped += 1;
                     continue;
                 };

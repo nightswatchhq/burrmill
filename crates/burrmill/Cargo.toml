@@ -26,3 +26,8 @@ sqlparser.workspace = true
 # litter in /tmp on every run is one people start ignoring.
 [dev-dependencies]
 tempfile = "3"
+# Already normal dependencies; repeated here because an integration test links the crate and not its
+# graph. The generated-fold tests write their own segments and vary the thread count on purpose.
+arrow.workspace = true
+parquet.workspace = true
+rayon.workspace = true

@@ -26,7 +26,12 @@ layout, and honest about everything else.
 three-to-fivefold swing between renting general execution and owning a specialised one is the whole
 architectural argument. `cargo run -p burrmill-bench --release` re-runs it, parity first.
 
-**Exact.** Integer overflow returns `BurrmillError::Overflow`, never a wrapped number. DataFusion's
+**Exact.** Integer overflow returns `BurrmillError::Overflow`, never a wrapped number. Said precisely,
+because a generated corpus made the difference visible: it refuses when an intermediate **partial
+sum** leaves `i128`, not only when the answer does, so a party whose values are `MAX, +1, -1` is
+declined even though the true sum is exactly `MAX`. DuckDB does the same, in both directions - each
+engine refuses cases the other answers. No wrong number is ever returned either way, which is the
+guarantee that matters; "refuses on overflow" is simply a little more eager than it reads. DataFusion's
 integer arithmetic silently wraps - `SELECT 10000000000 * 10000000000` yields `7766279631452241920`
 where Postgres, Trino and Snowflake all raise - and as of August 2026 there is still no core config
 flag to stop it (issues #17539, #14771, #20034, all open). Worse, it is inconsistent by operation:
@@ -49,6 +54,11 @@ Said plainly, because a README that implies otherwise is the thing this project 
   debiting the same signed value, grouped by the party. Everything else is `NotAllowed`.
 - **Cold segments only.** The redb hot tip and the hot/cold seam are the next slice, and the seam is
   the highest-risk invariant in the design.
+- **Two `TRY_CAST` divergences from DuckDB, one fixed and one open.** Surrounding whitespace is now
+  trimmed, as DuckDB does - it was silently dropping the row and returning a short balance. DuckDB
+  also accepts `1e18`, `7.0` and `1_000`, and rounds `7.9` to **8**, where Burrmill returns NULL.
+  Adopting silent rounding into an engine whose first claim is exactness is a decision, not a patch.
+  `cargo run -p burrmill-bench --release -- cast` prints the whole divergence table.
 - **No streaming.** A fold's result is materialised; it is one row per party, so this costs little
   today and will be revisited with the async cancellation contract.
 - **No DataFusion fallback.** Deliberately not yet built. Building the fast path first is what makes

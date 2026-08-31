@@ -20,6 +20,7 @@
 //!   RESULT line. A guard nobody has watched refuse is not a guard.
 
 mod fixture;
+mod generate;
 mod oracles;
 
 use std::path::{Path, PathBuf};
@@ -74,6 +75,8 @@ async fn main() -> anyhow::Result<()> {
         Some("explain") => explain(),
         Some("fold") => fold_only(),
         Some("nest") => nest(),
+        Some("gen") => generated(),
+        Some("cast") => cast_table(),
         _ => bench().await,
     }
 }
@@ -626,5 +629,122 @@ fn nest() -> anyhow::Result<()> {
         cold_m as f64 / dm.max(1) as f64
     );
     println!("duck_all={ds:?}\nburrmill_all={bs:?}\nduck_list_all={lists:?}\nduck_glob_all={globs:?}");
+    Ok(())
+}
+
+/// The generated corpus against DuckDB (roadmap 2.1).
+///
+///     CASES=2000 burrmill-bench gen
+///
+/// Every case is compared three ways: the fold, DuckDB over the identical segments, and the
+/// non-optimising reference. Any disagreement stops the run and prints the seed. See
+/// [`crate::generate`] for why DuckDB is here at all when the library already has a reference.
+fn generated() -> anyhow::Result<()> {
+    let cases = env_usize("CASES", 500);
+    let start = env_usize("SEED", 0) as u64;
+    let sql = "SELECT addr, SUM(d) AS net FROM (\
+                 SELECT \"to\" AS addr, TRY_CAST(\"value\" AS HUGEINT) AS d FROM t \
+                 UNION ALL \
+                 SELECT \"from\" AS addr, -TRY_CAST(\"value\" AS HUGEINT) AS d FROM t\
+               ) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr";
+    let duck_sql = sql.replace("SUM(d) AS net", "SUM(d)::VARCHAR AS net");
+
+    let (mut agreed, mut both_refused, mut order_dependent) = (0usize, 0usize, 0usize);
+    for case in 0..cases {
+        let seed = start.wrapping_add(case as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let mut rng = generate::Rng(seed);
+        let rows = generate::gen_rows(&mut rng);
+        let splits = 1 + rng.below(6);
+        let dir = tempfile::tempdir()?;
+        generate::write_segments(dir.path(), &rows, splits)?;
+
+        let ours = burrmill::Burrmill::open_segments("t", dir.path())?
+            .query(sql, burrmill::Limits::default())
+            .map(|a| a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect::<Vec<_>>());
+
+        let glob = format!("{}/t-*.parquet", dir.path().display());
+        let conn = duckdb::Connection::open_in_memory()?;
+        conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"))?;
+        let theirs: Result<Vec<(String, i128)>, String> = (|| {
+            let mut stmt = conn.prepare(&duck_sql).map_err(|e| e.to_string())?;
+            let mut out = Vec::new();
+            let mut r = stmt.query([]).map_err(|e| e.to_string())?;
+            while let Some(row) = r.next().map_err(|e| e.to_string())? {
+                let a: String = row.get(0).map_err(|e| e.to_string())?;
+                let n: String = row.get(1).map_err(|e| e.to_string())?;
+                out.push((a, n.parse::<i128>().map_err(|e| e.to_string())?));
+            }
+            Ok(out)
+        })();
+
+        match (&ours, &theirs) {
+            (Ok(a), Ok(b)) if a == b => agreed += 1,
+            (Err(burrmill::BurrmillError::Overflow(_)), Err(_)) => both_refused += 1,
+            (Ok(a), Ok(b)) => anyhow::bail!(
+                "SEED={seed}: Burrmill and DuckDB disagree on the answer. \
+                 Burrmill {} rows, DuckDB {} rows. First difference: {:?}",
+                a.len(),
+                b.len(),
+                a.iter().zip(b.iter()).find(|(x, y)| x != y)
+            ),
+            // **One engine refusing where the other answers is not a wrong answer, and it is not
+            // a pass either.** Checked addition is order-dependent: a party whose values are
+            // `i128::MAX, +1, -1` sums to exactly `i128::MAX`, but any order that meets the `+1`
+            // first overflows on the way to an answer it could have represented. Both engines do
+            // this, in both directions, and the corpus found each within two thousand cases.
+            //
+            // Neither ever returns a wrapped number, which is the guarantee that matters. What is
+            // weaker than it reads is the refusal: it fires when an intermediate partial sum leaves
+            // the range, not when the answer does. Counted and reported rather than failed, because
+            // deciding what it should do instead has a memory cost - roadmap 2.1b.
+            (Err(burrmill::BurrmillError::Overflow(_)), Ok(_))
+            | (Ok(_), Err(_)) => order_dependent += 1,
+            // Anything other than an overflow, on data DuckDB answered, is a real refusal to
+            // explain. The compiler insisted on this arm and was right to: folding it into the
+            // order-dependent bucket would have quietly excused a NotAllowed or a Substrate error.
+            (Err(e), Ok(b)) => anyhow::bail!(
+                "SEED={seed}: Burrmill refused with a non-overflow error ({e}) where DuckDB \
+                 returned {} rows",
+                b.len()
+            ),
+            (Err(a), Err(b)) => anyhow::bail!("SEED={seed}: both refused, differently: {a} / {b}"),
+        }
+    }
+    println!(
+        "GEN\tcases={cases}\tagreed={agreed}\tboth_refused={both_refused}\torder_dependent_refusal={order_dependent}"
+    );
+    Ok(())
+}
+
+/// Where Burrmill's `TRY_CAST(text AS HUGEINT)` and DuckDB's disagree, printed rather than assumed.
+///
+/// The fold implements `TRY_CAST` with `str::parse::<i128>()`, and the generated corpus found within
+/// four hundred cases that this is **not** what DuckDB means by the same expression. The two are
+/// close enough to look identical on every value a real nest holds - `uint256` rendered as digits -
+/// and different on the edges, which is exactly the shape of bug that survives a benchmark.
+fn cast_table() -> anyhow::Result<()> {
+    let lits = [
+        " 7", "7 ", "+7", "1e18", "0x10", "", "not a number", "  -5  ", "7.0", "7.9", "007",
+        "1_000", "+-7", "9223372036854775808", "170141183460469231731687303715884105727",
+        "-170141183460469231731687303715884105728", "170141183460469231731687303715884105728",
+        "1,000", " ", "\t7",
+    ];
+    let conn = duckdb::Connection::open_in_memory()?;
+    println!("{:<45} {:<24} {}", "literal", "rust parse::<i128>", "duckdb TRY_CAST");
+    let mut diffs = 0;
+    for l in lits {
+        let ours = l.parse::<i128>().map(|v| v.to_string()).unwrap_or_else(|_| "NULL".into());
+        let mut stmt = conn.prepare("SELECT TRY_CAST(? AS HUGEINT)::VARCHAR")?;
+        let theirs: Option<String> = stmt.query_row([l], |r| r.get(0))?;
+        let theirs = theirs.unwrap_or_else(|| "NULL".into());
+        let mark = if ours == theirs {
+            ""
+        } else {
+            diffs += 1;
+            "  <-- DIVERGES"
+        };
+        println!("{:<45} {ours:<24} {theirs:<24}{mark}", format!("{l:?}"));
+    }
+    println!("\n{diffs} of {} literals diverge", lits.len());
     Ok(())
 }

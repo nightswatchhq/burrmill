@@ -22,3 +22,5 @@ tempfile = "3"
 # Only for getrusage: a true peak RSS. The bench is publish = false, so this stays out of the
 # shipped graph like every other dependency in here.
 libc = "0.2"
+# For the order-dependence probe, which varies the pool size inside one process.
+rayon.workspace = true

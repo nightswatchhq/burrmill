@@ -691,6 +691,7 @@ dependencies = [
  "duckdb",
  "libc",
  "parquet",
+ "rayon",
  "tempfile",
  "tokio",
 ]

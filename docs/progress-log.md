@@ -4,6 +4,80 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Stage 2.1 and 2.2 — a generated corpus, and the two things it found — 2026-08-31
+
+Nineteen hand-written refusals and three overflow tests were not a corpus. There are now two oracles,
+and they found a semantic bug and a semantic surprise within a few thousand cases.
+
+### Two oracles, because they catch different things
+
+**A non-optimising reference**, in `tests/generated_folds.rs`, running on every `cargo test`: the
+same semantics in fifteen lines with a `BTreeMap`, on one thread, straight from the generated rows,
+no Parquet and no parallelism. It catches machinery bugs — morsel splitting, the shared aggregate
+under locks, the parallel sort — and it survives DuckDB's removal in Q4, which is why it lives in the
+library.
+
+It cannot catch a *misconception*. The reference implements this author's reading of what `TRY_CAST`
+means, so if that reading is wrong the reference and the engine are confidently wrong together.
+Hence **`burrmill-bench gen` against DuckDB**, which is an independent implementation of the standard
+and the only thing here that is ground truth about semantics rather than about code.
+
+Three properties per case: the answer matches the reference; the answer does not depend on how rows
+were split into segments; the answer does not depend on thread count.
+
+**Mutation-checked, because a generator that goes green on its first run is a clean result nobody
+asked for.** Replacing `checked_add` with `wrapping_add` fails it; dropping the last row of every
+batch fails it. Both report a reproducible seed.
+
+3,000 DuckDB cases: **2,684 answers agreed exactly, 308 both refused, 8 order-dependent.**
+
+### 2.2 — the boundary is now actually reached
+
+86 of 180 generated cases in the library test reach the refusal path. The benchmark fixture topped
+out around 1e20 against an `i128::MAX` of 1.7e38, so no amount of running it could ever have got
+there; the boundary was pinned by three hand-written tests and nothing else.
+
+### Finding one: `TRY_CAST` was silently dropping rows
+
+Eight of twenty edge literals differ between `str::parse::<i128>()` and DuckDB's `TRY_CAST`:
+
+| literal | Burrmill | DuckDB |
+|---|---|---|
+| `" 7"`, `"7 "`, `"\t7"`, `"  -5  "` | NULL | 7, 7, 7, -5 |
+| `"1e18"` | NULL | 1000000000000000000 |
+| `"7.0"` / `"7.9"` | NULL | 7 / **8** |
+| `"1_000"` | NULL | 1000 |
+
+The whitespace group is a plain bug and is fixed: `" 7"` is seven, and Burrmill was skipping the row
+and returning a short balance. It is exactly the class that survives a benchmark, because on real
+nest data — `uint256` as plain digits — the two are identical.
+
+The rest are not bugs but choices, and DuckDB rounding `"7.9"` to **8** is not one to adopt casually
+into an engine whose first claim is exactness. Left open as 2.1a, with `burrmill-bench cast` printing
+the whole table so it is visible rather than buried. The generator deliberately does not draw those
+four literals: a corpus that fails for a reason nobody has chosen yet is just noise.
+
+### Finding two: refusal is order-dependent, in both engines
+
+The corpus turned up DuckDB refusing where Burrmill answered, and Burrmill refusing where DuckDB
+answered. Neither returns a wrong number. They disagree about whether the query is *answerable*.
+
+Checked addition is order-dependent. A party whose values are `i128::MAX, +1, -1` sums to exactly
+`i128::MAX` and fits — but any order that meets the `+1` first overflows on the way to an answer it
+could have represented.
+
+So **"exact integer arithmetic, refuses on overflow" is a little more eager than it reads**: it
+refuses when an intermediate partial sum leaves the range, not when the answer does. The guarantee
+that matters is intact — no wrapped number, ever, in either engine — but the README now says this
+plainly rather than letting the claim imply more than it delivers.
+
+Fixing it means accumulating wider than `i128`, which costs 16 bytes per group against a memory gate
+already being missed at 32 threads. That is a trade, not a patch, so it is 2.1b and
+`tests/generated_folds.rs` pins today's behaviour with a test that says in as many words that a
+deliberate fix should invert it rather than delete it.
+
+---
+
 ## Roadmap 1.4 — the seal-layout canary, and the empty answer it found — 2026-08-31
 
 Burrmill has no path dependency on nuthatch by design, which is what makes the pure-Rust dependency
