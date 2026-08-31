@@ -77,7 +77,8 @@ use crate::exec::agg::{Rows, Scatter, SharedAgg};
 
 pub struct SignedFoldExec<'a> {
     plan: &'a SignedFold,
-    segments: &'a SealedSegments,
+    /// One entry per branch of the fold, in branch order.
+    segments: &'a [&'a SealedSegments],
     limits: Limits,
     cancel: CancelToken,
     /// The pinned seam, when a hot tip is registered. See [`crate::seam`] for why the watermark and
@@ -94,8 +95,26 @@ pub struct Seam<'a> {
 }
 
 impl<'a> SignedFoldExec<'a> {
-    pub fn new(plan: &'a SignedFold, segments: &'a SealedSegments, limits: Limits) -> Self {
+    pub fn new(plan: &'a SignedFold, segments: &'a [&'a SealedSegments], limits: Limits) -> Self {
         Self { plan, segments, limits, cancel: CancelToken::new(), seam: None }
+    }
+
+    /// Branches grouped by the table they read, so a table is scanned **once** however many arms
+    /// name it. Returns `(representative branch index, all arms on that table)`.
+    ///
+    /// **Without this, generalising to n branches would quietly halve the benchmark.** The
+    /// one-table-read-twice shape becomes two arms over the same table, and the naive reading is two
+    /// passes over files that one pass already has in hand. Trading measured throughput for coverage
+    /// without saying so is the sort of thing this project spends its days catching.
+    fn scans(&self) -> Vec<(usize, Vec<usize>)> {
+        let mut out: Vec<(usize, Vec<usize>)> = Vec::new();
+        for (i, b) in self.plan.branches.iter().enumerate() {
+            match out.iter_mut().find(|(rep, _)| self.plan.branches[*rep].table == b.table) {
+                Some((_, arms)) => arms.push(i),
+                None => out.push((i, vec![i])),
+            }
+        }
+        out
     }
 
     pub fn with_seam(mut self, seam: &'a Seam<'a>) -> Self {
@@ -111,7 +130,15 @@ impl<'a> SignedFoldExec<'a> {
     /// Run the fold and return the canonically ordered rows plus what it cost.
     pub fn run(&self) -> Result<(Rows, FoldMetrics)> {
         let started = Instant::now();
-        let morsels = self.segments.morsels()?;
+        let scans = self.scans();
+        // Morsels carry the scan they belong to, so one flat work list covers every table in the
+        // fold and the morsel scheduler needs no notion of branches at all.
+        let mut morsels: Vec<(usize, Morsel)> = Vec::new();
+        for (scan_ix, (rep, _)) in scans.iter().enumerate() {
+            for m in self.segments[*rep].morsels()? {
+                morsels.push((scan_ix, m));
+            }
+        }
         let plan_ms = started.elapsed().as_millis();
         let deadline = started + self.limits.timeout;
 
@@ -136,8 +163,9 @@ impl<'a> SignedFoldExec<'a> {
             .try_fold(
                 || (Scatter::default(), 0u64, 0u64),
                 |mut st, batch| -> Result<(Scatter, u64, u64)> {
-                    for m in *batch {
-                        let (read, skipped) = self.fold_morsel(m, deadline, &mut st.0, &shared)?;
+                    for (scan_ix, m) in *batch {
+                        let (read, skipped) =
+                            self.fold_morsel(*scan_ix, &scans, m, deadline, &mut st.0, &shared)?;
                         st.1 += read;
                         st.2 += skipped;
                     }
@@ -252,11 +280,14 @@ impl<'a> SignedFoldExec<'a> {
     /// is the batch. See [`coalesce`].
     fn fold_morsel(
         &self,
+        scan_ix: usize,
+        scans: &[(usize, Vec<usize>)],
         m: &Morsel,
         deadline: Instant,
         scatter: &mut Scatter,
         shared: &SharedAgg,
     ) -> Result<(u64, u64)> {
+        let arms = &scans[scan_ix].1;
         if self.cancel.is_cancelled() {
             return Err(BurrmillError::Cancelled);
         }
@@ -290,7 +321,7 @@ impl<'a> SignedFoldExec<'a> {
         // waste was invisible; a real nest event is twelve to fourteen, two of them 64-character hex
         // hashes, and on `staking_legacy__stake_delegated` this was the difference between 2.2x
         // DuckDB and parity. Measured on the real nest, which is the only place it shows.
-        let builder = match projection_mask(&m.meta, self.plan, self.seam.map(|s| s.block_col)) {
+        let builder = match projection_mask(&m.meta, self.plan, arms, self.seam.map(|s| s.block_col)) {
             Some(mask) => builder.with_projection(mask),
             None => builder,
         };
@@ -301,73 +332,86 @@ impl<'a> SignedFoldExec<'a> {
 
         for batch in reader {
             let batch = batch?;
-            let credit = utf8_column(&batch, &self.plan.credit_col)?;
-            let debit = utf8_column(&batch, &self.plan.debit_col)?;
-            let value = utf8_column(&batch, &self.plan.value_col)?;
+            // **One decode and one parse per distinct value column, not per arm.** The degenerate
+            // one-table-read-twice shape has two arms sharing a value column, and parsing the same
+            // forty-digit text twice per row cost 14% of the fold when the generalisation first
+            // landed: the benchmark went 104 ms to 120 and back again.
+            let mut value_names: Vec<&str> = Vec::new();
+            for i in arms {
+                let n = self.plan.branches[*i].value_col.as_str();
+                if !value_names.contains(&n) {
+                    value_names.push(n);
+                }
+            }
+            let mut value_cols: Vec<StringArray> = Vec::with_capacity(value_names.len());
+            for n in &value_names {
+                value_cols.push(utf8_column(&batch, n)?);
+            }
+            let mut cols: Vec<(&crate::plan::FoldBranch, StringArray, usize)> =
+                Vec::with_capacity(arms.len());
+            for i in arms {
+                let b = &self.plan.branches[*i];
+                let vi = value_names.iter().position(|n| *n == b.value_col).expect("collected above");
+                cols.push((b, utf8_column(&batch, &b.key_col)?, vi));
+            }
             // **Cold is filtered to the pinned watermark.** A segment sealed after the snapshot was
             // taken holds rows above it, and those rows are also in the hot half - counting both is
-            // the double-count arm of COR-1. `blocks` is `None` when no seam is pinned, in which
-            // case every row is cold by definition.
+            // the double-count arm of COR-1.
             let blocks = match self.seam {
                 Some(seam) => Some(block_column(&batch, seam.block_col)?),
                 None => None,
             };
 
+            let mut parsed: Vec<Option<i128>> = vec![None; value_cols.len()];
             for i in 0..batch.num_rows() {
                 if let (Some(blocks), Some(seam)) = (&blocks, self.seam) {
-                    // `None` means nothing has been sealed, so nothing in a segment can be cold. A
-                    // segment existing at all in that state is a contradiction; filtering every row
-                    // out is the conservative reading and the hot half still has them.
-                    let keep = seam.snapshot.sealed_through.is_some_and(|w| blocks.value(i) <= w);
-                    if !keep {
+                    // `None` means nothing has been sealed, so nothing in a segment can be cold.
+                    if !seam.snapshot.sealed_through.is_some_and(|w| blocks.value(i) <= w) {
                         rows_skipped += 1;
                         continue;
                     }
                 }
                 rows_read += 1;
-                // TRY_CAST semantics: unparseable becomes NULL, and SUM ignores NULLs. Skip, never
-                // substitute zero - a zero is a different answer that happens to look plausible.
-                if value.is_null(i) {
-                    rows_skipped += 1;
-                    continue;
-                }
-                // **Trimmed, because DuckDB trims and " 7" is seven.** The generated corpus found
-                // this within four hundred cases: `str::parse` rejects surrounding whitespace where
-                // `TRY_CAST(' 7' AS HUGEINT)` returns 7, so the row was silently skipped and a
-                // balance came back short.
-                let text = value.value(i).trim();
-                let Ok(d) = text.parse::<i128>() else {
-                    // **A value that carries a number but is not a canonical integer is refused,
-                    // not skipped** (roadmap 2.1a, decided). DuckDB also accepts `1e18`, `7.0` and
-                    // `1_000`, and rounds `7.9` to **8**. Three choices were available and only one
-                    // of them is safe:
-                    //
-                    // - Match DuckDB exactly. That means adopting silent rounding into an engine
-                    //   whose first claim is exactness, and implementing a numeric grammar by guess
-                    //   at every other edge besides.
-                    // - Keep skipping. A row DuckDB would count and we drop is a short balance that
-                    //   looks entirely plausible, which is the failure this project exists to
-                    //   refuse.
-                    // - Refuse, loudly, and say which value. Diverging from DuckDB out loud costs a
-                    //   query; diverging silently costs someone's answer.
-                    //
-                    // `TRY_CAST`'s NULL still applies to data that is genuinely absent or
-                    // non-numeric - that is what the query asked for. It is text carrying digits
-                    // that this refuses to interpret, because interpreting it is guessing.
-                    if looks_numeric(text) {
-                        return Err(BurrmillError::NotAllowed(format!(
-                            "the value {text:?} carries a number but is not a canonical integer. \
-                             Burrmill will not guess at it: DuckDB would read it (and rounds \
-                             fractions), and silently agreeing or silently differing are both worse \
-                             than refusing. Run `burrmill-bench cast` for the divergence table."
-                        )));
+                for (vi, vc) in value_cols.iter().enumerate() {
+                    parsed[vi] = None;
+                    if vc.is_null(i) {
+                        continue;
                     }
-                    rows_skipped += 1;
-                    continue;
-                };
-                let minus_d = checked_neg(d, debit.value(i))?;
-                scatter.push(credit.value(i).as_bytes(), d, shared)?;
-                scatter.push(debit.value(i).as_bytes(), minus_d, shared)?;
+                    // Trimmed, because DuckDB trims and " 7" is seven. The generated corpus found
+                    // that within four hundred cases: the row was being silently skipped and a
+                    // balance came back short.
+                    let text = vc.value(i).trim();
+                    match text.parse::<i128>() {
+                        Ok(d) => parsed[vi] = Some(d),
+                        Err(_) => {
+                            // A plain `CAST` errors where `TRY_CAST` yields NULL, and the plan
+                            // carries which was written. Reading one as the other would change an
+                            // answer silently, which is the thing this engine does not do. A value
+                            // carrying digits is refused either way rather than guessed at
+                            // (roadmap 2.1a).
+                            let strict = cols.iter().any(|(b, _, x)| *x == vi && b.strict_cast);
+                            if strict || looks_numeric(text) {
+                                return Err(BurrmillError::NotAllowed(format!(
+                                    "the value {text:?} will not cast to a 128-bit integer{}",
+                                    if strict {
+                                        ". The query used CAST, which errors; TRY_CAST would skip it"
+                                    } else {
+                                        ". It carries digits, so Burrmill refuses rather than \
+                                         guessing at what was meant"
+                                    }
+                                )));
+                            }
+                        }
+                    }
+                }
+                for (b, key, vi) in cols.iter() {
+                    let Some(d) = parsed[*vi] else {
+                        rows_skipped += 1;
+                        continue;
+                    };
+                    let signed = if b.negated { checked_neg(d, key.value(i))? } else { d };
+                    scatter.push(key.value(i).as_bytes(), signed, shared)?;
+                }
             }
         }
         Ok((rows_read, rows_skipped))
@@ -455,6 +499,7 @@ pub fn to_record_batch(rows: &Rows, plan: &SignedFold) -> Result<RecordBatch> {
 fn projection_mask(
     meta: &parquet::arrow::arrow_reader::ArrowReaderMetadata,
     plan: &SignedFold,
+    arms: &[usize],
     block_col: Option<&str>,
 ) -> Option<ProjectionMask> {
     let descr = meta.metadata().file_metadata().schema_descr();
@@ -465,9 +510,11 @@ fn projection_mask(
         return None;
     }
     let index_of = |name: &str| root.get_fields().iter().position(|f| f.name() == name);
-    let mut idx = Vec::with_capacity(4);
-    for name in [&plan.credit_col, &plan.debit_col, &plan.value_col] {
-        idx.push(index_of(name)?);
+    let mut idx = Vec::with_capacity(2 * arms.len() + 1);
+    for i in arms {
+        let b = &plan.branches[*i];
+        idx.push(index_of(&b.key_col)?);
+        idx.push(index_of(&b.value_col)?);
     }
     // The seam needs the block column to filter cold rows to the pinned watermark, so it is part of
     // the projection exactly when there is a seam and not otherwise.
@@ -479,8 +526,8 @@ fn projection_mask(
     Some(ProjectionMask::roots(descr, idx))
 }
 
-fn coalesce(morsels: &[Morsel]) -> Vec<&[Morsel]> {
-    let total: usize = morsels.iter().map(|m| m.len).sum();
+fn coalesce(morsels: &[(usize, Morsel)]) -> Vec<&[(usize, Morsel)]> {
+    let total: usize = morsels.iter().map(|(_, m)| m.len).sum();
     let threads = rayon::current_num_threads().max(1);
     // Four units per thread: enough slack for work-stealing to even out the bimodal size
     // distribution, without cutting the units so fine that the fixed cost returns.
@@ -489,7 +536,7 @@ fn coalesce(morsels: &[Morsel]) -> Vec<&[Morsel]> {
     let mut out = Vec::new();
     let mut start = 0usize;
     let mut rows = 0usize;
-    for (i, m) in morsels.iter().enumerate() {
+    for (i, (_, m)) in morsels.iter().enumerate() {
         rows += m.len;
         if rows >= target {
             out.push(&morsels[start..=i]);

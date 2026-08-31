@@ -345,3 +345,87 @@ fn the_answer_decides_the_refusal_not_the_partial_sums() {
         "the answer is 5 however far the running total wandered"
     );
 }
+
+/// **An n-table fold, executed rather than merely planned** (roadmap 4.1a).
+///
+/// Experiment A4 found that every signed fold in a real workload reads *different* tables - a credit
+/// and a debit are different events - and that the one-table-read-twice shape Burrmill was built for
+/// occurs nowhere. This is the general form: three tables, two adding and one subtracting, written
+/// the way the real views write it (`CAST`, `GROUP BY 1`, no `HAVING`, no `ORDER BY`).
+#[test]
+fn a_three_table_fold_gives_the_same_answer_as_the_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let mk = |name: &str, rows: &[(&str, u64)]| {
+        let sub = dir.path().join(name);
+        std::fs::create_dir_all(&sub).unwrap();
+        let evs: Vec<Row> = rows
+            .iter()
+            .map(|(who, v)| Row {
+                from: "0xsink".into(),
+                to: (*who).into(),
+                value: v.to_string(),
+            })
+            .collect();
+        write_segments(&sub, &evs, 2);
+        burrmill::SealedSegments::discover(name, &sub).unwrap()
+    };
+
+    let mut catalog = burrmill::Catalog::new();
+    catalog.register(mk("deposited", &[("0xaa", 100), ("0xbb", 30), ("0xaa", 5)]));
+    catalog.register(mk("rewarded", &[("0xaa", 7), ("0xcc", 11)]));
+    catalog.register(mk("withdrawn", &[("0xaa", 40), ("0xbb", 30)]));
+    let db = burrmill::Burrmill::with_threads(catalog, 4).unwrap();
+
+    // aa: +100 +5 +7 -40 =  72
+    // bb: +30            -30 =   0  -> no HAVING here, so it stays as a zero row
+    // cc: +11                 =  11
+    let sql = "SELECT who, SUM(v) AS net FROM (
+                 SELECT \"to\" AS who,  CAST(\"value\" AS HUGEINT) AS v FROM deposited
+                 UNION ALL
+                 SELECT \"to\" AS who,  CAST(\"value\" AS HUGEINT) AS v FROM rewarded
+                 UNION ALL
+                 SELECT \"to\" AS who, -CAST(\"value\" AS HUGEINT) AS v FROM withdrawn
+               ) GROUP BY 1";
+    let plan = burrmill::plan::plan(sql).expect("the n-table fold must plan");
+    let burrmill::Plan::SignedFold(f) = &plan;
+    assert_eq!(f.branches.len(), 3);
+    assert!(f.branches.iter().all(|b| b.strict_cast), "written with CAST, not TRY_CAST");
+    assert!(!f.drop_zero, "no HAVING, so a party netting to zero is still a row");
+
+    let a = db.query(sql, Limits::default()).expect("and must execute");
+    let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
+    assert_eq!(
+        got,
+        vec![("0xaa".into(), 72i128), ("0xbb".into(), 0i128), ("0xcc".into(), 11i128)]
+    );
+}
+
+/// The same three tables with `HAVING SUM(v) <> 0` drops the party that nets out, and only that one.
+#[test]
+fn having_still_drops_the_zero_row_in_an_n_table_fold() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, rows) in [("credits", vec![("0xaa", 5u64), ("0xbb", 9)]), ("debits", vec![("0xbb", 9)])] {
+        let sub = dir.path().join(name);
+        std::fs::create_dir_all(&sub).unwrap();
+        let evs: Vec<Row> = rows
+            .iter()
+            .map(|(w, v)| Row { from: "0xsink".into(), to: (*w).into(), value: v.to_string() })
+            .collect();
+        write_segments(&sub, &evs, 1);
+    }
+    let mut catalog = burrmill::Catalog::new();
+    for name in ["credits", "debits"] {
+        catalog.register(
+            burrmill::SealedSegments::discover(name, &dir.path().join(name)).unwrap(),
+        );
+    }
+    let db = burrmill::Burrmill::with_threads(catalog, 2).unwrap();
+    let sql = "SELECT who, SUM(v) AS net FROM (
+                 SELECT \"to\" AS who,  TRY_CAST(\"value\" AS HUGEINT) AS v FROM credits
+                 UNION ALL
+                 SELECT \"to\" AS who, -TRY_CAST(\"value\" AS HUGEINT) AS v FROM debits
+               ) GROUP BY who HAVING SUM(v) <> 0";
+    let a = db.query(sql, Limits::default()).unwrap();
+    let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
+    assert_eq!(got, vec![("0xaa".into(), 5i128)], "bb nets to zero and is dropped");
+}

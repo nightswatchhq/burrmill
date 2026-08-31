@@ -28,15 +28,15 @@ use crate::error::{BurrmillError, Result};
 /// than the query is what makes the coverage ratchet (§4.6) move by more than one query at a time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedFold {
-    /// Registered table name. Resolved against the catalog, never against a path.
-    pub table: String,
-    /// Column whose rows add the value (the `to` side).
-    pub credit_col: String,
-    /// Column whose rows subtract it (the `from` side).
-    pub debit_col: String,
-    /// Column holding the exact integer, stored as text because uint256 is 78 decimal digits and
-    /// `Decimal256` tops out at 76.
-    pub value_col: String,
+    /// The arms of the `UNION ALL`, in the order written.
+    ///
+    /// **This used to be one table read twice**, a credit column and a debit column. Experiment A4
+    /// (roadmap 4.1) parsed 65 statements of real authored views and found that shape **zero**
+    /// times: every `UNION ALL` in the workload reads *different* tables, because a credit and a
+    /// debit are different events and therefore different event tables. The single-table case is now
+    /// the degenerate one - the same table listed twice with opposite signs - and nothing is lost by
+    /// generalising, which is usually the sign that the general form was the right one all along.
+    pub branches: Vec<FoldBranch>,
     /// Output name of the group key.
     pub key_alias: String,
     /// Output name of the sum.
@@ -44,6 +44,27 @@ pub struct SignedFold {
     /// `HAVING SUM(d) <> 0` - drop the parties that net out. Part of the answer, not a filter we
     /// are free to skip.
     pub drop_zero: bool,
+}
+
+/// One arm of the fold: a table, the column it groups by, the column it sums, and its sign.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldBranch {
+    /// Registered table name. Resolved against the catalog, never against a path.
+    pub table: String,
+    /// The column this arm contributes as the group key.
+    pub key_col: String,
+    /// Column holding the exact integer, stored as text because uint256 is 78 decimal digits and
+    /// `Decimal256` tops out at 76.
+    pub value_col: String,
+    /// Whether this arm subtracts rather than adds.
+    pub negated: bool,
+    /// `CAST` rather than `TRY_CAST`: an unparseable value is an **error**, not a NULL.
+    ///
+    /// The real views write `CAST(tokens AS HUGEINT)`. Quietly reading that as `TRY_CAST` would
+    /// change the answer - a bad row would be skipped instead of refused - and quietly changing an
+    /// answer is the one thing this engine does not do. So the two are distinct modes and the
+    /// stricter one is, if anything, more in keeping with the rest.
+    pub strict_cast: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,8 +77,20 @@ impl Plan {
     pub fn describe(&self) -> String {
         match self {
             Plan::SignedFold(f) => format!(
-                "SignedFoldExec  table={}  credit={}  debit={}  value={}  drop_zero={}",
-                f.table, f.credit_col, f.debit_col, f.value_col, f.drop_zero
+                "SignedFoldExec  branches={}  [{}]  drop_zero={}",
+                f.branches.len(),
+                f.branches
+                    .iter()
+                    .map(|b| format!(
+                        "{}{}.{}{}",
+                        if b.negated { "-" } else { "+" },
+                        b.table,
+                        b.key_col,
+                        if b.strict_cast { " strict" } else { "" }
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                f.drop_zero
             ),
         }
     }
@@ -120,45 +153,45 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
 
     // The FROM must be a single derived table - the UNION ALL - with no joins.
     let derived = single_derived_table(select)?;
-    let (left, right) = union_all_halves(&derived.body)?;
-    let credit = match_half(left, false)?;
-    let debit = match_half(right, true)?;
+    let arms = union_all_branches(&derived.body)?;
+    let mut matched: Vec<(FoldBranch, String, String)> = Vec::with_capacity(arms.len());
+    for arm in &arms {
+        matched.push(match_branch(arm)?);
+    }
+    let (_, first_key_alias, first_value_alias) = &matched[0];
+    let (first_key_alias, first_value_alias) = (first_key_alias.clone(), first_value_alias.clone());
+    for (_, k, v) in &matched {
+        if *k != first_key_alias || *v != first_value_alias {
+            return Err(not_allowed(
+                "every arm of the union must use the same output aliases, or the group key and the \
+                 summed column would not line up",
+            ));
+        }
+    }
+    let branches: Vec<FoldBranch> = matched.into_iter().map(|(b, _, _)| b).collect();
 
-    if credit.table != debit.table {
+    if summed != first_value_alias {
         return Err(not_allowed(format!(
-            "both halves of the union must read the same table; got `{}` and `{}`",
-            credit.table, debit.table
+            "SUM must be over the union's value column `{first_value_alias}`; got `{summed}`"
         )));
     }
-    if credit.value_col != debit.value_col {
-        return Err(not_allowed(
-            "both halves of the union must sum the same value column",
-        ));
-    }
-    if credit.key_alias != debit.key_alias || credit.value_alias != debit.value_alias {
-        return Err(not_allowed(
-            "both halves of the union must use the same output aliases",
-        ));
-    }
-    if summed != credit.value_alias {
+    if key_ident != first_key_alias {
         return Err(not_allowed(format!(
-            "SUM must be over the union's value column `{}`; got `{summed}`",
-            credit.value_alias
-        )));
-    }
-    if key_ident != credit.key_alias {
-        return Err(not_allowed(format!(
-            "the projected key must be the union's key column `{}`; got `{key_ident}`",
-            credit.key_alias
+            "the projected key must be the union's key column `{first_key_alias}`; got `{key_ident}`"
         )));
     }
 
     // GROUP BY the key, and only the key.
     match &select.group_by {
         GroupByExpr::Expressions(exprs, modifiers) if modifiers.is_empty() => {
-            if exprs.len() != 1 || ident_name(&exprs[0]).as_deref() != Some(key_ident.as_str()) {
+            // `GROUP BY 1` as well as `GROUP BY <key>`. The ordinal form is what the real views are
+            // written with (A4), it is unambiguous over a two-column projection, and refusing it
+            // would have been refusing a spelling rather than a shape.
+            let by_name = ident_name(&exprs[0]).as_deref() == Some(key_ident.as_str());
+            let by_ordinal = matches!(&exprs[0], Expr::Value(v) if v.value.to_string() == "1");
+            if exprs.len() != 1 || !(by_name || by_ordinal) {
                 return Err(not_allowed(format!(
-                    "the signed-fold shape groups by `{key_ident}` alone"
+                    "the signed-fold shape groups by `{key_ident}` alone (or by ordinal `1`)"
                 )));
             }
         }
@@ -168,10 +201,8 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     let drop_zero = match &select.having {
         None => false,
         Some(e) => {
-            if !is_sum_ne_zero(e, &credit.value_alias) {
-                return Err(not_allowed(
-                    "the only admitted HAVING is `SUM(<value>) <> 0`",
-                ));
+            if !is_sum_ne_zero(e, &first_value_alias) {
+                return Err(not_allowed("the only admitted HAVING is `SUM(<value>) <> 0`"));
             }
             true
         }
@@ -183,41 +214,30 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     // silently overruled.
     check_order_by_is_canonical(query, &key_alias)?;
 
-    Ok(SignedFold {
-        table: credit.table,
-        credit_col: credit.source_col,
-        debit_col: debit.source_col,
-        value_col: credit.value_col,
-        key_alias,
-        sum_alias,
-        drop_zero,
-    })
+    Ok(SignedFold { branches, key_alias, sum_alias, drop_zero })
 }
 
-struct Half {
-    table: String,
-    source_col: String,
-    key_alias: String,
-    value_col: String,
-    value_alias: String,
-}
-
-/// One arm of the union: `SELECT <col> AS addr, [-]TRY_CAST(<value> AS <128-bit>) AS d FROM <t>`.
-fn match_half(select: &Select, expect_negated: bool) -> Result<Half> {
+/// One arm of the union: `SELECT <col> AS addr, [-][TRY_]CAST(<value> AS <128-bit>) AS d FROM <t>`.
+///
+/// The sign is **read** rather than dictated. The old version demanded arm one be positive and arm
+/// two negative, which is one way to spell a two-table fold and not the only one; with n arms it is
+/// not even well defined. A fold whose arms are all positive is a perfectly ordinary sum over
+/// several tables, and refusing it would be refusing arithmetic.
+fn match_branch(select: &Select) -> Result<(FoldBranch, String, String)> {
     reject_unsupported_clauses(select)?;
     if select.projection.len() != 2 {
         return Err(not_allowed(
-            "each half of the union projects exactly the party column and the signed value",
+            "each arm of the union projects exactly the party column and the signed value",
         ));
     }
     let grouped = !matches!(&select.group_by, GroupByExpr::Expressions(e, m) if e.is_empty() && m.is_empty());
     if grouped || select.having.is_some() || select.selection.is_some() {
         return Err(not_allowed(
-            "the halves of the union must be bare projections - no WHERE, GROUP BY or HAVING",
+            "the arms of the union must be bare projections - no WHERE, GROUP BY or HAVING",
         ));
     }
     let (key_alias, key_expr) = projection_item(select, 0)?;
-    let source_col = ident_name(key_expr)
+    let key_col = ident_name(key_expr)
         .ok_or_else(|| not_allowed("the party column must be a bare column reference"))?;
     let (value_alias, value_expr) = projection_item(select, 1)?;
 
@@ -225,17 +245,10 @@ fn match_half(select: &Select, expect_negated: bool) -> Result<Half> {
         Expr::UnaryOp { op: UnaryOperator::Minus, expr } => (true, expr.as_ref()),
         other => (false, other),
     };
-    if negated != expect_negated {
-        return Err(not_allowed(if expect_negated {
-            "the second half of the union must negate the value (the debit side)"
-        } else {
-            "the first half of the union must not negate the value (the credit side)"
-        }));
-    }
-    let value_col = try_cast_to_i128(inner)?;
+    let (value_col, strict_cast) = cast_to_i128(inner)?;
     let table = single_named_table(select)?;
 
-    Ok(Half { table, source_col, key_alias, value_col, value_alias })
+    Ok((FoldBranch { table, key_col, value_col, negated, strict_cast }, key_alias, value_alias))
 }
 
 /// `TRY_CAST(<col> AS HUGEINT | DECIMAL(38,0) | INT128)`.
@@ -244,7 +257,7 @@ fn match_half(select: &Select, expect_negated: bool) -> Result<Half> {
 /// NULL, and SUM ignores NULLs, so an unparseable value is *skipped* - never an error, and never a
 /// zero. A zero would be a different answer that happens to look plausible, which is the class of
 /// bug this whole project exists to refuse.
-fn try_cast_to_i128(expr: &Expr) -> Result<String> {
+fn cast_to_i128(expr: &Expr) -> Result<(String, bool)> {
     let (kind, inner, data_type) = match expr {
         Expr::Cast { kind, expr, data_type, .. } => (kind, expr.as_ref(), data_type),
         _ => {
@@ -253,12 +266,25 @@ fn try_cast_to_i128(expr: &Expr) -> Result<String> {
             ))
         }
     };
-    if !matches!(kind, sqlparser::ast::CastKind::TryCast) {
-        return Err(not_allowed(
-            "plain CAST is not admitted here: it errors where TRY_CAST skips, and skipping is what \
-             the answer is defined as",
-        ));
-    }
+    // **Both spellings, kept distinct.** `TRY_CAST` yields NULL on an unparseable value and `SUM`
+    // ignores NULLs, so the row is skipped; plain `CAST` errors. They are different answers and the
+    // difference is the point, so the mode is carried into the plan rather than one being quietly
+    // read as the other.
+    //
+    // Plain `CAST` used to be refused outright, on the grounds that skipping is what the answer is
+    // defined as. A4 then found that every real fold in the workload is written with `CAST`, so the
+    // rule was refusing the SQL people actually write in order to protect a semantic they had not
+    // asked for. Refusing on a bad value is, if anything, more in keeping with the rest of this
+    // engine than skipping it.
+    let strict_cast = match kind {
+        sqlparser::ast::CastKind::TryCast => false,
+        sqlparser::ast::CastKind::Cast => true,
+        _ => {
+            return Err(not_allowed(
+                "only CAST and TRY_CAST are admitted around the value column",
+            ))
+        }
+    };
     // **Three spellings, one width, and Burrmill owns which one is meant.** `HUGEINT` is DuckDB's,
     // `DECIMAL(38,0)` is DataFusion's and the standard's, `INT128` is nobody's in particular. They
     // all denote exactly i128, so all three plan to the same operator: a migration should not have
@@ -273,7 +299,9 @@ fn try_cast_to_i128(expr: &Expr) -> Result<String> {
             "the value cast must be a 128-bit exact integer (HUGEINT or DECIMAL(38,0)); got `{data_type}`"
         )));
     }
-    ident_name(inner).ok_or_else(|| not_allowed("TRY_CAST must be applied to a bare column"))
+    let col = ident_name(inner)
+        .ok_or_else(|| not_allowed("the cast must be applied to a bare column"))?;
+    Ok((col, strict_cast))
 }
 
 fn as_select(body: &SetExpr) -> Result<&Select> {
@@ -284,6 +312,39 @@ fn as_select(body: &SetExpr) -> Result<&Select> {
     }
 }
 
+/// Every arm of a left-nested `UNION ALL` chain, in written order.
+///
+/// Two was the old limit and A4 found folds with four and five arms in the wild, so the limit was a
+/// statement about the implementation rather than about the shape.
+fn union_all_branches(body: &SetExpr) -> Result<Vec<&Select>> {
+    let mut out = Vec::new();
+    fn walk<'a>(s: &'a SetExpr, out: &mut Vec<&'a Select>) -> Result<()> {
+        match s {
+            SetExpr::Select(sel) => {
+                out.push(sel.as_ref());
+                Ok(())
+            }
+            SetExpr::SetOperation { op: SetOperator::Union, set_quantifier, left, right } => {
+                if !matches!(set_quantifier, SetQuantifier::All) {
+                    return Err(not_allowed(
+                        "the union must be UNION ALL: plain UNION deduplicates, which silently \
+                         drops rows that a fold must count",
+                    ));
+                }
+                walk(left, out)?;
+                walk(right, out)
+            }
+            _ => Err(not_allowed("the derived table must be a UNION ALL of bare projections")),
+        }
+    }
+    walk(body, &mut out)?;
+    if out.len() < 2 {
+        return Err(not_allowed("the derived table must be a UNION ALL of at least two projections"));
+    }
+    Ok(out)
+}
+
+#[allow(dead_code)]
 fn union_all_halves(body: &SetExpr) -> Result<(&Select, &Select)> {
     match body {
         SetExpr::SetOperation { op: SetOperator::Union, set_quantifier, left, right } => {

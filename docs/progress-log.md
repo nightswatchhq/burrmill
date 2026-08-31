@@ -4,6 +4,63 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 4.1a — the fold is n-branch now, and the shape it was built for was the wrong one — 2026-08-31
+
+A4 found that Burrmill folded *one table read twice* and that no real query does. `SignedFold` now
+carries `Vec<FoldBranch>` — table, key column, value column, sign, cast mode — and the old shape is
+the degenerate case of the same table listed twice with opposite signs. Nothing was lost, which is
+usually the sign that the general form was right all along.
+
+Three changes came with it, each because the workload asked for it rather than because it was tidy:
+
+- **n arms, not two.** A4 found folds with four and five arms, so the old limit was a statement about
+  the implementation rather than about the shape.
+- **`CAST` as well as `TRY_CAST`, kept distinct.** Every real fold is written with plain `CAST`. The
+  old rule refused it to protect a semantic nobody had asked for. They mean different things —
+  `TRY_CAST` skips a bad value, `CAST` errors — so the plan carries which was written and the
+  executor honours it. Reading one as the other would change an answer silently.
+- **`GROUP BY 1`.** What the views are written with, unambiguous over a two-column projection.
+  Refusing it was refusing a spelling rather than a shape.
+
+### The performance trap, and it was real
+
+The degenerate shape becomes two arms over one table, and the naive reading is two passes over files
+one pass already has in hand. So branches are grouped by table and a table is scanned once however
+many arms name it.
+
+That was not enough on its own. The benchmark went **104 ms to 120** anyway, because both arms then
+parsed the *same* forty-digit value text independently, once each per row. Parsing per distinct value
+column instead of per arm put it back: 99-116 ms, inside run-to-run spread. Peak RSS at a million
+groups is 210 MB against 210 before, the ratios are 0.40-0.90, and parity is verified throughout.
+
+Trading measured throughput for coverage is a fair trade; doing it without noticing is not.
+
+### What it actually bought
+
+**Fold sub-plans admitted: 1 of 8, up from 0.** Stated at the sub-plan level because every one of
+those folds sits inside a `WITH` binding or a join, so statement-level coverage stays 0/65 until CTEs
+and joins are admitted — which is a different item, now filed as 4.1d.
+
+Modest, and the remaining barriers are counted rather than guessed:
+
+| still refused | count |
+|---|---:|
+| the group key is an expression, not a bare column | 4 |
+| the outer projection is wider than key + sum | 2 |
+| a computed projection with no explicit alias | 1 |
+
+Computed group keys are the next lever: real views write `'v:' || CAST("subgraphDeploymentID" AS
+VARCHAR) AS position`.
+
+### And a self-inflicted one worth recording
+
+Rewriting the executor's row loop, I gave a Python edit a start anchor after its end anchor. Python
+slices that to an empty string, `replace("")` matches between every character, and a 534-line file
+became **1,084,412 lines**. Restored from HEAD and redone with unique, asserted anchors. *Query: why
+did I think an unchecked `s.index()` pair was a safe way to edit a file?*
+
+---
+
 ## Experiment A4 — the operator is built for a shape the workload does not contain — 2026-08-31
 
 §4.6's coverage ratio is `owned shapes / n`, and the whole "hybrid now, own more later" argument

@@ -24,10 +24,17 @@ fn refused(sql: &str) -> String {
 #[test]
 fn the_hot_path_shape_is_recognised() {
     let plan::Plan::SignedFold(f) = plan::plan(NET_BALANCES).expect("net_balances must plan");
-    assert_eq!(f.table, "t");
-    assert_eq!(f.credit_col, "to");
-    assert_eq!(f.debit_col, "from");
-    assert_eq!(f.value_col, "value");
+    // The one-table-read-twice shape is now the degenerate two-branch case over the same table
+    // (roadmap 4.1a). It plans identically; it is simply no longer the only thing that does.
+    assert_eq!(f.branches.len(), 2);
+    assert_eq!(f.branches[0].table, "t");
+    assert_eq!(f.branches[1].table, "t");
+    assert_eq!(f.branches[0].key_col, "to");
+    assert!(!f.branches[0].negated);
+    assert_eq!(f.branches[1].key_col, "from");
+    assert!(f.branches[1].negated);
+    assert_eq!(f.branches[0].value_col, "value");
+    assert!(!f.branches[0].strict_cast, "the query used TRY_CAST");
     assert!(f.drop_zero, "HAVING SUM(d) <> 0 is part of the answer");
 }
 
@@ -57,7 +64,7 @@ fn a_path_cannot_be_named() {
     // which is the layer that owns the allowlist. Two independent refusals, not one.
     let planned = plan::plan(unregistered).expect("a quoted name is still just a name");
     let burrmill::Plan::SignedFold(f) = &planned;
-    assert_eq!(f.table, "/etc/passwd");
+    assert_eq!(f.branches[0].table, "/etc/passwd");
     let db = burrmill::Burrmill::new(burrmill::Catalog::new());
     assert!(matches!(
         db.query(unregistered, burrmill::Limits::default()),
@@ -80,11 +87,25 @@ fn writes_are_not_expressible() {
     }
 }
 
+/// **`CAST` is admitted, and it is a different answer from `TRY_CAST`** (roadmap 4.1a).
+///
+/// This test used to assert that plain `CAST` was refused, on the grounds that skipping an
+/// unparseable value is what the answer is defined as. Experiment A4 then parsed 65 real authored
+/// views and found that **every** signed fold in the workload is written with `CAST` — so the rule
+/// was refusing the SQL people actually write, in order to protect a semantic they had not asked
+/// for.
+///
+/// Both are admitted now and the plan records which was written. `TRY_CAST` yields NULL and `SUM`
+/// ignores NULLs, so the row is skipped; `CAST` errors. Reading one as the other would change an
+/// answer silently, which is the one thing this engine does not do, so they stay distinct all the
+/// way into the executor.
 #[test]
-fn plain_cast_is_refused_because_it_changes_the_answer() {
-    let sql = NET_BALANCES.replace("TRY_CAST", "CAST");
-    let why = refused(&sql);
-    assert!(why.contains("TRY_CAST"), "{why}");
+fn cast_and_try_cast_are_both_admitted_and_mean_different_things() {
+    let plan::Plan::SignedFold(lenient) = plan::plan(NET_BALANCES).unwrap();
+    assert!(lenient.branches.iter().all(|b| !b.strict_cast), "TRY_CAST skips a bad value");
+
+    let plan::Plan::SignedFold(strict) = plan::plan(&NET_BALANCES.replace("TRY_CAST", "CAST")).unwrap();
+    assert!(strict.branches.iter().all(|b| b.strict_cast), "CAST refuses a bad value");
 }
 
 /// Deduplicating would silently drop a party's second identical transfer. Same query text, different

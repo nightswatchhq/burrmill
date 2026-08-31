@@ -331,20 +331,20 @@ fn is_n_table_signed_fold(q: &Query) -> Option<usize> {
 }
 
 /// Every n-table signed fold anywhere in a statement, CTE bindings and derived tables included.
-fn collect_folds(q: &Query, out: &mut Vec<usize>) {
-    if let Some(n) = is_n_table_signed_fold(q) {
-        out.push(n);
+fn collect_fold_queries<'a>(q: &'a Query, out: &mut Vec<&'a Query>) {
+    if is_n_table_signed_fold(q).is_some() {
+        out.push(q);
     }
     if let Some(w) = &q.with {
         for cte in &w.cte_tables {
-            collect_folds(&cte.query, out);
+            collect_fold_queries(&cte.query, out);
         }
     }
     if let SetExpr::Select(sel) = q.body.as_ref() {
         for twj in &sel.from {
             for f in std::iter::once(&twj.relation).chain(twj.joins.iter().map(|j| &j.relation)) {
                 if let TableFactor::Derived { subquery, .. } = f {
-                    collect_folds(subquery, out);
+                    collect_fold_queries(subquery, out);
                 }
             }
         }
@@ -374,6 +374,8 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
     let mut families: BTreeMap<String, usize> = BTreeMap::new();
     let mut admitted = 0usize;
     let mut nfold: BTreeMap<usize, usize> = BTreeMap::new();
+    let (mut subplans, mut subplans_admitted) = (0usize, 0usize);
+    let mut subplan_refusals: BTreeMap<String, usize> = BTreeMap::new();
     let mut refusals: BTreeMap<String, usize> = BTreeMap::new();
 
     for f in &files {
@@ -408,9 +410,21 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
             // measurement that finds nothing is the one to distrust hardest.
             if let Some(q) = inner {
                 let mut found = Vec::new();
-                collect_folds(q, &mut found);
-                for n in found {
+                collect_fold_queries(q, &mut found);
+                for fq in found {
+                    let n = is_n_table_signed_fold(fq).unwrap_or(0);
                     *nfold.entry(n).or_default() += 1;
+                    // **Plan the fold itself, not the statement it sits in.** Every one of these is
+                    // a sub-query inside a CTE or a join, so statement-level coverage cannot move
+                    // until CTEs and joins are admitted - which is a different item. What an owned
+                    // operator can execute today is the fold, and that is what this counts.
+                    subplans += 1;
+                    match burrmill::plan::plan(&fq.to_string()) {
+                        Ok(_) => subplans_admitted += 1,
+                        Err(e) => *subplan_refusals
+                            .entry(e.to_string().chars().take(72).collect())
+                            .or_default() += 1,
+                    }
                 }
             }
 
@@ -453,6 +467,17 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
         100.0 * famtop as f64 / statements.max(1) as f64
     );
     let folds: usize = nfold.values().sum();
+    println!(
+        "\n  FOLD SUB-PLANS  {subplans_admitted}/{subplans} admitted  ({:.0}%)  <- what an owned\n           operator can execute today. Statement-level coverage stays at {admitted}/{statements}\n           because every one of these folds sits inside a CTE or a join.",
+        100.0 * subplans_admitted as f64 / subplans.max(1) as f64
+    );
+    if !subplan_refusals.is_empty() {
+        let mut sr: Vec<_> = subplan_refusals.iter().collect();
+        sr.sort_by(|a, b| b.1.cmp(a.1));
+        for (k, n) in sr {
+            println!("    {n:>3}  {k}");
+        }
+    }
     println!(
         "\n  n-table signed folds: {folds}/{statements} statements, branch counts {:?}",
         nfold.iter().map(|(n, c)| format!("{n}x{c}")).collect::<Vec<_>>()

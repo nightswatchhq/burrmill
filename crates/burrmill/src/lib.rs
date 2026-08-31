@@ -247,7 +247,7 @@ impl Burrmill {
         // moved is then in neither half - dropped silently, which in a balance query means a number
         // that is simply too small. See [`crate::seam`].
         let snapshot = match &self.hot {
-            Some(hot) => Some(hot.snapshot(&fold.table)?),
+            Some(hot) => Some(hot.snapshot(&fold.branches[0].table)?),
             None => None,
         };
         // **Listed after the snapshot, and this is the load-bearing line.** The first version of
@@ -255,14 +255,15 @@ impl Burrmill {
         // whenever the handle was opened - so a range sealed in between was in neither half and the
         // COR-1 test caught it on run 0. A caller cannot be expected to open its handle at the
         // right instant; the ordering has to live here.
-        let resolved;
-        let segments = match &snapshot {
-            Some(_) => {
-                resolved = self.catalog.resolve(&fold.table)?.refresh()?;
-                &resolved
-            }
-            None => self.catalog.resolve(&fold.table)?,
-        };
+        // One resolved segment set per branch, in branch order. Branches naming the same table
+        // resolve to the same set; the executor fuses those into one scan so a table is read once.
+        let mut resolved: Vec<SealedSegments> = Vec::with_capacity(fold.branches.len());
+        for b in &fold.branches {
+            let set = self.catalog.resolve(&b.table)?;
+            resolved.push(if snapshot.is_some() { set.refresh()? } else { set.clone() });
+        }
+        let segments: Vec<&SealedSegments> = resolved.iter().collect();
+
         let seam = snapshot
             .as_ref()
             .map(|s| exec::signed_fold::Seam { snapshot: s, block_col: &self.block_col });
@@ -271,7 +272,8 @@ impl Burrmill {
         // on thirty-two, so an unbounded fold makes `mem_pool_bytes` a statement about the machine
         // rather than about the query. Nested `install` on the same pool is free.
         let (rows, metrics) = self.pool.install(|| {
-            let mut exec = exec::SignedFoldExec::new(fold, segments, limits).with_cancel(cancel);
+            let mut exec =
+                exec::SignedFoldExec::new(fold, &segments, limits).with_cancel(cancel);
             if let Some(seam) = seam.as_ref() {
                 exec = exec.with_seam(seam);
             }
@@ -287,16 +289,41 @@ impl Burrmill {
     pub fn explain(&self, sql: &str) -> Result<String> {
         let plan = plan::plan(sql)?;
         let Plan::SignedFold(fold) = &plan;
-        let segments = self.catalog.resolve(&fold.table)?;
-        let morsels = segments.morsels()?;
+        // One line per distinct table, because a fold over four event tables that all print as one
+        // scan is an EXPLAIN that hides the thing you opened it to see.
+        let mut seen: Vec<&str> = Vec::new();
+        let mut scans = String::new();
+        let mut total_morsels = 0usize;
+        for b in &fold.branches {
+            if seen.contains(&b.table.as_str()) {
+                continue;
+            }
+            seen.push(&b.table);
+            let segments = self.catalog.resolve(&b.table)?;
+            let morsels = segments.morsels()?;
+            total_morsels += morsels.len();
+            let arms: Vec<String> = fold
+                .branches
+                .iter()
+                .filter(|x| x.table == b.table)
+                .map(|x| format!("{}{}", if x.negated { "-" } else { "+" }, x.key_col))
+                .collect();
+            scans.push_str(&format!(
+                "\n  SegmentScan table={} files={} morsels={} arms=[{}]",
+                b.table,
+                segments.files().len(),
+                morsels.len(),
+                arms.join(", ")
+            ));
+        }
         Ok(format!(
-            "{}\n  CanonicalSort key={} asc\n  SegmentScan table={} files={} morsels={}\n  \
-             arithmetic=checked-i128 (refuse-on-overflow)\n  parallelism=morsel per row group",
+            "{}\n  CanonicalSort key={} asc{scans}\n  \
+             arithmetic=checked-i128 (refuse-on-overflow)\n  \
+             parallelism=morsel per row group, {} morsels over {} table(s)",
             plan.describe(),
             fold.key_alias,
-            fold.table,
-            segments.files().len(),
-            morsels.len(),
+            total_morsels,
+            seen.len(),
         ))
     }
 }
