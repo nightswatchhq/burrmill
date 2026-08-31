@@ -26,11 +26,12 @@ for addrs in 512 200000 1000000; do
 done
 echo
 echo "== peak RSS against thread count, 1M groups =="
-# The 256 MB gate does not say at what parallelism, and parallelism is the load-bearing variable:
-# the aggregate is flat at 99 MB and everything else scales with cores. Roadmap 1.2c.
+# THREADS, not RAYON_NUM_THREADS: as of roadmap 1.2c the fold runs in its own bounded pool sized by
+# Limits::max_threads, so the ambient rayon pool decides nothing. The gate is stated AT THE DEFAULT
+# BUDGET of 8; the sweep is here to show what the bound is buying.
 rm -rf /tmp/burrmill-fx && ROWS=2000000 SEGMENTS=100 ADDRS=1000000 KEEP_FIXTURE=/tmp/burrmill-fx $BIN >/dev/null 2>&1
 for t in 1 4 8 16 32; do
   printf "threads=%-4s " "$t"
-  RAYON_NUM_THREADS=$t REPEATS=1 $BIN fold /tmp/burrmill-fx 2>&1 | grep -E '^(FOLD|Error)'
+  THREADS=$t REPEATS=1 $BIN fold /tmp/burrmill-fx 2>&1 | grep -E '^(FOLD|Error)'
 done
 rm -rf /tmp/burrmill-fx

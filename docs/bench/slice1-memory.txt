@@ -16,7 +16,13 @@
 # before:   commit eec0699, one aggregation per worker, Box<str> per output row.
 # after:    one SharedAgg behind per-partition locks, answer keyed into the moved arenas.
 #
-# Gate: 256 MB. THE GATE DOES NOT NAME A THREAD COUNT, AND THAT IS NOW THE PROBLEM (roadmap 1.2c).
+# Gate: 256 MB **at 8 threads per query**, which the operator now enforces itself (roadmap 1.2c,
+# decided 2026-08-31). `Limits::max_threads` defaults to 8 and the handle owns a pool that size, so
+# peak RSS is a property of the query rather than of the host's core count.
+#
+# AT THE DEFAULT BUDGET, 989,690 groups: 210 MB on Linux, 240-246 MB on macOS. Both pass; macOS is
+# tighter because its allocator returns less, and that difference is worth knowing rather than
+# averaging away.
 
 threads   before_mb   after_mb   before_ms   after_ms   verdict_after
 1         538         147        870         578        pass
@@ -33,6 +39,10 @@ threads   before_mb   after_mb   before_ms   after_ms   verdict_after
 # Widening the fixture to twelve columns did NOT cost memory, which is itself the projection
 # pushdown working: three columns are decoded whatever the file holds.
 
+# The wide-on-demand accumulator (roadmap 2.1b) cost NOTHING here: 210 MB before and after. An entry
+# only carries a high word once its running total leaves i128, which on real data is never, so the
+# order-independent refusal was free.
+#
 # agg_bytes, the aggregation's own live bytes, is 99 MB at EVERY thread count above. That is the
 # whole claim of 1.2 stated as a measurement: the aggregate's size is a property of the data and not
 # of the machine.

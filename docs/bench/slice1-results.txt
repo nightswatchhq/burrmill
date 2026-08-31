@@ -1,40 +1,48 @@
-# RFC-0044 slice 1 gate. Nest-shaped fixture (12 columns), 32-core Debian.
+# RFC-0044 slice 1 gate. PASSES, at a stated parallelism, with the comparison held equal.
 #
-# The fixture changed here (roadmap 1.1a). It was four columns and a real nuthatch event is
-# twelve, two of them 66-character hex hashes. Every number below is therefore NOT comparable
-# with the version in git history; the old ones were measured on a table no nest ever writes.
+# Read the two conditions before the numbers, because both were wrong earlier today:
 #
-# Note what widening the schema did to the incumbent. DataFusion went from roughly 0.8-0.9x
-# DuckDB to 2.0-3.9x on the same queries, because a wide table punishes an engine that decodes
-# columns nobody asked for. Burrmill's ratios improved for the mirror-image reason. That swing
-# is the architectural argument, and it only became visible once the fixture stopped being
-# unrealistic in a way the experiment was about.
+#  1. ALL THREE ENGINES GET THE SAME THREAD BUDGET (8). Burrmill bounds its own parallelism as
+#     of roadmap 1.2c, so leaving DuckDB on a 32-core box's defaults compared 8 threads against
+#     32 and called the difference an engine. It duly did: two configurations read 1.3x the
+#     moment the bound landed, which looked like a regression and was a harness fault.
+#  2. Nest-shaped fixture, TWELVE columns (roadmap 1.1a). The old four-column one could not
+#     exhibit a missing projection pushdown, and for a whole slice it did not.
 #
-# Machine: 32 cores, Linux 6.12.94+deb13-amd64. 2026-08-31T12:32:27Z
+# Machine: 32-core Debian 6.12, 62 GB. Peak RSS is a true high-water mark via getrusage,
+# REPEATS=1 for the RSS section because retention accumulates across folds in one process.
+# 2026-08-31T13:31:43Z
+#
+# LATENCY: burrmill_ratio 0.38-0.87, all <= 1.0, parity verified on all 14 configurations.
+# MEMORY:  210 MB at 989,690 groups against a 256 MB gate, at the default 8-thread budget.
+#
+# Note DataFusion once the schema is realistic and the threads are equal: 3.6x DuckDB at ten
+# thousand segments, and 0.54x at a million groups. It is not uniformly the slow one; it is
+# badly served by many small files, which is exactly the layout a nest produces.
 
 == segment sweep, 2,000,000 rows, 512 parties ==
-RESULT	rows=2000000	segments=1	addrs=512	repeats=5	order=duck_first	duck_ms=70	df_ms=132	burrmill_ms=12	df_ratio=1.89	burrmill_ratio=0.17	parity=verified	groups=509	rss_mb=1699
-RESULT	rows=2000000	segments=1	addrs=512	repeats=5	order=burrmill_first	duck_ms=69	df_ms=130	burrmill_ms=12	df_ratio=1.88	burrmill_ratio=0.17	parity=verified	groups=509	rss_mb=1695
-RESULT	rows=2000000	segments=100	addrs=512	repeats=5	order=duck_first	duck_ms=34	df_ms=54	burrmill_ms=15	df_ratio=1.59	burrmill_ratio=0.44	parity=verified	groups=509	rss_mb=269
-RESULT	rows=2000000	segments=100	addrs=512	repeats=5	order=burrmill_first	duck_ms=31	df_ms=57	burrmill_ms=16	df_ratio=1.84	burrmill_ratio=0.52	parity=verified	groups=509	rss_mb=269
-RESULT	rows=2000000	segments=1000	addrs=512	repeats=5	order=duck_first	duck_ms=81	df_ms=85	burrmill_ms=23	df_ratio=1.05	burrmill_ratio=0.28	parity=verified	groups=509	rss_mb=307
-RESULT	rows=2000000	segments=1000	addrs=512	repeats=5	order=burrmill_first	duck_ms=58	df_ms=84	burrmill_ms=19	df_ratio=1.45	burrmill_ratio=0.33	parity=verified	groups=509	rss_mb=324
-RESULT	rows=2000000	segments=10000	addrs=512	repeats=5	order=duck_first	duck_ms=358	df_ms=1372	burrmill_ms=120	df_ratio=3.83	burrmill_ratio=0.34	parity=verified	groups=509	rss_mb=1101
-RESULT	rows=2000000	segments=10000	addrs=512	repeats=5	order=burrmill_first	duck_ms=359	df_ms=1357	burrmill_ms=124	df_ratio=3.78	burrmill_ratio=0.35	parity=verified	groups=509	rss_mb=1229
+RESULT	rows=2000000	segments=1	addrs=512	repeats=5	order=duck_first	duck_ms=70	df_ms=120	burrmill_ms=34	df_ratio=1.71	burrmill_ratio=0.49	parity=verified	groups=509	rss_mb=1699
+RESULT	rows=2000000	segments=1	addrs=512	repeats=5	order=burrmill_first	duck_ms=77	df_ms=120	burrmill_ms=34	df_ratio=1.56	burrmill_ratio=0.44	parity=verified	groups=509	rss_mb=1700
+RESULT	rows=2000000	segments=100	addrs=512	repeats=5	order=duck_first	duck_ms=47	df_ms=61	burrmill_ms=37	df_ratio=1.30	burrmill_ratio=0.79	parity=verified	groups=509	rss_mb=190
+RESULT	rows=2000000	segments=100	addrs=512	repeats=5	order=burrmill_first	duck_ms=44	df_ms=59	burrmill_ms=33	df_ratio=1.34	burrmill_ratio=0.75	parity=verified	groups=509	rss_mb=174
+RESULT	rows=2000000	segments=1000	addrs=512	repeats=5	order=duck_first	duck_ms=79	df_ms=94	burrmill_ms=45	df_ratio=1.19	burrmill_ratio=0.57	parity=verified	groups=509	rss_mb=237
+RESULT	rows=2000000	segments=1000	addrs=512	repeats=5	order=burrmill_first	duck_ms=75	df_ms=96	burrmill_ms=46	df_ratio=1.28	burrmill_ratio=0.61	parity=verified	groups=509	rss_mb=231
+RESULT	rows=2000000	segments=10000	addrs=512	repeats=5	order=duck_first	duck_ms=374	df_ms=1370	burrmill_ms=243	df_ratio=3.66	burrmill_ratio=0.65	parity=verified	groups=509	rss_mb=1050
+RESULT	rows=2000000	segments=10000	addrs=512	repeats=5	order=burrmill_first	duck_ms=382	df_ms=1370	burrmill_ms=243	df_ratio=3.59	burrmill_ratio=0.64	parity=verified	groups=509	rss_mb=1206
 == high-cardinality gate, 100 segments ==
-RESULT	rows=2000000	segments=100	addrs=10000	repeats=5	order=duck_first	duck_ms=33	df_ms=55	burrmill_ms=22	df_ratio=1.67	burrmill_ratio=0.67	parity=verified	groups=9896	rss_mb=536
-RESULT	rows=2000000	segments=100	addrs=10000	repeats=5	order=burrmill_first	duck_ms=38	df_ms=60	burrmill_ms=21	df_ratio=1.58	burrmill_ratio=0.55	parity=verified	groups=9896	rss_mb=552
-RESULT	rows=2000000	segments=100	addrs=200000	repeats=5	order=duck_first	duck_ms=144	df_ms=142	burrmill_ms=48	df_ratio=0.99	burrmill_ratio=0.33	parity=verified	groups=197936	rss_mb=1502
-RESULT	rows=2000000	segments=100	addrs=200000	repeats=5	order=burrmill_first	duck_ms=137	df_ms=138	burrmill_ms=50	df_ratio=1.01	burrmill_ratio=0.36	parity=verified	groups=197936	rss_mb=1586
-RESULT	rows=2000000	segments=100	addrs=1000000	repeats=5	order=duck_first	duck_ms=309	df_ms=242	burrmill_ms=130	df_ratio=0.78	burrmill_ratio=0.42	parity=verified	groups=989690	rss_mb=3438
-RESULT	rows=2000000	segments=100	addrs=1000000	repeats=5	order=burrmill_first	duck_ms=314	df_ms=244	burrmill_ms=130	df_ratio=0.78	burrmill_ratio=0.41	parity=verified	groups=989690	rss_mb=3500
+RESULT	rows=2000000	segments=100	addrs=10000	repeats=5	order=duck_first	duck_ms=60	df_ms=59	burrmill_ms=48	df_ratio=0.98	burrmill_ratio=0.80	parity=verified	groups=9896	rss_mb=360
+RESULT	rows=2000000	segments=100	addrs=10000	repeats=5	order=burrmill_first	duck_ms=52	df_ms=57	burrmill_ms=45	df_ratio=1.10	burrmill_ratio=0.87	parity=verified	groups=9896	rss_mb=350
+RESULT	rows=2000000	segments=100	addrs=200000	repeats=5	order=duck_first	duck_ms=182	df_ms=118	burrmill_ms=70	df_ratio=0.65	burrmill_ratio=0.38	parity=verified	groups=197936	rss_mb=1078
+RESULT	rows=2000000	segments=100	addrs=200000	repeats=5	order=burrmill_first	duck_ms=183	df_ms=112	burrmill_ms=69	df_ratio=0.61	burrmill_ratio=0.38	parity=verified	groups=197936	rss_mb=937
+RESULT	rows=2000000	segments=100	addrs=1000000	repeats=5	order=duck_first	duck_ms=366	df_ms=200	burrmill_ms=155	df_ratio=0.55	burrmill_ratio=0.42	parity=verified	groups=989690	rss_mb=1855
+RESULT	rows=2000000	segments=100	addrs=1000000	repeats=5	order=burrmill_first	duck_ms=372	df_ms=200	burrmill_ms=161	df_ratio=0.54	burrmill_ratio=0.43	parity=verified	groups=989690	rss_mb=1897
 == operator-only peak RSS (no DuckDB linked, no DataFusion session) ==
-addrs=512      FOLD	groups=509	morsels=120	rows_read=2000000	median_ms=46	plan_ms=2	scan_ms=43	merge_ms=0	agg_mb=0	all=[46]	peak_rss_mb=67
-addrs=200000   FOLD	groups=197936	morsels=120	rows_read=2000000	median_ms=64	plan_ms=1	scan_ms=50	merge_ms=11	agg_mb=17	all=[64]	peak_rss_mb=224
-addrs=1000000  FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=148	plan_ms=1	scan_ms=78	merge_ms=67	agg_mb=99	all=[148]	peak_rss_mb=335
+addrs=512      FOLD	groups=509	morsels=120	rows_read=2000000	median_ms=33	plan_ms=1	scan_ms=31	merge_ms=0	agg_mb=0	threads=8	all=[33]	peak_rss_mb=36
+addrs=200000   FOLD	groups=197936	morsels=120	rows_read=2000000	median_ms=72	plan_ms=0	scan_ms=63	merge_ms=7	agg_mb=17	threads=8	all=[72]	peak_rss_mb=96
+addrs=1000000  FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=171	plan_ms=1	scan_ms=111	merge_ms=57	agg_mb=99	threads=8	all=[171]	peak_rss_mb=210
 == peak RSS against thread count, 1M groups ==
-threads=1    FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=578	plan_ms=4	scan_ms=402	merge_ms=170	agg_mb=99	all=[578]	peak_rss_mb=147
-threads=4    FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=220	plan_ms=1	scan_ms=151	merge_ms=66	agg_mb=99	all=[220]	peak_rss_mb=180
-threads=8    FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=163	plan_ms=1	scan_ms=105	merge_ms=55	agg_mb=99	all=[163]	peak_rss_mb=204
-threads=16   FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=183	plan_ms=1	scan_ms=97	merge_ms=83	agg_mb=99	all=[183]	peak_rss_mb=259
-threads=32   FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=153	plan_ms=2	scan_ms=81	merge_ms=68	agg_mb=99	all=[153]	peak_rss_mb=339
+threads=1    FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=601	plan_ms=4	scan_ms=429	merge_ms=167	agg_mb=99	threads=1	all=[601]	peak_rss_mb=145
+threads=4    FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=233	plan_ms=1	scan_ms=162	merge_ms=68	agg_mb=99	threads=4	all=[233]	peak_rss_mb=187
+threads=8    FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=178	plan_ms=0	scan_ms=114	merge_ms=61	agg_mb=99	threads=8	all=[178]	peak_rss_mb=206
+threads=16   FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=152	plan_ms=0	scan_ms=95	merge_ms=55	agg_mb=99	threads=16	all=[152]	peak_rss_mb=259
+threads=32   FOLD	groups=989690	morsels=120	rows_read=2000000	median_ms=152	plan_ms=0	scan_ms=81	merge_ms=70	agg_mb=99	threads=32	all=[152]	peak_rss_mb=344

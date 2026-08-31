@@ -103,22 +103,59 @@ impl Answer {
 /// and the measured consequence is a p99 that goes from 29.5 ms to 7066 ms between one client and
 /// thirty-two while throughput stays flat at about 40 qps. That is not a tuning problem, it is the
 /// architecture, and not having it is most of why a serving path wants this.
-#[derive(Debug, Clone)]
+/// **Parallelism is bounded here, not inherited from the host.** See [`Limits::max_threads`]. The
+/// pool is built once per handle and shared by every clone, so a query pays nothing to be bounded.
+#[derive(Clone)]
 pub struct Burrmill {
     catalog: Catalog,
+    pool: std::sync::Arc<rayon::ThreadPool>,
+}
+
+impl std::fmt::Debug for Burrmill {
+    /// A `ThreadPool` is not `Debug`, and printing one would be noise anyway.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Burrmill")
+            .field("catalog", &self.catalog)
+            .field("threads", &self.pool.current_num_threads())
+            .finish()
+    }
+}
+
+/// Build the bounded pool, falling back to the ambient parallelism if the machine has fewer cores
+/// than the budget allows. Failing to build a pool is a substrate problem, not a query problem.
+fn build_pool(threads: usize) -> Result<std::sync::Arc<rayon::ThreadPool>> {
+    let want = threads
+        .max(1)
+        .min(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(threads.max(1)));
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(want)
+        .thread_name(|i| format!("burrmill-{i}"))
+        .build()
+        .map(std::sync::Arc::new)
+        .map_err(|e| BurrmillError::Substrate(format!("could not build the fold's thread pool: {e}")))
 }
 
 impl Burrmill {
-    /// Open with an explicit catalog.
+    /// Open with an explicit catalog and the default thread budget.
     pub fn new(catalog: Catalog) -> Self {
-        Self { catalog }
+        Self::with_threads(catalog, Limits::default().max_threads)
+            .expect("the default thread budget always builds a pool")
+    }
+
+    /// Open with an explicit catalog and an explicit thread budget.
+    ///
+    /// The budget lives on the handle rather than on [`Limits`] because a thread pool is expensive
+    /// to build and cheap to share, and a per-query pool would put four hundred microseconds of
+    /// thread spawning inside a fifteen-millisecond query.
+    pub fn with_threads(catalog: Catalog, threads: usize) -> Result<Self> {
+        Ok(Self { catalog, pool: build_pool(threads)? })
     }
 
     /// Register every `*.parquet` under `dir` as one table.
     pub fn open_segments(name: &str, dir: &Path) -> Result<Self> {
         let mut catalog = Catalog::new();
         catalog.register(SealedSegments::discover(name, dir)?);
-        Ok(Self { catalog })
+        Ok(Self { catalog, pool: build_pool(Limits::default().max_threads)? })
     }
 
     /// Register the segments of a nest table whose files share a `<contract>__<event>-` prefix.
@@ -153,7 +190,7 @@ impl Burrmill {
         }
         let mut catalog = Catalog::new();
         catalog.register(table);
-        Ok(Self { catalog })
+        Ok(Self { catalog, pool: build_pool(Limits::default().max_threads)? })
     }
 
     pub fn catalog(&self) -> &Catalog {
@@ -174,9 +211,12 @@ impl Burrmill {
         let plan = plan::plan(sql)?;
         let Plan::SignedFold(fold) = &plan;
         let segments = self.catalog.resolve(&fold.table)?;
-        let (rows, metrics) = exec::SignedFoldExec::new(fold, segments, limits)
-            .with_cancel(cancel)
-            .run()?;
+        // **Inside the bounded pool.** Peak RSS at a million groups is 147 MB on one thread and 349
+        // on thirty-two, so an unbounded fold makes `mem_pool_bytes` a statement about the machine
+        // rather than about the query. Nested `install` on the same pool is free.
+        let (rows, metrics) = self.pool.install(|| {
+            exec::SignedFoldExec::new(fold, segments, limits).with_cancel(cancel).run()
+        })?;
         Ok(Answer { rows, plan: plan.clone(), metrics })
     }
 

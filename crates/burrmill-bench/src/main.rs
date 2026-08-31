@@ -245,7 +245,13 @@ async fn bench() -> anyhow::Result<()> {
 fn fold_only() -> anyhow::Result<()> {
     let dir = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: fold <dir>"))?;
     let repeats = env_usize("REPEATS", 3).max(1);
-    let db = burrmill::Burrmill::open_segments("t", Path::new(&dir))?;
+    // **THREADS, not RAYON_NUM_THREADS.** The fold runs in its own bounded pool as of roadmap
+    // 1.2c, so the ambient rayon pool no longer decides anything and setting it would silently
+    // measure nothing. Defaults to the budget in `Limits`.
+    let threads = env_usize("THREADS", burrmill::Limits::default().max_threads);
+    let mut catalog = burrmill::Catalog::new();
+    catalog.register(burrmill::SealedSegments::discover("t", Path::new(&dir))?);
+    let db = burrmill::Burrmill::with_threads(catalog, threads)?;
     let sql = "SELECT addr, SUM(d) AS net FROM (\
                  SELECT \"to\" AS addr, TRY_CAST(\"value\" AS HUGEINT) AS d FROM t \
                  UNION ALL \
@@ -270,7 +276,7 @@ fn fold_only() -> anyhow::Result<()> {
     }
     all.sort_unstable();
     println!(
-        "FOLD\tgroups={rows}\tmorsels={}\trows_read={}\tmedian_ms={}\tplan_ms={}\tscan_ms={}\tmerge_ms={}\tagg_mb={}\tall={all:?}\tpeak_rss_mb={}",
+        "FOLD\tgroups={rows}\tmorsels={}\trows_read={}\tmedian_ms={}\tplan_ms={}\tscan_ms={}\tmerge_ms={}\tagg_mb={}\tthreads={threads}\tall={all:?}\tpeak_rss_mb={}",
         metrics.morsels,
         metrics.rows_read,
         all[all.len() / 2],
@@ -732,7 +738,7 @@ fn cast_table() -> anyhow::Result<()> {
         "1,000", " ", "\t7",
     ];
     let conn = duckdb::Connection::open_in_memory()?;
-    println!("{:<45} {:<24} {}", "literal", "rust parse::<i128>", "duckdb TRY_CAST");
+    println!("{:<45} {:<24} duckdb TRY_CAST", "literal", "rust parse::<i128>");
     let mut diffs = 0;
     for l in lits {
         let ours = l.parse::<i128>().map(|v| v.to_string()).unwrap_or_else(|_| "NULL".into());

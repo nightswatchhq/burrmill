@@ -12,25 +12,18 @@ memory gate failed. Treat its engineer-week figures as an order of magnitude, no
 
 ---
 
-## Stage 1 — finish slice 1 · IN PROGRESS
+## Stage 1 — slice 1 · **GATE PASSED**
 
-Slice 1's gate is "≤1.0x DuckDB at exact parity **under the 256 MB RSS gate**". Latency passes
-everywhere and has got better. RSS is now under the budget up to eight threads and over it above
-sixteen, which by the RFC's own rule is still a stop rather than a pass, so nothing below this line
-starts until it clears.
+The gate is "≤1.0x DuckDB at exact parity **under the 256 MB RSS gate**", and both legs are met, at a
+stated parallelism, with the comparison held equal:
 
-**1.2 has moved the blocker rather than cleared it, and it has changed what the gate means.** One
-shared aggregate instead of one per worker cut peak RSS at a million groups by 2.2-3.4x and improved
-latency at every core count. Measured like for like on one 32-core box against commit `eec0699`:
-**538 MB → 146 MB at one thread, 584 → 210 at eight, 769 → 349 at thirty-two.** The aggregate is 99
-MB at every thread count, so that part of the claim is exact; everything else costs about 6 MB per
-thread. The gate passes to 8 threads, misses by 1% at 16 and by 36% at 32 — and 36 to 67 MB of that
-is memory glibc has freed and not returned, not working set.
+- **Latency 0.38-0.87x** across fourteen configurations, parity verified on every one.
+- **210 MB** peak RSS at 989,690 groups, against 256, at the default eight-thread budget.
 
-**1.1 is done and it cost the real-nest numbers.** They were measuring a 38,429-file directory scan
-charged to DuckDB and not to Burrmill. Restated like-for-like they are 0.48-0.78x rather than
-0.11-0.71x, and they only reach that because 1.1 turned up a missing projection pushdown on the way.
-The synthetic sweep never touched that path and stands unchanged.
+Two conditions attached, because both were wrong earlier in the day and the gate is only meaningful
+with them stated. The fixture is nest-shaped at twelve columns, not the four it was; and **all three
+engines get the same thread budget**, because bounding Burrmill's parallelism while leaving DuckDB on
+a 32-core box's defaults compared 8 threads against 32 and called the difference an engine.
 
 | # | Work | Done when |
 |---|---|---|
@@ -38,8 +31,8 @@ The synthetic sweep never touched that path and stands unchanged.
 | ~~1.1a~~ | ~~A realistic-width synthetic fixture~~ | **DONE 2026-08-31.** Twelve columns matching a real nuthatch event, two of them 66-character hex. Demonstrated rather than asserted: with the projection deliberately disabled, the old fixture shows a **1.00-1.07x** penalty and the new one **1.6-2.5x**. It also flipped DataFusion from ~0.8-0.9x DuckDB to **2.0-3.9x**, because a wide table punishes an engine that decodes columns nobody asked for. Every published sweep number is restated on it |
 | ~~1.1b~~ | ~~A gate that refuses a flat comparison~~ | **DONE 2026-08-31.** The nest harness halves its input and checks whether each engine's time follows. Over 50% fixed and **no ratio is printed** — the field reads `UNSAFE_fixed_duck=66pct_burr=17pct`. It refuses exactly the 0.11 that was published this morning and passes the legitimate ones. Its own first version gated a different quantity from the one it measured, and was caught the first time it ran |
 | 1.2 | ~~Input repartitioning~~ **One shared partitioned aggregate, not one per worker** · PARTIALLY DONE | Peak RSS at 1M groups **538→146 MB at 1 thread, 584→210 at 8, 769→349 at 32**, latency better at every count, parity verified on all 14 sweep configurations. `agg_bytes` is 99 MB at every thread count, which is the claim as a measurement. **Passes to 8 threads, misses by 1% at 16 and 36% at 32**, so the gate is not passed |
-| 1.2a | The last of the per-thread cost | Two candidates ruled out by measurement, not argument: **streaming the output cannot help** (a globally sorted answer needs every row live), and **it is not the decoder** — with a trivial aggregate the same scan costs 1.3 MB/thread against 5.6 MB/thread at 1M groups, so the scaling follows the aggregate. What is left is concurrent hash-table growth and 36-67 MB of freed-but-unreturned memory behind it. Needs partition pre-sizing from a cardinality estimate, or an arena-allocated table |
-| 1.2c | **State the gate's parallelism** | 256 MB is not a budget until it says at how many threads. The same binary passes on a laptop and fails on a build server, and that is a specification defect rather than a code one. An RFC amendment, not a patch |
+| ~~1.2a~~ | ~~The last of the per-thread cost~~ **· CLOSED by 1.2c** | Two candidates ruled out by measurement, not argument: **streaming the output cannot help** (a globally sorted answer needs every row live), and **it is not the decoder** — with a trivial aggregate the same scan costs 1.3 MB/thread against 5.6 MB/thread at 1M groups, so the scaling follows the aggregate. What is left is concurrent hash-table growth and 36-67 MB of freed-but-unreturned memory behind it. Needs partition pre-sizing from a cardinality estimate, or an arena-allocated table |
+| ~~1.2c~~ | ~~State the gate's parallelism~~ | **DECIDED AND ENFORCED 2026-08-31: 8 threads per query, and the operator bounds itself rather than inheriting the host's core count.** `Limits::max_threads` defaults to 8, the handle owns a pool that size, and `mem_pool_bytes` finally means something. Chosen on measurement: 1M groups goes 608 ms at 1 thread, 217 at 4, **165 at 8**, 158 at 16, 173 at 32 - eight is within 6% of the whole machine and leaves twenty-four cores for other queries, which is the entire concurrency argument. Old text: 256 MB is not a budget until it says at how many threads. The same binary passes on a laptop and fails on a build server, and that is a specification defect rather than a code one. An RFC amendment, not a patch |
 | 1.2b | The small-aggregate regression | 509 groups went 48 MB → 76 MB and 0.76 → 0.82x. Sixty-four partition tables are pure overhead for an aggregate that fits in L2 as one, and a shared aggregate cannot use the old promotion threshold because the partitions are what make it shared. Small, real, and recorded rather than rounded away |
 | ~~1.3~~ | ~~A real global memory budget~~ | **DONE as a consequence of 1.2.** `mem_pool_bytes` is now checked against the query's whole aggregation rather than one worker's share, because there is only one. Still not process RSS — decode buffers sit outside it — and the doc comment says so. `max_bytes`, which was a field nothing read, is now enforced too |
 | ~~1.4~~ | ~~Seal-layout canary~~ | **DONE 2026-08-31.** `tests/seal_layout.rs` writes the layout contract down as assertions, and `BURRMILL_NEST=<dir>` checks it against a real nest (38,428 segments, 34 tables). It found a genuine bug on the way — **a table name matching no segments returned an empty answer instead of refusing**, where DuckDB refuses — and then found that its own `<contract>__<event>` grammar was wrong: `grt_total_supply` is a *call* table sealed from an `eth_call`, not a log |
@@ -66,11 +59,11 @@ Owning execution means owning the bugs, and nineteen hand-written refusals are n
 | # | Work | Done when |
 |---|---|---|
 | 2.1 | ~~Allowlist-constrained query generator~~ **· DONE, and it found things** | Two oracles: a non-optimising reference in `tests/generated_folds.rs` that runs on every `cargo test` and survives DuckDB's removal, and `burrmill-bench gen` against DuckDB itself. **3,000 cases: 2,684 answers agreed exactly, 308 both refused, 8 order-dependent.** Mutation-checked — a `wrapping_add` and a dropped row are both caught with reproducible seeds. Still owed: nightly CI |
-| 2.1a | **Decide the `TRY_CAST` divergence** | 8 of 20 edge literals differed. Whitespace is fixed (` 7` is seven, and we were dropping the row). DuckDB also takes `1e18`, `7.0`, `1_000` and **rounds `7.9` to 8**; adopting silent rounding into an engine whose first claim is exactness needs a decision. `burrmill-bench cast` prints the table |
-| 2.1b | **Decide whether refusal should be order-independent** | Refusal fires when an intermediate partial sum leaves `i128`, not when the answer does: `MAX, +1, -1` sums to exactly `MAX` and is declined. DuckDB does it too, in both directions. Fixing it means accumulating wider than `i128`, which costs 16 bytes per group — against a memory gate already being missed. `tests/generated_folds.rs` pins today's behaviour so a fix inverts a test deliberately |
+| ~~2.1a~~ | ~~Decide the `TRY_CAST` divergence~~ **· DECIDED: refuse, do not guess** | 8 of 20 edge literals differed. Whitespace is fixed (` 7` is seven, and we were dropping the row). DuckDB also takes `1e18`, `7.0`, `1_000` and **rounds `7.9` to 8**; adopting silent rounding into an engine whose first claim is exactness needs a decision. `burrmill-bench cast` prints the table |
+| ~~2.1b~~ | ~~Decide whether refusal should be order-independent~~ **· DECIDED AND DONE: yes** | Refusal fires when an intermediate partial sum leaves `i128`, not when the answer does: `MAX, +1, -1` sums to exactly `MAX` and is declined. DuckDB does it too, in both directions. Fixing it means accumulating wider than `i128`, which costs 16 bytes per group — against a memory gate already being missed. `tests/generated_folds.rs` pins today's behaviour so a fix inverts a test deliberately |
 | ~~2.2~~ | ~~Overflow reached by generation~~ | **DONE.** 86 of 180 generated cases in the library test reach the refusal path, against a benchmark fixture that topped out at 1e20 and could never have reached it at all |
 | ~~2.3~~ | ~~`sqllogictest-rs` corpus~~ | **DONE 2026-08-31.** Hand-computed expectations in `crates/burrmill/tests/slt/`, run against Burrmill on every `cargo test` at three segment layouts, and against DuckDB via `burrmill-bench slt`. Both green. Mutation-checked. Choosing the standard format paid immediately: pointing the same files at DuckDB is what turned up 2.3a |
-| 2.3a | **Report the DuckDB wrap upstream** | With ≥2 threads and ≥2 files, `SUM(HUGEINT)` returns `i128::MIN` where the true sum is `i128::MAX + 1` — a silently wrapped balance. Refuses correctly at 1 thread or 1 file, so the check is missing from the partial-aggregate combine. Reproduced by `burrmill-bench duckdb-gaps` on libduckdb-sys 1.10501.0. Outward-facing, so Chief's call |
+| 2.3a | **Report the DuckDB wrap upstream** · drafted at `docs/upstream/duckdb-hugeint-parallel-wrap.md`, not sent | With ≥2 threads and ≥2 files, `SUM(HUGEINT)` returns `i128::MIN` where the true sum is `i128::MAX + 1` — a silently wrapped balance. Refuses correctly at 1 thread or 1 file, so the check is missing from the partial-aggregate combine. Reproduced by `burrmill-bench duckdb-gaps` on libduckdb-sys 1.10501.0. Outward-facing, so Chief's call |
 
 ---
 

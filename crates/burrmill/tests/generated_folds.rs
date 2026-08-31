@@ -110,26 +110,47 @@ fn gen_value(rng: &mut Rng, kind: Values) -> String {
 /// Deliberately dull. Every deviation from the real operator here is a bug in one of them, and the
 /// dull one is much easier to be sure about.
 fn reference(rows: &[Row]) -> Result<Vec<(String, i128)>, BurrmillError> {
-    let mut acc: BTreeMap<String, i128> = BTreeMap::new();
-    let add = |acc: &mut BTreeMap<String, i128>, k: &str, v: i128| -> Result<(), BurrmillError> {
-        let e = acc.entry(k.to_string()).or_insert(0);
-        *e = e
-            .checked_add(v)
-            .ok_or_else(|| BurrmillError::Overflow(format!("reference sum for {k}")))?;
-        Ok(())
+    // Accumulate wider than `i128` so that a key is refused when its **answer** does not fit, never
+    // because some partial sum did not. Written as an `i128` pair rather than a big-integer crate:
+    // test inputs are at most sixty rows of magnitude below 2^127, so a 192-bit accumulator has
+    // enormous headroom, and the arithmetic is short enough to check by eye.
+    let mut acc: BTreeMap<String, (i64, i128)> = BTreeMap::new();
+    let add = |acc: &mut BTreeMap<String, (i64, i128)>, k: &str, v: i128| {
+        let (hi, lo) = acc.entry(k.to_string()).or_insert((0, 0));
+        let (new_lo, carry) = (*lo as u128).overflowing_add(v as u128);
+        *hi += (v >> 127) as i64 + carry as i64;
+        *lo = new_lo as i128;
     };
     for r in rows {
         // TRY_CAST: unparseable becomes NULL, and SUM ignores NULLs. Skip, never substitute.
-        let Ok(d) = r.value.parse::<i128>() else { continue };
+        // Trimmed, because DuckDB trims and " 7" is seven.
+        let Ok(d) = r.value.trim().parse::<i128>() else { continue };
+        // The one negation that does not exist. Refused rather than wrapped, and it is refused here
+        // rather than at the sum because `-i128::MIN` is unrepresentable however wide the
+        // accumulator is: the fold's expression negates the value itself.
         let minus_d = d
             .checked_neg()
             .ok_or_else(|| BurrmillError::Overflow(format!("reference negation of {d}")))?;
-        add(&mut acc, &r.to, d)?;
-        add(&mut acc, &r.from, minus_d)?;
+        add(&mut acc, &r.to, d);
+        add(&mut acc, &r.from, minus_d);
     }
-    // HAVING SUM(d) <> 0, then canonical byte-wise ascending order, which a BTreeMap over String
-    // already gives for these ASCII keys.
-    Ok(acc.into_iter().filter(|(_, v)| *v != 0).collect())
+    let mut out = Vec::new();
+    for (k, (hi, lo)) in acc {
+        let u = lo as u128;
+        let sum = match hi {
+            0 if u <= i128::MAX as u128 => u as i128,
+            -1 if u >= 1u128 << 127 => u as i128,
+            _ => {
+                return Err(BurrmillError::Overflow(format!("reference sum for {k} does not fit")))
+            }
+        };
+        // HAVING SUM(d) <> 0, then canonical byte-wise ascending order, which a BTreeMap over
+        // String already gives for these ASCII keys.
+        if sum != 0 {
+            out.push((k, sum));
+        }
+    }
+    Ok(out)
 }
 
 fn write_segments(dir: &Path, rows: &[Row], splits: usize) {
@@ -254,25 +275,23 @@ fn adversarial_values_match_the_reference_or_refuse_together() {
     run(Values::Adversarial);
 }
 
-/// **A representable answer can still be refused, and that is worth pinning down.**
+/// **A representable answer is now returned, not refused.** Roadmap 2.1b, decided and done.
 ///
 /// Credit a party with `i128::MAX`, then `+1`, then `-1`. The true sum is `i128::MAX` and fits
-/// exactly. A checked accumulator that meets the `+1` before the `-1` overflows on the way to an
-/// answer it could have represented, and refuses.
+/// exactly. The previous version refused it, because a checked `i128` accumulator that meets the
+/// `+1` before the `-1` leaves the range on the way to an answer it could have represented - so
+/// whether a query succeeded depended on the order rows happened to arrive in, which for a serving
+/// engine means the same data answering on Tuesday and failing on Wednesday.
 ///
-/// So "exact integer arithmetic, refuses on overflow" is a weaker guarantee than it reads: the
-/// engine refuses when an intermediate **partial sum** leaves the range, not when the answer does,
-/// and which partial sums occur depends on evaluation order. No wrong number is ever returned, which
-/// is the part that matters, but some answerable queries are declined.
+/// The aggregate now carries a high word for any entry that overflows, and refuses on the
+/// **answer** rather than on a partial sum. It costs nothing for entries that never overflow, which
+/// is all of them on real data.
 ///
-/// The generated corpus found DuckDB doing the mirror image of this - answering where Burrmill
-/// refuses, and refusing where Burrmill answers - which is how the whole question surfaced.
-///
-/// This test asserts today's behaviour on purpose. Fixing it means accumulating wider than `i128`
-/// so that refusal depends only on the answer, and **this test should then be inverted** rather than
-/// deleted. Roadmap 2.1b carries the decision and its cost.
+/// DuckDB still refuses this case, in both directions - it is the same order dependence, and it is
+/// why `burrmill-bench gen` counts a small number of order-dependent disagreements rather than
+/// failing on them.
 #[test]
-fn a_representable_sum_is_refused_when_a_partial_sum_overflows() {
+fn a_representable_sum_is_returned_even_when_a_partial_sum_overflows() {
     let sink = "0x0000000000000000000000000000000000000000".to_string();
     let k = "0x0000000000000000000000000000000000000001".to_string();
     let rows = vec![
@@ -280,20 +299,49 @@ fn a_representable_sum_is_refused_when_a_partial_sum_overflows() {
         Row { from: sink.clone(), to: k.clone(), value: "1".into() },
         Row { from: k.clone(), to: sink.clone(), value: "1".into() },
     ];
-
-    // The reference refuses too, and for the same reason: it is the arithmetic that is
-    // order-dependent, not this engine's parallelism.
-    assert!(matches!(reference(&rows), Err(BurrmillError::Overflow(_))));
+    let want = vec![(sink.clone(), -i128::MAX), (k.clone(), i128::MAX)];
+    assert_eq!(reference(&rows).unwrap(), want);
 
     for splits in [1usize, 2, 3] {
         let dir = tempfile::tempdir().unwrap();
         write_segments(dir.path(), &rows, splits);
-        match fold(dir.path(), 4) {
-            Err(BurrmillError::Overflow(_)) => {}
-            other => panic!(
-                "splits={splits}: expected today's false refusal, got {other:?}. If this is a \
-                 deliberate fix to accumulate wider than i128, invert this test and say so."
-            ),
-        }
+        assert_eq!(fold(dir.path(), 4).unwrap(), want, "splits={splits}");
     }
+}
+
+/// The boundary itself, hand-computed, in both directions.
+#[test]
+fn the_answer_decides_the_refusal_not_the_partial_sums() {
+    let sink = "0x0000000000000000000000000000000000000000".to_string();
+    let k = "0x0000000000000000000000000000000000000001".to_string();
+    let row = |v: &str| Row { from: sink.clone(), to: k.clone(), value: v.to_string() };
+    let big = (i128::MAX / 2 + 1).to_string();
+
+    // MAX + 1 does not fit, whatever order it is reached in.
+    for rows in [vec![row(&i128::MAX.to_string()), row("1")], vec![row("1"), row(&i128::MAX.to_string())]] {
+        let dir = tempfile::tempdir().unwrap();
+        write_segments(dir.path(), &rows, 2);
+        assert!(matches!(fold(dir.path(), 4), Err(BurrmillError::Overflow(_))), "MAX + 1 must refuse");
+    }
+
+    // Two halves that each fit and together do not.
+    let rows = vec![row(&big), row(&big)];
+    let dir = tempfile::tempdir().unwrap();
+    write_segments(dir.path(), &rows, 2);
+    assert!(matches!(fold(dir.path(), 4), Err(BurrmillError::Overflow(_))));
+
+    // Far past the range and back again. The intermediate leaves i128 twice; the answer is 5.
+    let rows = vec![
+        row(&i128::MAX.to_string()),
+        row(&i128::MAX.to_string()),
+        Row { from: k.clone(), to: sink.clone(), value: i128::MAX.to_string() },
+        Row { from: k.clone(), to: sink.clone(), value: (i128::MAX - 5).to_string() },
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    write_segments(dir.path(), &rows, 4);
+    assert_eq!(
+        fold(dir.path(), 4).unwrap(),
+        vec![(sink.clone(), -5i128), (k.clone(), 5i128)],
+        "the answer is 5 however far the running total wandered"
+    );
 }

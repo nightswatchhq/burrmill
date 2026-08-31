@@ -4,9 +4,15 @@
 refuse-on-overflow, faster than DuckDB on the queries an indexer actually runs. One binary, nothing
 to configure.**
 
-Status: **slice 1** of [RFC-0044](docs/rfc/RFC-0044-burrmill.md). One owned plan shape, one owned
-operator, the allowlist, and a head-to-head harness against both incumbents. Not usable as a general
-query engine and not trying to be.
+Status: **slice 1 of [RFC-0044](docs/rfc/RFC-0044-burrmill.md), gate passed.** One owned plan shape,
+one owned operator, the allowlist, a generated corpus against two oracles, and a head-to-head harness
+against both incumbents. Not usable as a general query engine and not trying to be.
+
+The gate is "≤1.0x DuckDB at exact parity under 256 MB peak RSS", and both legs are met **at eight
+threads per query, with all three engines held to the same budget**: 0.38-0.87x across fourteen
+configurations with parity verified on every one, and 210 MB at 989,690 groups. The parallelism is
+part of the claim rather than a footnote, because the same binary measures 145 MB on one thread and
+340 on thirty-two, and a budget that depends on the host's core count is not a budget.
 
 ## What it is
 
@@ -21,17 +27,20 @@ layout, and honest about everything else.
 
 ## The three claims
 
-**Faster.** The operator's ancestor measured 0.55-0.85x DuckDB across 24 of 24 configurations on
-`net_balances`, where general DataFusion measured 2.53-2.80x *slower* on the identical query. That
-three-to-fivefold swing between renting general execution and owning a specialised one is the whole
-architectural argument. `cargo run -p burrmill-bench --release` re-runs it, parity first.
+**Faster.** 0.38-0.87x DuckDB across fourteen configurations, parity verified on every one, on a
+twelve-column nest-shaped fixture with every engine on the same eight threads. On the same runs
+general DataFusion measures 3.6x DuckDB at ten thousand segments — the many-small-files layout a nest
+actually produces — while beating it at high cardinality. That swing between renting general
+execution and owning a specialised one is the whole architectural argument.
+`cargo run -p burrmill-bench --release` re-runs it, parity first.
 
 **Exact.** Integer overflow returns `BurrmillError::Overflow`, never a wrapped number. Said precisely,
 because a generated corpus made the difference visible: it refuses when an intermediate **partial
-sum** leaves `i128`, not only when the answer does, so a party whose values are `MAX, +1, -1` is
-declined even though the true sum is exactly `MAX`. DuckDB does the same, in both directions - each
-engine refuses cases the other answers. No wrong number is ever returned either way, which is the
-guarantee that matters; "refuses on overflow" is simply a little more eager than it reads. DataFusion's
+sum** leaves `i128`, and the answer decides. A party whose values are `MAX, +1, -1` sums to exactly
+`MAX` and is returned; an entry whose running total wanders outside the range carries a high word
+until the rows are produced. It costs nothing when nothing overflows, which is always. DuckDB still
+refuses that case, in both directions, so the two engines disagree about which queries are
+*answerable* even where neither returns a wrong number. DataFusion's
 integer arithmetic silently wraps - `SELECT 10000000000 * 10000000000` yields `7766279631452241920`
 where Postgres, Trino and Snowflake all raise - and as of August 2026 there is still no core config
 flag to stop it (issues #17539, #14771, #20034, all open). Worse, it is inconsistent by operation:
@@ -62,11 +71,15 @@ Said plainly, because a README that implies otherwise is the thing this project 
   debiting the same signed value, grouped by the party. Everything else is `NotAllowed`.
 - **Cold segments only.** The redb hot tip and the hot/cold seam are the next slice, and the seam is
   the highest-risk invariant in the design.
-- **Two `TRY_CAST` divergences from DuckDB, one fixed and one open.** Surrounding whitespace is now
-  trimmed, as DuckDB does - it was silently dropping the row and returning a short balance. DuckDB
-  also accepts `1e18`, `7.0` and `1_000`, and rounds `7.9` to **8**, where Burrmill returns NULL.
-  Adopting silent rounding into an engine whose first claim is exactness is a decision, not a patch.
-  `cargo run -p burrmill-bench --release -- cast` prints the whole divergence table.
+- **A narrower value domain than DuckDB, deliberately.** Surrounding whitespace is trimmed, as DuckDB
+  does; it was silently dropping the row and returning a short balance. But DuckDB also reads
+  `1e18`, `7.0` and `1_000`, and **rounds `7.9` to 8**, and Burrmill will not guess at any of them: a
+  value that carries digits but is not a canonical integer is **refused, loudly, naming the value**.
+  Diverging out loud costs a query; diverging silently costs someone's answer, and silently agreeing
+  would mean adopting rounding into an engine whose first claim is exactness.
+  `cargo run -p burrmill-bench --release -- cast` prints the divergence table.
+- **Eight threads per query by default.** `Limits::max_threads`. Deliberate: the cores past it buy
+  6% and cost the concurrency story that is most of why a serving path wants this.
 - **No streaming.** A fold's result is materialised; it is one row per party, so this costs little
   today and will be revisited with the async cancellation contract.
 - **No DataFusion fallback.** Deliberately not yet built. Building the fast path first is what makes

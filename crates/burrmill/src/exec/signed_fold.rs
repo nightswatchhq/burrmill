@@ -152,7 +152,7 @@ impl<'a> SignedFoldExec<'a> {
         // There is no merge left to do. The workers wrote into the answer as they went, so this is
         // the output phase and nothing else: each partition's table becomes rows, in parallel,
         // because a partition's keys never meet another's.
-        let mut out = shared.into_rows(self.plan.drop_zero);
+        let mut out = shared.into_rows(self.plan.drop_zero)?;
 
         let groups = out.len();
         if groups as u64 > self.limits.max_rows {
@@ -255,15 +255,34 @@ impl<'a> SignedFoldExec<'a> {
                 // **Trimmed, because DuckDB trims and " 7" is seven.** The generated corpus found
                 // this within four hundred cases: `str::parse` rejects surrounding whitespace where
                 // `TRY_CAST(' 7' AS HUGEINT)` returns 7, so the row was silently skipped and a
-                // balance came back short. A dropped row is a wrong answer that looks like a
-                // balance, which is the one thing this engine must not do.
-                //
-                // Only whitespace is reconciled here. DuckDB also accepts `1e18`, `7.0`, `1_000`
-                // and rounds `7.9` to 8; those are semantic choices rather than obvious bugs, and
-                // adopting silent rounding into an engine whose first claim is exactness needs a
-                // decision rather than a patch. `burrmill-bench cast` prints the full divergence
-                // table and roadmap 2.1a carries the decision.
-                let Ok(d) = value.value(i).trim().parse::<i128>() else {
+                // balance came back short.
+                let text = value.value(i).trim();
+                let Ok(d) = text.parse::<i128>() else {
+                    // **A value that carries a number but is not a canonical integer is refused,
+                    // not skipped** (roadmap 2.1a, decided). DuckDB also accepts `1e18`, `7.0` and
+                    // `1_000`, and rounds `7.9` to **8**. Three choices were available and only one
+                    // of them is safe:
+                    //
+                    // - Match DuckDB exactly. That means adopting silent rounding into an engine
+                    //   whose first claim is exactness, and implementing a numeric grammar by guess
+                    //   at every other edge besides.
+                    // - Keep skipping. A row DuckDB would count and we drop is a short balance that
+                    //   looks entirely plausible, which is the failure this project exists to
+                    //   refuse.
+                    // - Refuse, loudly, and say which value. Diverging from DuckDB out loud costs a
+                    //   query; diverging silently costs someone's answer.
+                    //
+                    // `TRY_CAST`'s NULL still applies to data that is genuinely absent or
+                    // non-numeric - that is what the query asked for. It is text carrying digits
+                    // that this refuses to interpret, because interpreting it is guessing.
+                    if looks_numeric(text) {
+                        return Err(BurrmillError::NotAllowed(format!(
+                            "the value {text:?} carries a number but is not a canonical integer. \
+                             Burrmill will not guess at it: DuckDB would read it (and rounds \
+                             fractions), and silently agreeing or silently differing are both worse \
+                             than refusing. Run `burrmill-bench cast` for the divergence table."
+                        )));
+                    }
                     rows_skipped += 1;
                     continue;
                 };
@@ -397,4 +416,16 @@ fn coalesce(morsels: &[Morsel]) -> Vec<&[Morsel]> {
         out.push(&morsels[start..]);
     }
     out
+}
+
+/// Does this text carry a number that is not a canonical integer?
+///
+/// Deliberately loose, and deliberately erring towards **refusal** rather than towards silence: a
+/// false positive costs a query and says exactly why, a false negative silently drops a row and
+/// shortens a balance. `"1e18"`, `"7.9"` and `"1_000"` are caught; `"not a number"` and `""` are
+/// not, and stay `TRY_CAST` NULLs as the query asked.
+fn looks_numeric(text: &str) -> bool {
+    !text.is_empty()
+        && text.bytes().any(|b| b.is_ascii_digit())
+        && text.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'_' | b'e' | b'E'))
 }

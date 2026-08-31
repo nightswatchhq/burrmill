@@ -31,7 +31,7 @@ use std::hash::Hasher;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use crate::error::Result;
+use crate::error::{BurrmillError, Result};
 use crate::exec::checked::checked_add;
 
 /// Radix partitions. Sixty-four is a compromise: enough that a partition's table stays small and
@@ -45,9 +45,15 @@ struct Entry {
     /// the entry is padded to thirty-two either way.
     hash: u64,
     off: u32,
+    /// Key length, with **bit 31 meaning "this entry has overflowed `i128` at least once"**. Keys
+    /// are addresses; a 2 GB one is not a thing. See [`PartTable::wide`].
     len: u32,
+    /// The low 128 bits of the running sum, which for an entry that has never overflowed *is* the
+    /// running sum.
     sum: i128,
 }
+
+const WIDE: u32 = 1 << 31;
 
 /// Hash, with the high bits deliberately mixed.
 ///
@@ -76,6 +82,15 @@ pub fn partition_of(hash: u64) -> usize {
 pub struct PartTable {
     arena: Vec<u8>,
     table: HashTable<Entry>,
+    /// The high 64 bits of the running sum, for the entries that need one, keyed by arena offset
+    /// because that is the one thing about an entry that never moves.
+    ///
+    /// **Empty for every aggregate anyone will ever run.** A party whose running total leaves the
+    /// `i128` range is not a thing a real nest produces; this exists so that when it does happen the
+    /// refusal depends on the *answer* rather than on the order the rows arrived in. Paying sixteen
+    /// bytes per group to widen every entry would have cost ~28 MB at a million groups against a
+    /// budget already being missed, to carry a number that is zero everywhere.
+    wide: rustc_hash::FxHashMap<u32, i64>,
 }
 
 impl std::fmt::Debug for PartTable {
@@ -101,31 +116,48 @@ impl PartTable {
     /// Approximate live bytes. Used for the memory budget, so it counts what actually grows: the
     /// arena, and the table's entries at SwissTable's load factor.
     pub fn bytes(&self) -> usize {
-        self.arena.capacity() + self.table.capacity() * (std::mem::size_of::<Entry>() + 1)
+        self.arena.capacity()
+            + self.table.capacity() * (std::mem::size_of::<Entry>() + 1)
+            + self.wide.capacity() * std::mem::size_of::<(u32, i64)>()
     }
 
     #[inline]
     pub fn add(&mut self, hash: u64, key: &[u8], v: i128) -> Result<()> {
         // Split the borrow explicitly: the equality closure reads the arena while the table is held
         // mutably, which only type-checks because these are two distinct fields.
-        let Self { arena, table } = self;
+        let Self { arena, table, wide } = self;
+        let klen = key.len() as u32;
         let eq = |e: &Entry| {
             e.hash == hash
-                && e.len as usize == key.len()
+                && (e.len & !WIDE) == klen
                 && &arena[e.off as usize..e.off as usize + key.len()] == key
         };
         if let Some(e) = table.find_mut(hash, eq) {
-            // Checked, because a balance that wraps is a wrong answer that looks like a balance.
-            e.sum = checked_add(e.sum, v, "aggregate")?;
+            if e.len & WIDE == 0 {
+                // The common path, and the only one that ever runs on real data: one checked add.
+                if let Some(s) = e.sum.checked_add(v) {
+                    e.sum = s;
+                    return Ok(());
+                }
+                // First overflow for this key. Widen it rather than refusing, because the running
+                // total leaving the range says nothing about whether the *answer* will.
+                //
+                // **Sign-extended, not zeroed.** The value is `hi * 2^128 + (lo as u128)`, so an
+                // entry whose running sum is negative starts at a high word of -1; starting it at
+                // zero would silently reinterpret -5 as 2^128 - 5. Caught by the generated corpus
+                // within a second of being written, which is the entire argument for having it.
+                e.len |= WIDE;
+                wide.insert(e.off, (e.sum >> 127) as i64);
+            }
+            let hi = wide.get_mut(&e.off).expect("a wide entry always has a high word");
+            *hi = wide_add(hi, &mut e.sum, v)?;
             return Ok(());
         }
         let off = arena.len() as u32;
         arena.extend_from_slice(key);
-        table.insert_unique(hash, Entry { hash, off, len: key.len() as u32, sum: v }, |e| e.hash);
+        table.insert_unique(hash, Entry { hash, off, len: klen, sum: v }, |e| e.hash);
         Ok(())
     }
-
-
 
     /// Consume the table into an index over its own arena, applying `HAVING SUM(d) <> 0`.
     ///
@@ -134,17 +166,66 @@ impl PartTable {
     /// the exact per-key allocation this module's header says it removed, reintroduced at the output
     /// and costing more there than it ever did in the table. The hash table is dropped here, so a
     /// partition's buckets are freed the moment its rows exist.
-    fn into_index(self, drop_zero: bool) -> (Vec<u8>, Vec<(u32, u32, i128)>) {
-        let Self { arena, table } = self;
-        let idx = table
-            .into_iter()
-            .filter(|e| !drop_zero || e.sum != 0)
-            .map(|e| (e.off, e.len, e.sum))
-            .collect();
-        (arena, idx)
+    fn into_index(self, drop_zero: bool) -> Result<PartIndex> {
+        let Self { arena, table, wide } = self;
+        let mut idx = Vec::with_capacity(table.len());
+        for e in table {
+            // **The refusal happens here, and only here.** An entry is refused when its *answer*
+            // will not fit, not when some partial sum did not. `MAX, +1, -1` sums to exactly `MAX`
+            // and is now returned; `MAX, +1` is refused, whatever order the rows arrived in.
+            let sum = if e.len & WIDE == 0 {
+                e.sum
+            } else {
+                let hi = *wide.get(&e.off).expect("a wide entry always has a high word");
+                narrow(hi, e.sum).ok_or_else(|| {
+                    BurrmillError::Overflow(format!(
+                        "the sum for one party does not fit in i128 (high word {hi})"
+                    ))
+                })?
+            };
+            if !drop_zero || sum != 0 {
+                idx.push((e.off, e.len & !WIDE, sum));
+            }
+        }
+        Ok((arena, idx))
     }
 }
 
+
+/// Add `v` into the 192-bit accumulator `(hi, lo)`, where the value is `hi * 2^128 + lo` and `lo`
+/// is the `i128`'s bits read as unsigned.
+///
+/// Textbook multi-limb addition, and the only subtle part is that `v` sign-extends into the high
+/// word: a negative `v` contributes `-1` there before any carry out of the low word.
+#[inline]
+fn wide_add(hi: &mut i64, lo: &mut i128, v: i128) -> Result<i64> {
+    let (new_lo, carry) = (*lo as u128).overflowing_add(v as u128);
+    let ext = (v >> 127) as i64; // -1 for negative, 0 for non-negative
+    let new_hi = hi
+        .checked_add(ext)
+        .and_then(|h| h.checked_add(carry as i64))
+        .ok_or_else(|| {
+            // 2^63 additions past the range. Unreachable in this universe, refused rather than
+            // wrapped anyway, because "unreachable" is how wrong answers get in.
+            BurrmillError::Overflow("the high word of an aggregate overflowed i64".into())
+        })?;
+    *lo = new_lo as i128;
+    Ok(new_hi)
+}
+
+/// The 192-bit value `hi * 2^128 + lo` as an `i128`, or `None` if it does not fit.
+///
+/// It fits in exactly two cases: the value is non-negative and the high word is zero, or it is
+/// negative and the high word is the sign extension of a low word at or past `2^127`.
+#[inline]
+fn narrow(hi: i64, lo: i128) -> Option<i128> {
+    let u = lo as u128;
+    match hi {
+        0 if u <= i128::MAX as u128 => Some(u as i128),
+        -1 if u >= 1u128 << 127 => Some(u as i128),
+        _ => None,
+    }
+}
 
 /// One row of the answer: which partition arena holds its key, where, and the exact sum.
 ///
@@ -176,6 +257,17 @@ struct Row {
 pub struct Rows {
     arenas: Vec<Vec<u8>>,
     idx: Vec<Row>,
+}
+
+impl std::fmt::Debug for Rows {
+    /// Shape, not contents: a debug print of a million-row answer helps nobody, and the arenas are
+    /// bytes rather than anything a person reads.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Rows")
+            .field("rows", &self.idx.len())
+            .field("arena_bytes", &self.arenas.iter().map(|a| a.len()).sum::<usize>())
+            .finish()
+    }
 }
 
 impl Rows {
@@ -232,6 +324,9 @@ impl Rows {
         idx.par_sort_unstable_by(|a, b| Self::bytes_at(&bases, a).cmp(Self::bytes_at(&bases, b)));
     }
 }
+
+/// A partition's keys and its index into them, handed over when the aggregate becomes an answer.
+type PartIndex = (Vec<u8>, Vec<(u32, u32, i128)>);
 
 /// A row waiting to be applied, keyed into its [`Scatter`]'s own arena.
 #[derive(Clone, Copy)]
@@ -375,14 +470,14 @@ impl SharedAgg {
     /// Parallel because a partition's rows never meet another's: the radix split that bounds the
     /// memory also hands the output phase its parallelism for nothing. Each partition's hash table
     /// is freed as its index is built, so the buckets and the rows are never both fully live.
-    pub fn into_rows(self, drop_zero: bool) -> Rows {
+    pub fn into_rows(self, drop_zero: bool) -> Result<Rows> {
         let tables: Vec<PartTable> = self
             .parts
             .into_iter()
             .map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner()))
             .collect();
-        let per_partition: Vec<(Vec<u8>, Vec<(u32, u32, i128)>)> =
-            tables.into_par_iter().map(|t| t.into_index(drop_zero)).collect();
+        let per_partition: Vec<PartIndex> =
+            tables.into_par_iter().map(|t| t.into_index(drop_zero)).collect::<Result<Vec<_>>>()?;
 
         let total_rows: usize = per_partition.iter().map(|(_, idx)| idx.len()).sum();
 
@@ -396,7 +491,7 @@ impl SharedAgg {
             }
             arenas.push(arena);
         }
-        Rows { arenas, idx }
+        Ok(Rows { arenas, idx })
     }
 }
 
@@ -441,7 +536,7 @@ mod tests {
         }
         a.flush(&shared).unwrap();
         b.flush(&shared).unwrap();
-        let rows = collect(&shared.into_rows(true));
+        let rows = collect(&shared.into_rows(true).unwrap());
         assert_eq!(rows.len(), 999, "party zero nets to zero and HAVING drops it");
         for (k, v) in &rows {
             let i = i128::from_str_radix(k.trim_start_matches("0x"), 16).unwrap();
@@ -449,16 +544,52 @@ mod tests {
         }
     }
 
+    /// **The refusal happens on the answer, not on a partial sum** (roadmap 2.1b).
+    ///
+    /// This test used to assert that `flush` itself refused. It does not any more, and that is the
+    /// change rather than a regression: an entry whose running total leaves `i128` is widened, and
+    /// whether the query is refused is decided when the rows are produced. `MAX + 1` still refuses;
+    /// `MAX + 1 - 1` no longer does, because it is representable and the old behaviour depended on
+    /// the order the rows happened to arrive in.
     #[test]
-    fn overflow_across_two_workers_is_refused() {
+    fn a_sum_that_does_not_fit_is_refused_when_the_rows_are_produced() {
         let shared = SharedAgg::default();
         let mut a = Scatter::default();
         let mut b = Scatter::default();
         a.push(b"0xdead", i128::MAX, &shared).unwrap();
         a.flush(&shared).unwrap();
         b.push(b"0xdead", 1, &shared).unwrap();
-        let err = b.flush(&shared).unwrap_err();
+        // The partial sum left the range and was carried, not refused.
+        b.flush(&shared).unwrap();
+        let err = shared.into_rows(false).unwrap_err();
         assert!(matches!(err, crate::BurrmillError::Overflow(_)), "got {err:?}");
+    }
+
+    /// The mirror: a running total that leaves `i128` and comes back is answered exactly.
+    #[test]
+    fn a_partial_sum_may_leave_the_range_and_return() {
+        let shared = SharedAgg::default();
+        let mut a = Scatter::default();
+        a.push(b"0xdead", i128::MAX, &shared).unwrap();
+        a.push(b"0xdead", 1, &shared).unwrap();
+        a.push(b"0xdead", -1, &shared).unwrap();
+        a.flush(&shared).unwrap();
+        let rows = collect(&shared.into_rows(false).unwrap());
+        assert_eq!(rows, vec![("0xdead".to_string(), i128::MAX)]);
+    }
+
+    /// The same, in the negative direction, because sign extension is where the first
+    /// implementation of this was wrong and the corpus caught it inside a second.
+    #[test]
+    fn a_negative_running_total_widens_with_the_right_sign() {
+        let shared = SharedAgg::default();
+        let mut a = Scatter::default();
+        a.push(b"0xdead", i128::MIN + 1, &shared).unwrap();
+        a.push(b"0xdead", -1, &shared).unwrap();
+        a.push(b"0xdead", 1, &shared).unwrap();
+        a.flush(&shared).unwrap();
+        let rows = collect(&shared.into_rows(false).unwrap());
+        assert_eq!(rows, vec![("0xdead".to_string(), i128::MIN + 1)]);
     }
 
     /// **The property the shared aggregate exists to preserve.** Many threads writing into one
@@ -480,7 +611,7 @@ mod tests {
             }
         }
         one.flush(&serial).unwrap();
-        let expected = collect(&serial.into_rows(false));
+        let expected = collect(&serial.into_rows(false).unwrap());
 
         let shared = SharedAgg::default();
         std::thread::scope(|s| {
@@ -496,7 +627,7 @@ mod tests {
                 });
             }
         });
-        let got = collect(&shared.into_rows(false));
+        let got = collect(&shared.into_rows(false).unwrap());
 
         assert_eq!(got.len(), KEYS as usize, "every key must survive the exchange");
         assert_eq!(got, expected, "concurrent and serial aggregation must agree exactly");

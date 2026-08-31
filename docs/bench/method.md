@@ -114,3 +114,18 @@ the small tables - correctly, since that is precisely the figure that was publis
 The first version of this check measured the list path and then gated the glob-path ratio, which is a
 different quantity: the same mistake in miniature as the one it exists to prevent. It was caught the
 first time it ran, which is at least the intended failure mode.
+
+## Every engine gets the same thread budget
+
+Burrmill bounds its own parallelism (`Limits::max_threads`, default 8), because a memory budget that
+depends on the host's core count is not a budget: the same binary measured 145 MB on one thread and
+340 on thirty-two at a million groups.
+
+The moment that bound landed, two configurations went from about 0.5x DuckDB to 1.3x. It looked
+exactly like a regression and it was a harness fault: eight threads were being compared against
+thirty-two and the difference called an engine. The same shape as the 38,429-file glob, three items
+earlier in the same day.
+
+So the harness now sets `SET threads TO n` on DuckDB and `target_partitions` on DataFusion to match,
+and `THREADS=n` moves all three together. **A ratio is a statement about engines only when everything
+else is held equal**, and parallelism is now one of the things to hold rather than one to inherit.

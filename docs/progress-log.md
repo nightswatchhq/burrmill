@@ -4,6 +4,89 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The four open decisions, made — and slice 1's gate passes — 2026-08-31
+
+Chief handed over the four decisions with the instruction to call them for performance and safety.
+They are not independent, and that is what decides them: bounding parallelism is what buys the
+memory to make the refusal order-independent.
+
+### 1.2c — the gate applies at eight threads per query, and the operator enforces it
+
+`Limits::max_threads`, default 8, with the handle owning a pool that size. RFC-0044's concurrency
+argument is about thirty-two *clients*, not thirty-two threads for one of them; #986 measured DuckDB
+going 40.3 to 39.6 qps between one client and thirty-two while p99 went 29.5 ms to 7066 ms, and a
+fold that hands every core to a single query has reinvented that by another route.
+
+The cores past eight are not buying anything either. At 1M groups on a 32-core box: 601 ms at 1
+thread, 223 at 4, **171 at 8**, 156 at 16, 144 at 32. Eight is within 6% of the whole machine and
+leaves twenty-four cores for other queries.
+
+**And it is what makes `mem_pool_bytes` mean something.** The same binary measured 145 MB on one
+thread and 340 on thirty-two. A budget that depends on the host's core count is not a budget.
+
+### 2.1a — refuse, do not guess
+
+Three options and only one is safe. Matching DuckDB means adopting `7.9 → 8` — silent rounding, into
+an engine whose first claim is exactness — and implementing a numeric grammar by guess at every other
+edge. Continuing to skip means a row DuckDB counts and we drop, which is a short balance that looks
+entirely plausible.
+
+So: a value that carries digits but is not a canonical integer is **refused, naming the value**.
+`TRY_CAST`'s NULL still applies to data that is genuinely absent or non-numeric, which is what the
+query asked for; it is text carrying a number that this will not interpret, because interpreting it
+is guessing. Diverging from DuckDB out loud costs a query. Diverging silently costs someone's answer.
+
+### 2.1b — yes, and it turned out to be free
+
+Refusal now depends on the **answer**, not on whether some partial sum left the range. `MAX, +1, -1`
+sums to exactly `MAX` and is returned; `MAX, +1` is refused whatever order it arrives in. A query
+that succeeds on Tuesday and fails on Wednesday with the same data is not something a serving engine
+can offer.
+
+The feared cost was 16 bytes per group — ~28 MB at a million groups against a budget already being
+missed. It costs **nothing**, because the high word lives in a side map keyed by arena offset and an
+entry only acquires one once its running total actually leaves `i128`, which on real data is never.
+`Entry` did not grow. Peak RSS at 1M groups: 210 MB before, 210 MB after.
+
+The first implementation was wrong in an instructive way: promoting an entry to wide set its high
+word to zero rather than sign-extending it, so a negative running sum was silently reinterpreted as
+`2^128 - n`. The generated corpus caught it within a second of the test running. That is the entire
+argument for having built it.
+
+### 2.3a — drafted, not sent
+
+Reporting the DuckDB wrap goes out under Chief's name, so it waits for him.
+`docs/upstream/duckdb-hugeint-parallel-wrap.md` has the reproduction and the version.
+
+### The harness was unfair again, in the same shape as this morning
+
+The moment the thread bound landed, two configurations went from about 0.5x DuckDB to **1.3x**. It
+read exactly like a regression. It was the harness: eight threads compared against thirty-two, the
+difference called an engine — the same fault as the 38,429-file glob, three items earlier the same
+day. The harness now sets `SET threads TO n` on DuckDB and `target_partitions` on DataFusion, and
+`THREADS=n` moves all three together.
+
+That is the fourth time today that the thing being measured was the harness. The pattern is worth
+naming: **every one of them was invisible to the parity guard**, because in every case the engines
+agreed on the answer and disagreed about what question they had been asked.
+
+### The gate, restated
+
+| leg | result |
+|---|---|
+| latency | **0.38-0.87x DuckDB** across 14 configurations, parity verified on all |
+| memory | **210 MB** at 989,690 groups, gate 256, at the default 8-thread budget |
+
+macOS measures 240-246 MB where Linux measures 210, because its allocator returns less. Both pass;
+the difference is worth knowing rather than averaging away.
+
+Also worth recording, since the fixture is finally realistic: DataFusion at an equal thread budget is
+**3.6x DuckDB at ten thousand segments** — the many-small-files layout a nest actually produces — and
+*faster* than DuckDB at a million groups. It is not uniformly the slow one, and saying so is the
+difference between an argument and a slogan.
+
+---
+
 ## Stage 2.3 — the corpus, and the DuckDB bug it found on its first run — 2026-08-31
 
 `crates/burrmill/tests/slt/` holds hand-computed expectations over tables small enough to check on
