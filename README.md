@@ -35,9 +35,17 @@ guarantee that matters; "refuses on overflow" is simply a little more eager than
 integer arithmetic silently wraps - `SELECT 10000000000 * 10000000000` yields `7766279631452241920`
 where Postgres, Trino and Snowflake all raise - and as of August 2026 there is still no core config
 flag to stop it (issues #17539, #14771, #20034, all open). Worse, it is inconsistent by operation:
-`%` errors on `i32::MIN % -1` while `+` wraps on `i32::MIN + -1`. DuckDB is better and errors on
-`HUGEINT` overflow, but is not watertight everywhere. Refusing, everywhere, is a guarantee neither
-of them offers.
+`%` errors on `i32::MIN % -1` while `+` wraps on `i32::MIN + -1`.
+
+DuckDB is better and errors on `HUGEINT` overflow, but it is **not watertight**, and the generated
+corpus found where. Credit one party with `i128::MAX` and then `1`, across two files, with two
+threads, and DuckDB returns **`i128::MIN`** for a sum whose true value is `MAX + 1`: a wrapped
+balance, silently. At one thread, or over a single file, the same query refuses correctly - so the
+check is in the single-threaded path and missing from the partial-aggregate combine, which means it
+only goes wrong once the data is large enough to parallelise. Measured on libduckdb-sys 1.10501.0;
+`cargo run -p burrmill-bench --release -- duckdb-gaps` reproduces it across the grid.
+
+Refusing, everywhere, is a guarantee neither of them offers.
 
 **Closed.** Table names resolve against a positive allowlist of registered providers, and Burrmill
 registers **no file-I/O SQL functions at all** - no `read_parquet`, no `read_csv`, no `COPY TO`, no
