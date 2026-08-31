@@ -51,6 +51,13 @@ pub struct Morsel {
 /// Constructed by `Burrmill::open` from a nest directory; never from a string inside a query.
 #[derive(Debug, Clone)]
 pub struct SealedSegments {
+    /// Where this set came from, when it came from a directory, so it can be re-listed.
+    ///
+    /// **The seam needs this.** COR-1 requires the cold listing to be taken at or after the hot
+    /// snapshot, and a set built once at open time is a listing from whenever that was. Carrying
+    /// the source lets a query refresh it in the right order instead of trusting the caller to
+    /// have opened the handle at the right moment - which is not a thing a caller can even know.
+    source: Option<(PathBuf, Option<String>)>,
     name: String,
     files: Vec<PathBuf>,
 }
@@ -67,7 +74,7 @@ impl SealedSegments {
             .filter(|p| p.extension().is_some_and(|x| x == "parquet"))
             .collect();
         files.sort();
-        Ok(Self { name: name.into(), files })
+        Ok(Self { name: name.into(), files, source: Some((dir.to_path_buf(), None)) })
     }
 
     /// A set over an explicit list of files, in the order given after sorting.
@@ -78,7 +85,9 @@ impl SealedSegments {
     pub fn from_files(name: impl Into<String>, files: impl IntoIterator<Item = PathBuf>) -> Self {
         let mut files: Vec<PathBuf> = files.into_iter().collect();
         files.sort();
-        Self { name: name.into(), files }
+        // No source: an explicit list is exactly what the caller asked for and refreshing it would
+        // be inventing an intent. Such a set is not re-listed for the seam, and `refresh` says so.
+        Self { name: name.into(), files, source: None }
     }
 
     /// A set restricted to the segments whose file name starts with `prefix`.
@@ -89,6 +98,7 @@ impl SealedSegments {
     pub fn with_prefix(&self, name: impl Into<String>, prefix: &str) -> Self {
         Self {
             name: name.into(),
+            source: self.source.as_ref().map(|(d, _)| (d.clone(), Some(prefix.to_string()))),
             files: self
                 .files
                 .iter()
@@ -100,6 +110,21 @@ impl SealedSegments {
                 .cloned()
                 .collect(),
         }
+    }
+
+    /// Re-list this set from the directory it was discovered in.
+    ///
+    /// Cheap - one `read_dir`, no footers - and the seam calls it **after** pinning the hot
+    /// snapshot, because sealing is append-only and a later listing is therefore a superset of what
+    /// the watermark promises. A set built from an explicit file list has nothing to refresh from
+    /// and comes back unchanged.
+    pub fn refresh(&self) -> Result<Self> {
+        let Some((dir, prefix)) = &self.source else { return Ok(self.clone()) };
+        let all = Self::discover(self.name.clone(), dir)?;
+        Ok(match prefix {
+            Some(p) => all.with_prefix(self.name.clone(), p),
+            None => Self { name: self.name.clone(), files: all.files, source: all.source },
+        })
     }
 
     pub fn name(&self) -> &str {

@@ -25,6 +25,7 @@ use crate::error::{BurrmillError, Result};
 use crate::exec::checked::checked_neg;
 use crate::limits::Limits;
 use crate::plan::SignedFold;
+use crate::seam::HotSnapshot;
 use crate::segment::{Morsel, SealedSegments};
 
 /// Cooperative cancellation.
@@ -79,11 +80,27 @@ pub struct SignedFoldExec<'a> {
     segments: &'a SealedSegments,
     limits: Limits,
     cancel: CancelToken,
+    /// The pinned seam, when a hot tip is registered. See [`crate::seam`] for why the watermark and
+    /// the rows arrive together rather than as two reads.
+    seam: Option<&'a Seam<'a>>,
+}
+
+/// The pinned boundary a query reads against.
+pub struct Seam<'a> {
+    pub snapshot: &'a HotSnapshot,
+    /// The column carrying the block number. `block_number` in every nest seen so far, and settable
+    /// rather than assumed, because assuming a layout is what `tests/seal_layout.rs` exists to catch.
+    pub block_col: &'a str,
 }
 
 impl<'a> SignedFoldExec<'a> {
     pub fn new(plan: &'a SignedFold, segments: &'a SealedSegments, limits: Limits) -> Self {
-        Self { plan, segments, limits, cancel: CancelToken::new() }
+        Self { plan, segments, limits, cancel: CancelToken::new(), seam: None }
+    }
+
+    pub fn with_seam(mut self, seam: &'a Seam<'a>) -> Self {
+        self.seam = Some(seam);
+        self
     }
 
     pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
@@ -139,6 +156,40 @@ impl<'a> SignedFoldExec<'a> {
             .collect::<Result<Vec<_>>>()?;
         let scan_ms = scan_started.elapsed().as_millis();
 
+        // **The hot half, folded into the same aggregate.** §3.4 asks for the seam to be scheduled
+        // as two pipelines into a shared sink, which is DuckDB's own `UNION ALL` model and is what
+        // this is: the cold scan above and this both write into `shared`. The hot side is small by
+        // construction - it is only what has not been sealed yet - so it is folded on this thread
+        // rather than given a pipeline of its own.
+        let mut hot_read = 0u64;
+        let mut hot_skipped = 0u64;
+        if let Some(seam) = self.seam {
+            seam.snapshot.check_disjoint()?;
+            let mut scatter = Scatter::default();
+            for r in &seam.snapshot.rows {
+                let Some(v) = r.value.as_deref() else {
+                    hot_skipped += 1;
+                    continue;
+                };
+                let text = v.trim();
+                let Ok(d) = text.parse::<i128>() else {
+                    if looks_numeric(text) {
+                        return Err(BurrmillError::NotAllowed(format!(
+                            "a hot row carries the value {text:?}, which is not a canonical integer"
+                        )));
+                    }
+                    hot_skipped += 1;
+                    continue;
+                };
+                hot_read += 1;
+                let minus_d = checked_neg(d, &r.debit)?;
+                scatter.push(r.credit.as_bytes(), d, &shared)?;
+                scatter.push(r.debit.as_bytes(), minus_d, &shared)?;
+            }
+            scatter.flush(&shared)?;
+            self.check_budget(shared.bytes(), started)?;
+        }
+
         let agg_bytes = shared.bytes();
 
         let merge_started = Instant::now();
@@ -148,6 +199,8 @@ impl<'a> SignedFoldExec<'a> {
             rows_read += read;
             rows_skipped += skipped;
         }
+        rows_read += hot_read;
+        rows_skipped += hot_skipped;
 
         // There is no merge left to do. The workers wrote into the answer as they went, so this is
         // the output phase and nothing else: each partition's table becomes rows, in parallel,
@@ -211,7 +264,15 @@ impl<'a> SignedFoldExec<'a> {
             return Err(BurrmillError::Timeout);
         }
 
-        let file = std::fs::File::open(&m.path)?;
+        let file = std::fs::File::open(&m.path).map_err(|e| {
+            BurrmillError::Seam(format!(
+                "cannot open segment {}: {e}. If a seal is in flight this may be a segment being \
+                 written; Burrmill cannot tell that from a corrupt one, so it refuses rather than \
+                 skipping rows. Segments must be installed atomically - see \
+                 docs/upstream/nuthatch-segment-install-not-atomic.md",
+                m.path.display()
+            ))
+        })?;
         // `new_with_metadata`, not `try_new`: the footer was parsed once when the morsels were cut,
         // and re-parsing it per morsel would put the cost back that parallelising the scan removed.
         // Sound because a sealed segment is content-addressed and immutable - the footer cannot go
@@ -229,7 +290,7 @@ impl<'a> SignedFoldExec<'a> {
         // waste was invisible; a real nest event is twelve to fourteen, two of them 64-character hex
         // hashes, and on `staking_legacy__stake_delegated` this was the difference between 2.2x
         // DuckDB and parity. Measured on the real nest, which is the only place it shows.
-        let builder = match projection_mask(&m.meta, self.plan) {
+        let builder = match projection_mask(&m.meta, self.plan, self.seam.map(|s| s.block_col)) {
             Some(mask) => builder.with_projection(mask),
             None => builder,
         };
@@ -243,8 +304,26 @@ impl<'a> SignedFoldExec<'a> {
             let credit = utf8_column(&batch, &self.plan.credit_col)?;
             let debit = utf8_column(&batch, &self.plan.debit_col)?;
             let value = utf8_column(&batch, &self.plan.value_col)?;
+            // **Cold is filtered to the pinned watermark.** A segment sealed after the snapshot was
+            // taken holds rows above it, and those rows are also in the hot half - counting both is
+            // the double-count arm of COR-1. `blocks` is `None` when no seam is pinned, in which
+            // case every row is cold by definition.
+            let blocks = match self.seam {
+                Some(seam) => Some(block_column(&batch, seam.block_col)?),
+                None => None,
+            };
 
             for i in 0..batch.num_rows() {
+                if let (Some(blocks), Some(seam)) = (&blocks, self.seam) {
+                    // `None` means nothing has been sealed, so nothing in a segment can be cold. A
+                    // segment existing at all in that state is a contradiction; filtering every row
+                    // out is the conservative reading and the hot half still has them.
+                    let keep = seam.snapshot.sealed_through.is_some_and(|w| blocks.value(i) <= w);
+                    if !keep {
+                        rows_skipped += 1;
+                        continue;
+                    }
+                }
                 rows_read += 1;
                 // TRY_CAST semantics: unparseable becomes NULL, and SUM ignores NULLs. Skip, never
                 // substitute zero - a zero is a different answer that happens to look plausible.
@@ -376,6 +455,7 @@ pub fn to_record_batch(rows: &Rows, plan: &SignedFold) -> Result<RecordBatch> {
 fn projection_mask(
     meta: &parquet::arrow::arrow_reader::ArrowReaderMetadata,
     plan: &SignedFold,
+    block_col: Option<&str>,
 ) -> Option<ProjectionMask> {
     let descr = meta.metadata().file_metadata().schema_descr();
     let root = descr.root_schema();
@@ -385,9 +465,14 @@ fn projection_mask(
         return None;
     }
     let index_of = |name: &str| root.get_fields().iter().position(|f| f.name() == name);
-    let mut idx = Vec::with_capacity(3);
+    let mut idx = Vec::with_capacity(4);
     for name in [&plan.credit_col, &plan.debit_col, &plan.value_col] {
         idx.push(index_of(name)?);
+    }
+    // The seam needs the block column to filter cold rows to the pinned watermark, so it is part of
+    // the projection exactly when there is a seam and not otherwise.
+    if let Some(b) = block_col {
+        idx.push(index_of(b)?);
     }
     idx.sort_unstable();
     idx.dedup();
@@ -428,4 +513,22 @@ fn looks_numeric(text: &str) -> bool {
     !text.is_empty()
         && text.bytes().any(|b| b.is_ascii_digit())
         && text.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'_' | b'e' | b'E'))
+}
+
+/// The block column as `u64`, whatever width the writer chose.
+///
+/// Cast rather than assumed, for the same reason [`utf8_column`] casts: nuthatch seals `UInt64`
+/// today and a future one might not, and a seam that silently misreads a block number would produce
+/// a wrong balance rather than an error.
+fn block_column(batch: &RecordBatch, name: &str) -> Result<arrow::array::UInt64Array> {
+    let col = batch
+        .column_by_name(name)
+        .ok_or_else(|| BurrmillError::Seam(format!("the segment has no `{name}` column, so the \
+             hot/cold boundary cannot be applied to it")))?;
+    let cast = arrow::compute::cast(col, &DataType::UInt64)?;
+    Ok(cast
+        .as_any()
+        .downcast_ref::<arrow::array::UInt64Array>()
+        .ok_or_else(|| BurrmillError::Seam(format!("`{name}` will not cast to UInt64")))?
+        .clone())
 }

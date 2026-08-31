@@ -4,6 +4,88 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Stage 3 — the seam, and the three bugs COR-1 found — 2026-08-31
+
+The highest-risk invariant in the design, M/Critical in the risks table. It holds, and getting there
+cost three real bugs — two of them mine, one nuthatch's.
+
+### The RFC's summary of the seam was not what the code does
+
+§3.4 describes "a redb hot tip ∪ sealed cold Parquet, modelled as a disjoint `UNION ALL` over a
+single monotonic boundary". Reading nuthatch's `store.rs` and `seal.rs` instead of the precis:
+
+- The redb store is `entities` / `meta` / `blocks` / `outbox`, keyed strings holding JSON. Its own
+  header says it is "the tip layer for **entity point-reads**".
+- Rows leave hot when their block range is final. All tables seal together per range, so
+  **`sealed_through` is one global watermark**, not per-table.
+- `prune_and_set_meta` advances the watermark and prunes hot **in one transaction**.
+- Cold is append-only and never sees a reorg; reorgs only touch hot.
+
+That last pair is the whole invariant, and it settles a question Chief raised in passing: **the
+choice of hot store is not load-bearing.** COR-1 rests on the store offering snapshot isolation,
+which redb does and Turso would too. RFC-0044 §9 already lists "No Turso/redb replacement" as a
+non-goal, and the mechanism agrees with the non-goal.
+
+### The ordering, which is the whole thing
+
+Pin `S`. Cold is `block <= S`, hot is `block > S`, and both must come from a view where those are
+true at the same instant. The dangerous order is: read the watermark, then read hot — a seal landing
+in between moves a range into a segment nobody listed and out of the hot rows that were read. The
+range is in **neither half**, and a fold that drops rows returns a short balance, which looks exactly
+like a balance.
+
+So `HotTip::snapshot` hands back the watermark and the rows **together**. A two-call interface is the
+bug's natural shape, and the trait is built so it cannot be written rather than so it can be
+documented.
+
+### Bug one: the ordering constraint spanned the catalog, and the API let a caller break it
+
+`query()` took the hot snapshot but used the catalog the caller had already built — so the cold
+listing was from whenever the handle was opened. COR-1 caught it on run 0.
+
+A caller cannot be expected to open its handle at the right instant; it has no way to know when that
+is. `SealedSegments` now remembers where it was discovered and the seam re-lists it **after** pinning
+the snapshot. Sealing is append-only, so a later listing is a superset of what the watermark
+promises.
+
+### Bug two: `sealed_through: u64` had a sentinel that could not mean both things
+
+Zero has to mean "nothing is sealed" and "block zero is sealed", and it cannot. The test found it on
+a genesis-block row within five runs. It is `Option<u64>` now — a sentinel in a boundary is exactly
+where seam bugs live, so the ambiguity is removed rather than special-cased.
+
+### Bug three, and it is nuthatch's: segments are installed non-atomically
+
+`seal.rs:176` is `std::fs::write(seg_dir.join(&file), &bytes)`. That creates the file and then writes
+it, so a reader globbing `segments/` sees a zero-length Parquet. The test reproduced it faithfully
+and failed with *"Parquet file too small. Size is 0 but need 8"*. The manifest ninety lines further
+down the same file **is** installed tmp-then-rename, with a comment explaining precisely why.
+
+Burrmill cannot work around this. Given a segment it cannot parse it can skip it — correct if the
+file was mid-write, and a silently short balance if it was corrupt — or refuse, which is correct for
+corruption and fails every query issued during a seal. It cannot tell them apart, so it refuses and
+says so, naming the file and pointing at the write. The fix belongs at the writer, where the
+distinction is free. Drafted at `docs/upstream/nuthatch-segment-install-not-atomic.md`, not sent.
+
+### The test
+
+A conserved quantity: every row credits one party and debits another by the same amount, so the
+per-party answer is fixed by the data and does not depend on where the boundary sits. Both failure
+arms show up in that one number — a double-count inflates two balances, a drop deflates two — and
+**neither would raise an error on its own.**
+
+**167 to 250 folds per run, every one of them overlapping an active sealer**, stable across four
+runs. The test counts the overlap and fails if it is small, because a COR-1 test that folds a settled
+nest passes just as happily with the invariant broken.
+
+### What is deliberately not built
+
+**No redb dependency.** The hot rows live there as JSON entities in a schema that is nuthatch's
+business, and 1.4 is the standing lesson about guessing at nuthatch's layout. What is owned here is
+the invariant; a redb-backed `HotTip` is a thin adapter and belongs where that encoding is known.
+
+---
+
 ## The four open decisions, made — and slice 1's gate passes — 2026-08-31
 
 Chief handed over the four decisions with the instruction to call them for performance and safety.

@@ -32,7 +32,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use crate::error::{BurrmillError, Result};
-use crate::exec::checked::checked_add;
 
 /// Radix partitions. Sixty-four is a compromise: enough that a partition's table stays small and
 /// the merge has more units than the machine has cores, few enough that an arena per partition per

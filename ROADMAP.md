@@ -67,16 +67,18 @@ Owning execution means owning the bugs, and nineteen hand-written refusals are n
 
 ---
 
-## Stage 3 — the seam (RFC-0044 §3.4, slice 2)
+## Stage 3 — the seam (RFC-0044 §3.4, slice 2) · **COR-1 HELD**
 
 The highest-risk invariant in the design, and the only place where owning execution and getting the
 semantics right are the same job.
 
 | # | Work | Done when |
 |---|---|---|
-| 3.1 | redb hot-tip provider with a seam parameter | Reads the tip at a pinned boundary |
-| 3.2 | Seam as two scheduled pipelines into one sink | The `UNION ALL` model DuckDB uses, because our seam *is* a `UNION ALL` |
-| 3.3 | COR-1 property tests under concurrent seal | No row is double-counted or dropped while a segment seals underneath a running query |
+| ~~3.1~~ | ~~redb hot-tip provider~~ **· `HotTip` trait + `MemoryTip`, redb adapter deferred** | **DONE as the abstraction.** The tip's rows are JSON entities in a schema that is nuthatch's business, and `tests/seal_layout.rs` exists because assuming nuthatch's layout is how the reading breaks silently. `HotTip::snapshot` returns the watermark and the rows **together**, so the two-read bug cannot be written. A redb adapter is thin and belongs where that encoding is known |
+| ~~3.2~~ | ~~Seam as two pipelines into one sink~~ | **DONE.** The cold scan and the hot rows both write into one `SharedAgg`, which is the `UNION ALL` model §2 asks for. Cold is filtered to the pinned watermark using the block column, in the projection only when a seam is pinned |
+| ~~3.3~~ | ~~COR-1 property tests under concurrent seal~~ | **DONE.** 167-250 folds per run, **every one of them overlapping an active sealer**, asserting an answer the data fixes independently of where the boundary sits. It found three real bugs: the catalog was listed before the snapshot, `sealed_through: u64` could not distinguish "nothing sealed" from "block 0 sealed", and nuthatch installs segments non-atomically |
+| 3.4 | A redb-backed `HotTip` | Needs nuthatch's hot entity encoding pinned down. The seam invariant is owned and tested; this is an adapter |
+| 3.5 | **Nuthatch installs segments non-atomically** · drafted at `docs/upstream/nuthatch-segment-install-not-atomic.md`, not sent | `seal.rs:176` is a bare `std::fs::write`, so a reader globbing `segments/` can see a zero-length file. Its manifest right beside it is written tmp-then-rename with a comment explaining why. Outward-facing, so Chief's call |
 
 **Stop condition:** COR-1 is a correctness invariant, not a performance target. A seam that is fast
 and occasionally double-counts is worthless.

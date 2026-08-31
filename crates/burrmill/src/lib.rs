@@ -49,6 +49,7 @@ pub mod error;
 pub mod exec;
 pub mod limits;
 pub mod plan;
+pub mod seam;
 pub mod segment;
 
 pub use error::{BurrmillError, Result};
@@ -56,6 +57,7 @@ pub use exec::agg::Rows;
 pub use exec::{CancelToken, FoldMetrics};
 pub use limits::Limits;
 pub use plan::{Plan, SignedFold};
+pub use seam::{HotRow, HotSnapshot, HotTip, MemoryTip};
 pub use segment::{Catalog, SealedSegments};
 
 use std::path::Path;
@@ -67,6 +69,7 @@ use arrow::record_batch::RecordBatch;
 /// Not a stream yet, and the docs say so rather than implying otherwise. Streaming and the async
 /// cancellation contract belong to the concurrency slice; today a fold's result is a materialised,
 /// canonically ordered table, which is what the folds produce anyway - one row per party.
+#[derive(Debug)]
 pub struct Answer {
     rows: Rows,
     plan: Plan,
@@ -109,6 +112,11 @@ impl Answer {
 pub struct Burrmill {
     catalog: Catalog,
     pool: std::sync::Arc<rayon::ThreadPool>,
+    /// The unsealed tip, when there is one. `None` means every row is cold, which is the whole of
+    /// slice 1 and remains the default.
+    hot: Option<std::sync::Arc<dyn seam::HotTip>>,
+    /// The column carrying the block number, used only to apply the seam boundary to cold rows.
+    block_col: std::sync::Arc<str>,
 }
 
 impl std::fmt::Debug for Burrmill {
@@ -117,6 +125,7 @@ impl std::fmt::Debug for Burrmill {
         f.debug_struct("Burrmill")
             .field("catalog", &self.catalog)
             .field("threads", &self.pool.current_num_threads())
+            .field("hot_tip", &self.hot.is_some())
             .finish()
     }
 }
@@ -148,14 +157,19 @@ impl Burrmill {
     /// to build and cheap to share, and a per-query pool would put four hundred microseconds of
     /// thread spawning inside a fifteen-millisecond query.
     pub fn with_threads(catalog: Catalog, threads: usize) -> Result<Self> {
-        Ok(Self { catalog, pool: build_pool(threads)? })
+        Ok(Self { catalog, pool: build_pool(threads)?, hot: None, block_col: "block_number".into() })
     }
 
     /// Register every `*.parquet` under `dir` as one table.
     pub fn open_segments(name: &str, dir: &Path) -> Result<Self> {
         let mut catalog = Catalog::new();
         catalog.register(SealedSegments::discover(name, dir)?);
-        Ok(Self { catalog, pool: build_pool(Limits::default().max_threads)? })
+        Ok(Self {
+            catalog,
+            pool: build_pool(Limits::default().max_threads)?,
+            hot: None,
+            block_col: "block_number".into(),
+        })
     }
 
     /// Register the segments of a nest table whose files share a `<contract>__<event>-` prefix.
@@ -190,7 +204,23 @@ impl Burrmill {
         }
         let mut catalog = Catalog::new();
         catalog.register(table);
-        Ok(Self { catalog, pool: build_pool(Limits::default().max_threads)? })
+        Ok(Self {
+            catalog,
+            pool: build_pool(Limits::default().max_threads)?,
+            hot: None,
+            block_col: "block_number".into(),
+        })
+    }
+
+    /// Attach an unsealed tip, making every query a hot∪cold seam (RFC-0044 §3.4).
+    ///
+    /// The block column is named rather than assumed: it is `block_number` in every nest seen so
+    /// far, and `tests/seal_layout.rs` exists because assuming a layout is how the reading breaks
+    /// silently.
+    pub fn with_hot_tip(mut self, hot: std::sync::Arc<dyn seam::HotTip>, block_col: &str) -> Self {
+        self.hot = Some(hot);
+        self.block_col = block_col.into();
+        self
     }
 
     pub fn catalog(&self) -> &Catalog {
@@ -210,12 +240,42 @@ impl Burrmill {
     ) -> Result<Answer> {
         let plan = plan::plan(sql)?;
         let Plan::SignedFold(fold) = &plan;
-        let segments = self.catalog.resolve(&fold.table)?;
+
+        // **The snapshot is taken before the segments are listed, and that order is the invariant.**
+        // Sealing is append-only, so a listing taken afterwards is a superset of what the watermark
+        // promises. Taking it the other way round lets a seal land in between, and the range it
+        // moved is then in neither half - dropped silently, which in a balance query means a number
+        // that is simply too small. See [`crate::seam`].
+        let snapshot = match &self.hot {
+            Some(hot) => Some(hot.snapshot(&fold.table)?),
+            None => None,
+        };
+        // **Listed after the snapshot, and this is the load-bearing line.** The first version of
+        // this took the catalog as the caller had built it, which meant the listing was from
+        // whenever the handle was opened - so a range sealed in between was in neither half and the
+        // COR-1 test caught it on run 0. A caller cannot be expected to open its handle at the
+        // right instant; the ordering has to live here.
+        let resolved;
+        let segments = match &snapshot {
+            Some(_) => {
+                resolved = self.catalog.resolve(&fold.table)?.refresh()?;
+                &resolved
+            }
+            None => self.catalog.resolve(&fold.table)?,
+        };
+        let seam = snapshot
+            .as_ref()
+            .map(|s| exec::signed_fold::Seam { snapshot: s, block_col: &self.block_col });
+
         // **Inside the bounded pool.** Peak RSS at a million groups is 147 MB on one thread and 349
         // on thirty-two, so an unbounded fold makes `mem_pool_bytes` a statement about the machine
         // rather than about the query. Nested `install` on the same pool is free.
         let (rows, metrics) = self.pool.install(|| {
-            exec::SignedFoldExec::new(fold, segments, limits).with_cancel(cancel).run()
+            let mut exec = exec::SignedFoldExec::new(fold, segments, limits).with_cancel(cancel);
+            if let Some(seam) = seam.as_ref() {
+                exec = exec.with_seam(seam);
+            }
+            exec.run()
         })?;
         Ok(Answer { rows, plan: plan.clone(), metrics })
     }
