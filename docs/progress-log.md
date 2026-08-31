@@ -4,6 +4,51 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 4.1d — every fold in the workload now plans and runs — 2026-08-31
+
+**Fold sub-plans: 8 of 8.** The last one carries two aggregates over a composite key, which the real
+delegation view writes to keep tokens and shares together.
+
+Unlike the composite key, this one genuinely changes the aggregate, so the constraint was that a
+single-`SUM` fold must not pay for it. Aggregates past the first live in a side map keyed by
+`(arena offset, index)` — the same shape as the `wide` overflow map beside it — so `Entry` keeps its
+one inline `i128` and the hot loop is untouched. Widening `Entry` to carry m sums would have put
+sixteen bytes per group on every query in order to serve one of them.
+
+The canonical sort has to carry the extras: they are addressed by row position, so sorting the index
+alone would leave every row past the first sum pointing at somebody else's number — a wrong balance
+with no error at all. Sorting a permutation and applying it is what that costs, and only the
+multi-`SUM` case pays.
+
+`HAVING` is refused when there is more than one `SUM`, because "drop the rows that net out" has to
+say *which* sum, and discarding a row whose other sum is non-zero would throw away a real answer.
+
+### It was not free twice, and the benchmark said so both times
+
+**A one-element loop is not the same as no loop.** Putting every arm through `for (j, vi) in vis` with
+a bounds-checked `b.values[j]` per row cost **15%** — 100 ms to 116. The one-sum, one-column arm now
+has its own list, built once per batch.
+
+**`Pending` grew from 32 bytes to 48.** Adding a bare `u16` for the aggregate index next to an `i128`
+costs sixteen bytes to alignment, and every worker's scatter buffer with it. It is packed into the
+spare high bits of the length instead: keys are addresses, and sixteen bits of length is 65,535 bytes
+of one.
+
+After both: 199 MB and 178 ms on the canonical box against 208 MB and 177 ms before — inside the
+previous spread, parity verified, both corpora green.
+
+That is three times in this stage that new machinery was not free until it was measured. The rule is
+easy to state and apparently hard to obey: **a feature nobody used still has to cost nothing.**
+
+### Where the coverage ratio actually stands
+
+Every fold-shaped sub-plan in a 65-statement real workload now plans and executes. **Statement-level
+coverage is still 0 of 65**, because all eight sit inside a `WITH` binding or a join, and that is the
+honest number to publish beside the other one. Owning the fold is the point — it is the heavy part —
+but §4.6's published ratio does not move until CTEs and joins are admitted, which is 4.1f.
+
+---
+
 ## 4.1c — composite keys, and a decision about what *not* to build — 2026-08-31
 
 Fold sub-plans **6 of 8 to 7 of 8**. The two remaining folds looked like one job and are two, which is

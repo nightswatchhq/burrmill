@@ -389,7 +389,7 @@ fn a_three_table_fold_gives_the_same_answer_as_the_reference() {
     let plan = burrmill::plan::plan(sql).expect("the n-table fold must plan");
     let burrmill::Plan::SignedFold(f) = &plan;
     assert_eq!(f.branches.len(), 3);
-    assert!(f.branches.iter().all(|b| b.strict_cast), "written with CAST, not TRY_CAST");
+    assert!(f.branches.iter().all(|b| b.values[0].strict_cast), "written with CAST, not TRY_CAST");
     assert!(!f.drop_zero, "no HAVING, so a party netting to zero is still a row");
 
     let a = db.query(sql, Limits::default()).expect("and must execute");
@@ -599,4 +599,98 @@ fn a_composite_key_with_a_literal_tag_keeps_two_namespaces_apart() {
     let b = db.query(&untagged, Limits::default()).unwrap();
     assert_eq!(b.rows().len(), 1, "without the tag, 100 and 5 become one position of 105");
     assert_eq!(b.rows().sum(0), 105);
+}
+
+/// **Two aggregates in one fold, executed** (roadmap 4.1d).
+///
+/// The real delegation view carries tokens and shares together:
+/// `SELECT delegator, sp, SUM(tok), SUM(sh) ... GROUP BY 1, 2`. Folding them separately would mean
+/// two scans of the same four tables for data one scan already has, and — worse — two answers a
+/// caller has to join back up by hand, which is where a mismatched pair of numbers comes from.
+#[test]
+fn two_aggregates_over_a_composite_key_are_summed_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let mk = |name: &str, rows: &[(&str, &str, u64, u64)]| {
+        let sub = dir.path().join(name);
+        std::fs::create_dir_all(&sub).unwrap();
+        let f = |n: &str| arrow::datatypes::Field::new(n, arrow::datatypes::DataType::Utf8, false);
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            f("delegator"),
+            f("indexer"),
+            f("tokens"),
+            f("shares"),
+        ]));
+        let col = |v: Vec<String>| {
+            std::sync::Arc::new(arrow::array::StringArray::from(v))
+                as std::sync::Arc<dyn arrow::array::Array>
+        };
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                col(rows.iter().map(|(d, _, _, _)| d.to_string()).collect()),
+                col(rows.iter().map(|(_, i, _, _)| i.to_string()).collect()),
+                col(rows.iter().map(|(_, _, t, _)| t.to_string()).collect()),
+                col(rows.iter().map(|(_, _, _, s)| s.to_string()).collect()),
+            ],
+        )
+        .unwrap();
+        let file = std::fs::File::create(sub.join("seg.parquet")).unwrap();
+        let mut w = parquet::arrow::ArrowWriter::try_new(file, schema, None).unwrap();
+        w.write(&batch).unwrap();
+        w.close().unwrap();
+        burrmill::SealedSegments::discover(name, &sub).unwrap()
+    };
+    let mut catalog = burrmill::Catalog::new();
+    catalog.register(mk("delegated", &[("0xd1", "0xi1", 100, 7), ("0xd2", "0xi1", 40, 3)]));
+    catalog.register(mk("undelegated", &[("0xd1", "0xi1", 30, 2)]));
+    let db = burrmill::Burrmill::with_threads(catalog, 4).unwrap();
+
+    let sql = "SELECT delegator, sp, SUM(tok) AS net_tokens, SUM(sh) AS net_shares FROM (
+                 SELECT delegator, indexer AS sp, CAST(tokens AS HUGEINT) AS tok,
+                        CAST(shares AS HUGEINT) AS sh FROM delegated
+                 UNION ALL
+                 SELECT delegator, indexer, -CAST(tokens AS HUGEINT), -CAST(shares AS HUGEINT)
+                 FROM undelegated
+               ) GROUP BY 1, 2";
+    let plan = burrmill::plan::plan(sql).expect("two aggregates must plan");
+    let burrmill::Plan::SignedFold(f) = &plan;
+    assert_eq!(f.sum_aliases, vec!["net_tokens".to_string(), "net_shares".to_string()]);
+    assert_eq!(f.branches[0].values.len(), 2);
+
+    let a = db.query(sql, Limits::default()).unwrap();
+    let rows = a.rows();
+    assert_eq!(rows.sum_arity(), 2);
+    assert_eq!(rows.key_arity(), 2);
+    let mut got: Vec<(Vec<String>, i128, i128)> = (0..rows.len())
+        .map(|i| {
+            (rows.key_parts(i).map(|s| s.to_string()).collect(), rows.sum_at(i, 0), rows.sum_at(i, 1))
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (vec!["0xd1".to_string(), "0xi1".to_string()], 70i128, 5i128),
+            (vec!["0xd2".to_string(), "0xi1".to_string()], 40i128, 3i128),
+        ],
+        "tokens and shares are summed independently over the same key"
+    );
+}
+
+/// `HAVING` with more than one `SUM` is refused rather than guessed at: which sum decides whether a
+/// row survives is a question the query has not answered, and dropping a row whose *other* sum is
+/// non-zero would discard a real answer.
+#[test]
+fn having_is_refused_when_there_is_more_than_one_sum() {
+    let sql = "SELECT k, SUM(a) AS na, SUM(b) AS nb FROM (
+                 SELECT k, TRY_CAST(x AS HUGEINT) AS a, TRY_CAST(y AS HUGEINT) AS b FROM t
+                 UNION ALL
+                 SELECT k, -TRY_CAST(x AS HUGEINT), -TRY_CAST(y AS HUGEINT) FROM u
+               ) GROUP BY k HAVING SUM(a) <> 0";
+    match burrmill::plan::plan(sql) {
+        Err(BurrmillError::NotAllowed(m)) => {
+            assert!(m.contains("more than one SUM"), "{m}")
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
 }

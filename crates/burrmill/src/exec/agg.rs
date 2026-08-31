@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use crate::error::{BurrmillError, Result};
+use crate::exec::checked::checked_add;
 
 /// Radix partitions. Sixty-four is a compromise: enough that a partition's table stays small and
 /// the merge has more units than the machine has cores, few enough that an arena per partition per
@@ -81,6 +82,14 @@ pub fn partition_of(hash: u64) -> usize {
 pub struct PartTable {
     arena: Vec<u8>,
     table: HashTable<Entry>,
+    /// Aggregates past the first, keyed by `(arena offset, aggregate index)`.
+    ///
+    /// **Empty for every query the gate measures**, and that is the design. A fold with one `SUM` -
+    /// which is seven of the eight folds in a real workload - never touches this, so `Entry` keeps
+    /// its single inline `i128` and the hot loop is exactly what it was. A second `SUM` costs a hash
+    /// lookup per row on that aggregate only. Widening `Entry` to carry m sums inline would have put
+    /// sixteen bytes per group on every query to serve one of them.
+    extra: rustc_hash::FxHashMap<(u32, u16), i128>,
     /// The high 64 bits of the running sum, for the entries that need one, keyed by arena offset
     /// because that is the one thing about an entry that never moves.
     ///
@@ -118,13 +127,14 @@ impl PartTable {
         self.arena.capacity()
             + self.table.capacity() * (std::mem::size_of::<Entry>() + 1)
             + self.wide.capacity() * std::mem::size_of::<(u32, i64)>()
+            + self.extra.capacity() * std::mem::size_of::<((u32, u16), i128)>()
     }
 
     #[inline]
-    pub fn add(&mut self, hash: u64, key: &[u8], v: i128) -> Result<()> {
+    pub fn add(&mut self, hash: u64, key: &[u8], agg: u16, v: i128) -> Result<()> {
         // Split the borrow explicitly: the equality closure reads the arena while the table is held
         // mutably, which only type-checks because these are two distinct fields.
-        let Self { arena, table, wide } = self;
+        let Self { arena, table, wide, extra } = self;
         let klen = key.len() as u32;
         let eq = |e: &Entry| {
             e.hash == hash
@@ -132,6 +142,11 @@ impl PartTable {
                 && &arena[e.off as usize..e.off as usize + key.len()] == key
         };
         if let Some(e) = table.find_mut(hash, eq) {
+            if agg != 0 {
+                let slot = extra.entry((e.off, agg)).or_insert(0);
+                *slot = checked_add(*slot, v, "aggregate")?;
+                return Ok(());
+            }
             if e.len & WIDE == 0 {
                 // The common path, and the only one that ever runs on real data: one checked add.
                 if let Some(s) = e.sum.checked_add(v) {
@@ -154,7 +169,13 @@ impl PartTable {
         }
         let off = arena.len() as u32;
         arena.extend_from_slice(key);
-        table.insert_unique(hash, Entry { hash, off, len: klen, sum: v }, |e| e.hash);
+        // A first sighting via a non-zero aggregate still needs the entry, with a zero in the
+        // inline slot: the row exists, it simply has nothing in aggregate zero yet.
+        let inline = if agg == 0 { v } else { 0 };
+        table.insert_unique(hash, Entry { hash, off, len: klen, sum: inline }, |e| e.hash);
+        if agg != 0 {
+            extra.insert((off, agg), v);
+        }
         Ok(())
     }
 
@@ -165,8 +186,8 @@ impl PartTable {
     /// the exact per-key allocation this module's header says it removed, reintroduced at the output
     /// and costing more there than it ever did in the table. The hash table is dropped here, so a
     /// partition's buckets are freed the moment its rows exist.
-    fn into_index(self, drop_zero: bool) -> Result<PartIndex> {
-        let Self { arena, table, wide } = self;
+    fn into_index(self, drop_zero: bool, sum_arity: usize) -> Result<PartIndex> {
+        let Self { arena, table, wide, extra } = self;
         let mut idx = Vec::with_capacity(table.len());
         for e in table {
             // **The refusal happens here, and only here.** An entry is refused when its *answer*
@@ -183,7 +204,12 @@ impl PartTable {
                 })?
             };
             if !drop_zero || sum != 0 {
-                idx.push((e.off, e.len & !WIDE, sum));
+                let mut all = Vec::with_capacity(sum_arity);
+                all.push(sum);
+                for a in 1..sum_arity {
+                    all.push(extra.get(&(e.off, a as u16)).copied().unwrap_or(0));
+                }
+                idx.push((e.off, e.len & !WIDE, all));
             }
         }
         Ok((arena, idx))
@@ -256,6 +282,10 @@ struct Row {
 pub struct Rows {
     arenas: Vec<Vec<u8>>,
     idx: Vec<Row>,
+    /// Aggregates past the first, stride `sum_arity - 1`. Empty for a single-`SUM` fold.
+    extra_sums: Vec<i128>,
+    /// How many `SUM` columns each row carries.
+    sum_arity: usize,
     /// How many group-key columns each key carries.
     ///
     /// One is the overwhelming case and its bytes are the key verbatim, so nothing about it changed.
@@ -334,9 +364,23 @@ impl Rows {
         })
     }
 
+    /// The first summed column.
     #[inline]
     pub fn sum(&self, i: usize) -> i128 {
         self.idx[i].sum
+    }
+
+    pub fn sum_arity(&self) -> usize {
+        self.sum_arity
+    }
+
+    /// Summed column `j` of row `i`.
+    #[inline]
+    pub fn sum_at(&self, i: usize, j: usize) -> i128 {
+        if j == 0 {
+            return self.idx[i].sum;
+        }
+        self.extra_sums[i * (self.sum_arity - 1) + (j - 1)]
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, i128)> + '_ {
@@ -348,6 +392,7 @@ impl Rows {
     pub fn bytes(&self) -> usize {
         self.arenas.iter().map(|a| a.capacity()).sum::<usize>()
             + self.idx.capacity() * std::mem::size_of::<Row>()
+            + self.extra_sums.capacity() * std::mem::size_of::<i128>()
     }
 
     /// **Canonical ordering, byte-wise ascending on the key** (RFC-0044 §3.3).
@@ -360,6 +405,31 @@ impl Rows {
     /// `par_sort_unstable_by` rather than the stable sort on purpose: it is an in-place parallel
     /// quicksort and allocates no scratch, and the keys are distinct so stability decides nothing.
     pub fn sort_canonical(&mut self) {
+        // **With extra aggregates the sort has to carry them.** They are addressed by row position,
+        // so sorting `idx` alone would leave every row past the first sum pointing at somebody
+        // else's number - a wrong balance with no error, which is the failure this engine exists to
+        // refuse. Sorting a permutation and applying it is the price of keeping `Row` at 32 bytes
+        // for the single-`SUM` case, and that case does not pay it.
+        if self.sum_arity > 1 {
+            let stride = self.sum_arity - 1;
+            let bases: Vec<&[u8]> = self.arenas.iter().map(|a| a.as_slice()).collect();
+            let mut order: Vec<u32> = (0..self.idx.len() as u32).collect();
+            order.par_sort_unstable_by(|a, b| {
+                Self::bytes_at(&bases, &self.idx[*a as usize])
+                    .cmp(Self::bytes_at(&bases, &self.idx[*b as usize]))
+            });
+            drop(bases);
+            let old_idx = std::mem::take(&mut self.idx);
+            let old_extra = std::mem::take(&mut self.extra_sums);
+            self.idx.reserve(old_idx.len());
+            self.extra_sums.reserve(old_extra.len());
+            for o in &order {
+                self.idx.push(old_idx[*o as usize]);
+                let base = *o as usize * stride;
+                self.extra_sums.extend_from_slice(&old_extra[base..base + stride]);
+            }
+            return;
+        }
         let Self { arenas, idx, .. } = self;
         let bases: Vec<&[u8]> = arenas.iter().map(|a| a.as_slice()).collect();
         idx.par_sort_unstable_by(|a, b| Self::bytes_at(&bases, a).cmp(Self::bytes_at(&bases, b)));
@@ -367,16 +437,24 @@ impl Rows {
 }
 
 /// A partition's keys and its index into them, handed over when the aggregate becomes an answer.
-type PartIndex = (Vec<u8>, Vec<(u32, u32, i128)>);
+type PartIndex = (Vec<u8>, Vec<(u32, u32, Vec<i128>)>);
 
 /// A row waiting to be applied, keyed into its [`Scatter`]'s own arena.
 #[derive(Clone, Copy)]
 struct Pending {
     hash: u64,
     off: u32,
-    len: u32,
+    /// Key length in the low sixteen bits, **aggregate index in the high sixteen**.
+    ///
+    /// Packed rather than given a field of its own, because `i128`'s alignment means a bare `u16`
+    /// costs sixteen bytes: `Pending` went 32 to 48 and every worker's scatter buffer with it. Keys
+    /// are addresses, so sixteen bits of length is 65,535 bytes of one and nobody has such an
+    /// address.
+    len_agg: u32,
     val: i128,
 }
+
+const LEN_MASK: u32 = 0xFFFF;
 
 /// Rows a worker buffers before it takes any lock.
 ///
@@ -422,10 +500,26 @@ impl Default for Scatter {
 impl Scatter {
     #[inline]
     pub fn push(&mut self, key: &[u8], val: i128, into: &SharedAgg) -> Result<()> {
+        self.push_agg(key, 0, val, into)
+    }
+
+    #[inline]
+    pub fn push_agg(&mut self, key: &[u8], agg: u16, val: i128, into: &SharedAgg) -> Result<()> {
+        if key.len() > LEN_MASK as usize {
+            return Err(BurrmillError::LimitExceeded(format!(
+                "a group key of {} bytes is past the {LEN_MASK}-byte limit",
+                key.len()
+            )));
+        }
         let hash = hash_key(key);
         let off = self.arena.len() as u32;
         self.arena.extend_from_slice(key);
-        self.parts[partition_of(hash)].push(Pending { hash, off, len: key.len() as u32, val });
+        self.parts[partition_of(hash)].push(Pending {
+            hash,
+            off,
+            len_agg: key.len() as u32 | ((agg as u32) << 16),
+            val,
+        });
         self.pending += 1;
         if self.pending >= FLUSH_ROWS {
             self.flush(into)?;
@@ -449,8 +543,9 @@ impl Scatter {
             // dying. Take the data anyway rather than panicking a second time and burying the first.
             let mut table = into.parts[p].lock().unwrap_or_else(|e| e.into_inner());
             for r in rows.iter() {
-                let key = &arena[r.off as usize..r.off as usize + r.len as usize];
-                table.add(r.hash, key, r.val)?;
+                let n = (r.len_agg & LEN_MASK) as usize;
+                let key = &arena[r.off as usize..r.off as usize + n];
+                table.add(r.hash, key, (r.len_agg >> 16) as u16, r.val)?;
             }
             into.bytes[p].store(table.bytes(), Ordering::Relaxed);
             rows.clear();
@@ -511,14 +606,14 @@ impl SharedAgg {
     /// Parallel because a partition's rows never meet another's: the radix split that bounds the
     /// memory also hands the output phase its parallelism for nothing. Each partition's hash table
     /// is freed as its index is built, so the buckets and the rows are never both fully live.
-    pub fn into_rows(self, drop_zero: bool, key_arity: usize) -> Result<Rows> {
+    pub fn into_rows(self, drop_zero: bool, key_arity: usize, sum_arity: usize) -> Result<Rows> {
         let tables: Vec<PartTable> = self
             .parts
             .into_iter()
             .map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner()))
             .collect();
         let per_partition: Vec<PartIndex> =
-            tables.into_par_iter().map(|t| t.into_index(drop_zero)).collect::<Result<Vec<_>>>()?;
+            tables.into_par_iter().map(|t| t.into_index(drop_zero, sum_arity)).collect::<Result<Vec<_>>>()?;
 
         let total_rows: usize = per_partition.iter().map(|(_, idx)| idx.len()).sum();
 
@@ -526,13 +621,22 @@ impl SharedAgg {
         // are the same bytes the fold wrote, and the answer simply takes ownership of them.
         let mut arenas = Vec::with_capacity(per_partition.len());
         let mut idx = Vec::with_capacity(total_rows);
+        let mut extra_sums: Vec<i128> =
+            Vec::with_capacity(if sum_arity > 1 { total_rows * (sum_arity - 1) } else { 0 });
         for (part, (arena, rows)) in per_partition.into_iter().enumerate() {
-            for (off, len, sum) in rows {
+            for (off, len, mut all) in rows {
+                let sum = all[0];
+                // Aggregates past the first live in a flat side vector with stride `sum_arity - 1`,
+                // so a single-`SUM` fold - the measured path and seven of the eight real folds -
+                // allocates nothing here at all and `Row` keeps its inline sum.
+                if sum_arity > 1 {
+                    extra_sums.extend(all.drain(1..));
+                }
                 idx.push(Row { part: part as u32, off, len, sum });
             }
             arenas.push(arena);
         }
-        Ok(Rows { arenas, idx, key_arity })
+        Ok(Rows { arenas, idx, key_arity, sum_arity, extra_sums })
     }
 }
 
@@ -577,7 +681,7 @@ mod tests {
         }
         a.flush(&shared).unwrap();
         b.flush(&shared).unwrap();
-        let rows = collect(&shared.into_rows(true, 1).unwrap());
+        let rows = collect(&shared.into_rows(true, 1, 1).unwrap());
         assert_eq!(rows.len(), 999, "party zero nets to zero and HAVING drops it");
         for (k, v) in &rows {
             let i = i128::from_str_radix(k.trim_start_matches("0x"), 16).unwrap();
@@ -602,7 +706,7 @@ mod tests {
         b.push(b"0xdead", 1, &shared).unwrap();
         // The partial sum left the range and was carried, not refused.
         b.flush(&shared).unwrap();
-        let err = shared.into_rows(false, 1).unwrap_err();
+        let err = shared.into_rows(false, 1, 1).unwrap_err();
         assert!(matches!(err, crate::BurrmillError::Overflow(_)), "got {err:?}");
     }
 
@@ -615,7 +719,7 @@ mod tests {
         a.push(b"0xdead", 1, &shared).unwrap();
         a.push(b"0xdead", -1, &shared).unwrap();
         a.flush(&shared).unwrap();
-        let rows = collect(&shared.into_rows(false, 1).unwrap());
+        let rows = collect(&shared.into_rows(false, 1, 1).unwrap());
         assert_eq!(rows, vec![("0xdead".to_string(), i128::MAX)]);
     }
 
@@ -629,7 +733,7 @@ mod tests {
         a.push(b"0xdead", -1, &shared).unwrap();
         a.push(b"0xdead", 1, &shared).unwrap();
         a.flush(&shared).unwrap();
-        let rows = collect(&shared.into_rows(false, 1).unwrap());
+        let rows = collect(&shared.into_rows(false, 1, 1).unwrap());
         assert_eq!(rows, vec![("0xdead".to_string(), i128::MIN + 1)]);
     }
 
@@ -652,7 +756,7 @@ mod tests {
             }
         }
         one.flush(&serial).unwrap();
-        let expected = collect(&serial.into_rows(false, 1).unwrap());
+        let expected = collect(&serial.into_rows(false, 1, 1).unwrap());
 
         let shared = SharedAgg::default();
         std::thread::scope(|s| {
@@ -668,7 +772,7 @@ mod tests {
                 });
             }
         });
-        let got = collect(&shared.into_rows(false, 1).unwrap());
+        let got = collect(&shared.into_rows(false, 1, 1).unwrap());
 
         assert_eq!(got.len(), KEYS as usize, "every key must survive the exchange");
         assert_eq!(got, expected, "concurrent and serial aggregation must agree exactly");

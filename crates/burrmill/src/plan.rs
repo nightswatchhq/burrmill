@@ -41,8 +41,10 @@ pub struct SignedFold {
     pub key_alias: String,
     /// Output names of every group key column, in order.
     pub key_aliases: Vec<String>,
-    /// Output name of the sum.
+    /// Output name of the first sum, kept for `EXPLAIN` and single-aggregate callers.
     pub sum_alias: String,
+    /// Output names of every summed column, in order.
+    pub sum_aliases: Vec<String>,
     /// `HAVING SUM(d) <> 0` - drop the parties that net out. Part of the answer, not a filter we
     /// are free to skip.
     pub drop_zero: bool,
@@ -91,9 +93,21 @@ pub struct FoldBranch {
     /// the executor builds one byte string from the parts and the table hashes bytes, so a composite
     /// key costs the aggregation nothing at all.
     pub key: Vec<KeyCol>,
+    /// The summed columns this arm contributes, in projection order - one per `SUM` in the outer
+    /// query.
+    ///
+    /// More than one is `SELECT k, SUM(a), SUM(b) ... GROUP BY k`, which the real delegation view
+    /// writes to carry tokens and shares together. Each carries its own sign and cast mode, because
+    /// `-CAST(tokens)` and `CAST(shares)` in the same arm are perfectly ordinary.
+    pub values: Vec<FoldValue>,
+}
+
+/// One summed column of an arm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldValue {
     /// Column holding the exact integer, stored as text because uint256 is 78 decimal digits and
     /// `Decimal256` tops out at 76.
-    pub value_col: String,
+    pub col: String,
     /// Whether this arm subtracts rather than adds.
     pub negated: bool,
     /// `CAST` rather than `TRY_CAST`: an unparseable value is an **error**, not a NULL.
@@ -120,8 +134,7 @@ impl Plan {
                 f.branches
                     .iter()
                     .map(|b| format!(
-                        "{}{}.[{}]{}",
-                        if b.negated { "-" } else { "+" },
+                        "{}.[{}] {}",
                         b.table,
                         b.key
                             .iter()
@@ -138,7 +151,16 @@ impl Plan {
                                 .join("||"))
                             .collect::<Vec<_>>()
                             .join(", "),
-                        if b.strict_cast { " strict" } else { "" }
+                        b.values
+                            .iter()
+                            .map(|v| format!(
+                                "{}{}{}",
+                                if v.negated { "-" } else { "+" },
+                                v.col,
+                                if v.strict_cast { "!" } else { "" }
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(" ")
                     ))
                     .collect::<Vec<_>>()
                     .join(", "),
@@ -212,22 +234,52 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
             select.projection.len()
         )));
     }
-    let arity = select.projection.len() - 1;
+    // **Where the keys stop and the sums start is read, not assumed.** The shape is
+    // `SELECT k1..kn, SUM(a1)..SUM(am)` and both n and m vary; scanning for the first aggregate is
+    // the only way to tell `SELECT a, b, SUM(x)` from `SELECT a, SUM(x), SUM(y)` without asking the
+    // query to be written in a particular way.
+    // **Found syntactically, validated afterwards.** Using `sum_argument` to *find* the first
+    // aggregate meant `SUM(DISTINCT d)` was not recognised as a SUM at all, so the refusal said
+    // "found no SUM" instead of naming DISTINCT. A refusal that misdiagnoses sends the reader to fix
+    // the wrong thing, which is only marginally better than no refusal.
+    let first_sum = (0..select.projection.len())
+        .find(|i| {
+            projection_item(select, *i)
+                .ok()
+                .is_some_and(|(_, e)| is_sum_call(strip_varchar_cast(e)))
+        })
+        .ok_or_else(|| {
+            not_allowed("the fold projects at least one group key and at least one SUM; found no SUM")
+        })?;
+    let arity = first_sum;
+    if arity == 0 {
+        return Err(not_allowed(
+            "the fold projects at least one group key before its sums; got a SUM first",
+        ));
+    }
+    let sums = select.projection.len() - arity;
     let mut key_idents = Vec::with_capacity(arity);
     for i in 0..arity {
         let (alias, _) = projection_item(select, i)?;
         key_idents.push(alias);
     }
     let key_alias = key_idents[0].clone();
-    let (sum_alias, sum_expr) = projection_item(select, arity)?;
-    let summed = sum_argument(strip_varchar_cast(sum_expr))?;
+    let mut sum_aliases = Vec::with_capacity(sums);
+    let mut summed_names = Vec::with_capacity(sums);
+    for j in 0..sums {
+        let (alias, expr) = projection_item(select, arity + j)?;
+        summed_names.push(sum_argument(strip_varchar_cast(expr))?);
+        sum_aliases.push(alias);
+    }
+    let sum_alias = sum_aliases[0].clone();
+    let summed = summed_names[0].clone();
 
     // The FROM must be a single derived table - the UNION ALL - with no joins.
     let derived = single_derived_table(select)?;
     let arms = union_all_branches(&derived.body)?;
     let mut matched: Vec<(FoldBranch, Option<String>, Option<String>)> = Vec::with_capacity(arms.len());
     for (i, arm) in arms.iter().enumerate() {
-        matched.push(match_branch(arm, i == 0, arity)?);
+        matched.push(match_branch(arm, i == 0, arity, sums)?);
     }
     let (_, k0, v0) = &matched[0];
     let first_key_alias = k0.clone().expect("the first arm is matched as named");
@@ -243,6 +295,22 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
         return Err(not_allowed(format!(
             "SUM must be over the union's value column `{first_value_alias}`; got `{summed}`"
         )));
+    }
+    // Each SUM must name the union column at the matching position. `SUM(sh), SUM(tok)` over a union
+    // that projects tok then sh is a different query from the one it looks like, so it is refused
+    // rather than reordered.
+    let first_arm_names: Vec<Option<String>> = (0..sums)
+        .map(|j| projection_item_opt(arms[0], arity + j, true).ok().and_then(|(a, _)| a))
+        .collect();
+    for (j, want) in summed_names.iter().enumerate() {
+        if first_arm_names[j].as_deref() != Some(want.as_str()) {
+            return Err(not_allowed(format!(
+                "SUM number {} is over `{want}`, but the union's value column at that position is \
+                 `{}`. Sums are matched by position, not by name lookup",
+                j + 1,
+                first_arm_names[j].clone().unwrap_or_else(|| "<unnamed>".into())
+            )));
+        }
     }
     if key_alias != first_key_alias {
         return Err(not_allowed(format!(
@@ -287,6 +355,15 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
             if !is_sum_ne_zero(e, &first_value_alias) {
                 return Err(not_allowed("the only admitted HAVING is `SUM(<value>) <> 0`"));
             }
+            if sums > 1 {
+                // With several aggregates, "drop the rows that net out" has to say *which* sum, and
+                // `HAVING SUM(a) <> 0` on a row whose `SUM(b)` is non-zero would discard a real
+                // answer. Refused rather than guessed at.
+                return Err(not_allowed(
+                    "HAVING is not admitted on a fold with more than one SUM: which sum decides \
+                     whether a row survives is a question the query has not answered",
+                ));
+            }
             true
         }
     };
@@ -297,7 +374,14 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     // silently overruled.
     check_order_by_is_canonical(query, &key_alias)?;
 
-    Ok(SignedFold { branches, key_alias, key_aliases: key_idents, sum_alias, drop_zero })
+    Ok(SignedFold {
+        branches,
+        key_alias,
+        key_aliases: key_idents,
+        sum_alias,
+        sum_aliases,
+        drop_zero,
+    })
 }
 
 /// One arm of the union: `SELECT <col> AS addr, [-][TRY_]CAST(<value> AS <128-bit>) AS d FROM <t>`.
@@ -310,12 +394,13 @@ fn match_branch(
     select: &Select,
     named: bool,
     arity: usize,
+    sums: usize,
 ) -> Result<(FoldBranch, Option<String>, Option<String>)> {
     reject_unsupported_clauses(select)?;
-    if select.projection.len() != arity + 1 {
+    if select.projection.len() != arity + sums {
         return Err(not_allowed(format!(
-            "each arm of the union projects the {arity} group key column(s) and the signed value; \
-             got {} items",
+            "each arm of the union projects the {arity} group key column(s) and {sums} signed \
+             value(s); got {} items",
             select.projection.len()
         )));
     }
@@ -335,16 +420,23 @@ fn match_branch(
         }
         key.push(key_column(expr)?);
     }
-    let (value_alias, value_expr) = projection_item_opt(select, arity, named)?;
-
-    let (negated, inner) = match value_expr {
-        Expr::UnaryOp { op: UnaryOperator::Minus, expr } => (true, expr.as_ref()),
-        other => (false, other),
-    };
-    let (value_col, strict_cast) = cast_to_i128(inner)?;
+    let mut values = Vec::with_capacity(sums);
+    let mut value_alias = None;
+    for j in 0..sums {
+        let (alias, value_expr) = projection_item_opt(select, arity + j, named)?;
+        if j == 0 {
+            value_alias = alias;
+        }
+        let (negated, inner) = match value_expr {
+            Expr::UnaryOp { op: UnaryOperator::Minus, expr } => (true, expr.as_ref()),
+            other => (false, other),
+        };
+        let (col, strict_cast) = cast_to_i128(inner)?;
+        values.push(FoldValue { col, negated, strict_cast });
+    }
     let table = single_named_table(select)?;
 
-    Ok((FoldBranch { table, key, value_col, negated, strict_cast }, key_alias, value_alias))
+    Ok((FoldBranch { table, key, values }, key_alias, value_alias))
 }
 
 /// `TRY_CAST(<col> AS HUGEINT | DECIMAL(38,0) | INT128)`.
@@ -589,6 +681,11 @@ fn key_parts(expr: &Expr, out: &mut Vec<KeyPart>) -> Result<()> {
          column, a cast of one to text, or a `||` concatenation of those. Anything else is an \
          expression, and evaluating arbitrary expressions is a language rather than a shape",
     ))
+}
+
+/// Is this syntactically a `SUM(...)` call, whatever is inside it?
+fn is_sum_call(expr: &Expr) -> bool {
+    matches!(expr, Expr::Function(f) if f.name.to_string().eq_ignore_ascii_case("sum"))
 }
 
 fn strip_varchar_cast(expr: &Expr) -> &Expr {

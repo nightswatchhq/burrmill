@@ -30,11 +30,11 @@ fn the_hot_path_shape_is_recognised() {
     assert_eq!(f.branches[0].table, "t");
     assert_eq!(f.branches[1].table, "t");
     assert_eq!(f.branches[0].key.len(), 1, "one group key column");
-    assert!(!f.branches[0].negated);
+    assert!(!f.branches[0].values[0].negated);
     assert!(matches!(&f.branches[1].key[0].parts[0], plan::KeyPart::Column { name, .. } if name == "from"));
-    assert!(f.branches[1].negated);
-    assert_eq!(f.branches[0].value_col, "value");
-    assert!(!f.branches[0].strict_cast, "the query used TRY_CAST");
+    assert!(f.branches[1].values[0].negated);
+    assert_eq!(f.branches[0].values[0].col, "value");
+    assert!(!f.branches[0].values[0].strict_cast, "the query used TRY_CAST");
     assert!(f.drop_zero, "HAVING SUM(d) <> 0 is part of the answer");
 }
 
@@ -102,10 +102,10 @@ fn writes_are_not_expressible() {
 #[test]
 fn cast_and_try_cast_are_both_admitted_and_mean_different_things() {
     let plan::Plan::SignedFold(lenient) = plan::plan(NET_BALANCES).unwrap();
-    assert!(lenient.branches.iter().all(|b| !b.strict_cast), "TRY_CAST skips a bad value");
+    assert!(lenient.branches.iter().all(|b| !b.values[0].strict_cast), "TRY_CAST skips a bad value");
 
     let plan::Plan::SignedFold(strict) = plan::plan(&NET_BALANCES.replace("TRY_CAST", "CAST")).unwrap();
-    assert!(strict.branches.iter().all(|b| b.strict_cast), "CAST refuses a bad value");
+    assert!(strict.branches.iter().all(|b| b.values[0].strict_cast), "CAST refuses a bad value");
 }
 
 /// Deduplicating would silently drop a party's second identical transfer. Same query text, different
