@@ -24,6 +24,7 @@ mod generate;
 mod oracles;
 mod serve;
 mod shapes;
+mod views;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -80,6 +81,10 @@ async fn main() -> anyhow::Result<()> {
         Some("gen") => generated(),
         Some("cast") => cast_table(),
         Some("serve") => serve::run(&std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: serve <fixture-dir>"))?),
+        Some("views") => views::run(
+            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: views <segments> <views>"))?,
+            &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: views <segments> <views>"))?,
+        ),
         Some("shapes") => shapes::run(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some("slt") => slt_against_duckdb(),
         Some("duckdb-gaps") => duckdb_gaps(),

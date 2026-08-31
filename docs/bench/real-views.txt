@@ -1,0 +1,39 @@
+# Roadmap 4.2: the headline claim, against the queries an indexer actually runs.
+#
+# The README says Burrmill is 'faster than DuckDB on the queries an indexer actually runs'.
+# Every measurement behind that had been a SYNTHETIC net_balances over a generated fixture.
+# The real authored views were not runnable until 4.1a-d generalised the fold, and nobody had
+# gone back to check the claim against them.
+#
+# This runs every fold-shaped sub-query in a real nest's views/*.sql against that nest's own
+# sealed segments, with DuckDB on exactly the same files and the same 8-thread budget, parity
+# verified before any timing. DuckDB is given the file list rather than a glob, because
+# roadmap 1.1 established that globbing a 38,429-file nest directory measures the directory.
+#
+# BEFORE the metadata cache - and this is what the claim was actually worth:
+#
+#   curation (2 tables, 6004 segments)        duck 177  burr 212  ratio 1.20  plan=57
+#   staking  (4 tables, 7203 segments)        duck 380  burr 440  ratio 1.16  plan=69
+#   curation+gns (4 tables, 9745 segments)    duck 314  burr 433  ratio 1.38  plan=93
+#
+#   0/3 at or under 1.0x. On the synthetic fixture the same engine is 0.43-0.52x.
+#
+# The difference is segment count. A synthetic fixture is 50 segments and parses their footers
+# in under a millisecond; a real nest table is SIX TO TEN THOUSAND tiny segments, and 57-93 ms
+# of every query went into re-reading footers that cannot have changed - a sealed segment is
+# content-addressed and immutable. Caching the cut morsels removes it entirely.
+#
+# AFTER:
+
+34 tables in the nest, 4 fold sub-plans in the views
+
+fold                                                    rows   duck_ms   burr_ms   ratio  where it goes
+curation__burned+curation__signalled                   13896       177       146    0.82  plan=0 scan=143 merge=0 morsels=6004
+staking__horizon_stake_deposited+staking__horiz…     not run: this nest has no staking_legacy__stake_slashed
+staking__tokens_delegated+staking__tokens_undel…      323138       381       356    0.93  plan=0 scan=329 merge=26 morsels=7203
+curation__burned+curation__signalled+gns__signa…       26798       312       323    1.04  plan=0 scan=321 merge=1 morsels=9745
+
+2/3 folds at or under 1.0x DuckDB, 8 threads each
+
+# Reproduce: cargo run -p burrmill-bench --release -- views <segments-dir> <views-dir>
+# 2026-08-31T18:40:47Z

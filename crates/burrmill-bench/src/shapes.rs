@@ -379,6 +379,50 @@ fn collect_fold_queries<'a>(q: &'a Query, out: &mut Vec<&'a Query>) {
     }
 }
 
+/// Every fold-shaped sub-query in a set of view files, as SQL text.
+///
+/// Shared with `burrmill-bench views` so that the headline comparison runs **exactly** the folds A4
+/// counted, rather than a second extractor that could drift from the first.
+pub fn extract_folds(roots: &[String]) -> anyhow::Result<Vec<String>> {
+    let dialect = GenericDialect {};
+    let mut out = Vec::new();
+    for f in collect_files(roots)? {
+        let text = std::fs::read_to_string(&f)?;
+        let Ok(parsed) = Parser::parse_sql(&dialect, &text) else { continue };
+        for stmt in &parsed {
+            let inner = match stmt {
+                Statement::Query(q) => Some(q.as_ref()),
+                Statement::CreateView(cv) => Some(cv.query.as_ref()),
+                _ => None,
+            };
+            if let Some(q) = inner {
+                let mut found = Vec::new();
+                collect_fold_queries(q, &mut found);
+                out.extend(found.into_iter().map(|fq| fq.to_string()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn collect_files(roots: &[String]) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    let mut files = Vec::new();
+    for root in roots {
+        for e in walkdir::WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "sql")
+                && p.components().any(|c| c.as_os_str() == "views")
+                && !p.components().any(|c| c.as_os_str() == "target")
+            {
+                files.push(p.to_path_buf());
+            }
+        }
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 pub fn run(roots: &[String]) -> anyhow::Result<()> {
     let mut files = Vec::new();
     for root in roots {

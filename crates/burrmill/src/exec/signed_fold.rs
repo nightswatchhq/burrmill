@@ -153,8 +153,10 @@ impl<'a> SignedFoldExec<'a> {
         // fold and the morsel scheduler needs no notion of branches at all.
         let mut morsels: Vec<(usize, Morsel)> = Vec::new();
         for (scan_ix, (rep, _)) in scans.iter().enumerate() {
-            for m in self.segments[*rep].morsels()? {
-                morsels.push((scan_ix, m));
+            for m in self.segments[*rep].morsels()?.iter() {
+                // Cheap: the path is an `Arc` and the Parquet metadata is already behind one, so
+                // this copies a handful of words rather than re-reading anything.
+                morsels.push((scan_ix, m.clone()));
             }
         }
         let plan_ms = started.elapsed().as_millis();

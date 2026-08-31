@@ -27,7 +27,13 @@ layout, and honest about everything else.
 
 ## The three claims
 
-**Faster.** 0.38-0.87x DuckDB across fourteen configurations, parity verified on every one, on a
+**Faster.** On a real nest's own authored views — the actual queries, not a synthetic stand-in —
+**0.80x, 0.95x and 1.01x** DuckDB over 6,000 to 9,745 sealed segments, parity verified, same files
+and same eight threads (`burrmill-bench views`). That test did not exist until recently and the
+claim did not survive it first time: re-reading immutable Parquet footers cost 57-93 ms of every
+query and the ratios were 1.20-1.38x until they were cached.
+
+On the synthetic sweep: 0.38-0.87x DuckDB across fourteen configurations, parity verified on every one, on a
 twelve-column nest-shaped fixture with every engine on the same eight threads. On the same runs
 general DataFusion measures 3.6x DuckDB at ten thousand segments — the many-small-files layout a nest
 actually produces — while beating it at high cardinality. That swing between renting general

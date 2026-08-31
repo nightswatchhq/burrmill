@@ -4,6 +4,62 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 4.2 — the headline claim, tested at last on the queries it is about — 2026-08-31
+
+The README says Burrmill is "faster than DuckDB on the queries an indexer actually runs". Every
+measurement behind that sentence had been a **synthetic** `net_balances` over a generated fixture.
+The real authored views could not even be planned until 4.1a-d generalised the fold, and nobody went
+back to check the claim once they could.
+
+They can now, and the claim was false:
+
+| fold | segments | DuckDB | Burrmill | ratio |
+|---|---:|---:|---:|---:|
+| `curation__signalled` + `burned` | 6,004 | 177 ms | 212 ms | **1.20** |
+| four staking tables | 7,203 | 380 ms | 440 ms | **1.16** |
+| curation + gns, four tables | 9,745 | 314 ms | 433 ms | **1.38** |
+
+**0 of 3 at or under 1.0x**, on the same files, the same eight threads, parity verified. On the
+synthetic fixture the same engine is 0.43-0.52x. Same code, opposite verdict, and the difference is
+entirely the shape of the data.
+
+### Why, and it was sitting in the metrics
+
+A synthetic fixture is fifty segments and parses their footers in under a millisecond. A real nest
+table is **six to ten thousand** tiny segments, and 57 to 93 ms of every query went into re-reading
+them — a fifth of the whole query, paid again on every single request.
+
+A sealed segment is content-addressed and immutable. That is already the stated reason the fold uses
+`new_with_metadata` instead of re-parsing per morsel; the footers simply cannot go stale. So the cut
+morsel list is cached on the segment set, shared across clones, and reset by `with_prefix`,
+`from_files` and `refresh` because those change the file set.
+
+`Morsel::path` became an `Arc<Path>` in the same change: a query clones that list once per fold, and
+at ten thousand morsels a `PathBuf` there is ten thousand allocations for a string that never
+changes.
+
+| fold | before | after |
+|---|---:|---:|
+| curation | 1.20x | **0.80x** |
+| staking | 1.16x | **0.95x** |
+| curation + gns | 1.38x | **1.01x** |
+
+Two of three now pass and the third is a rounding error away. The synthetic gate is untouched at
+209 MB and 195 ms.
+
+### What this says about the last two months of measurement
+
+Everything in `docs/bench` was measured on a fixture whose *segment count* was nest-shaped only in
+its size distribution, never in its cardinality. Roadmap 1.1a widened the fixture's **schema** after
+it hid a missing projection pushdown for a whole slice; this is the same lesson about a different
+axis, and it hid a 27% regression on the only queries anybody actually runs.
+
+The synthetic gate is still worth having — it is reproducible and it isolates variables. But it is
+not evidence about the product, and `burrmill-bench views` is now the thing to run before believing
+any claim with "actually" in it.
+
+---
+
 ## 5.1 — the cancellation contract, and the gate that had quietly broken it — 2026-08-31
 
 RFC-0044 §3.5 makes a specific promise: **the delay between asking a query to stop and it stopping is

@@ -37,7 +37,10 @@ pub const MORSEL_ROWS: usize = 65_536;
 /// stays valid for as long as the process does.
 #[derive(Debug, Clone)]
 pub struct Morsel {
-    pub path: PathBuf,
+    /// `Arc` rather than `PathBuf`: a real nest table is thousands of tiny segments, so a query
+    /// clones this list once per fold and a `PathBuf` there is thousands of allocations for a string
+    /// that never changes.
+    pub path: std::sync::Arc<Path>,
     pub meta: ArrowReaderMetadata,
     pub row_group: usize,
     /// Rows to skip within the selected row group.
@@ -51,6 +54,18 @@ pub struct Morsel {
 /// Constructed by `Burrmill::open` from a nest directory; never from a string inside a query.
 #[derive(Debug, Clone)]
 pub struct SealedSegments {
+    /// Morsels, cut once and kept.
+    ///
+    /// **A sealed segment is content-addressed and immutable, so its footer cannot go stale.** That
+    /// is already the argument for `new_with_metadata` in the fold; this takes it one step further
+    /// and stops re-reading the footers at all. It matters far more than it looks: the synthetic
+    /// fixture is fifty segments and parses them in under a millisecond, while a real nest table is
+    /// **six to ten thousand** tiny segments and roadmap 4.2 measured 57-93 ms per query going into
+    /// footers alone - a fifth of the whole query, paid again on every request.
+    ///
+    /// Shared across clones because a clone has the same files by construction. `with_prefix`,
+    /// `from_files` and `refresh` all start a fresh one, because those change the file set.
+    cache: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<Vec<Morsel>>>>,
     /// Where this set came from, when it came from a directory, so it can be re-listed.
     ///
     /// **The seam needs this.** COR-1 requires the cold listing to be taken at or after the hot
@@ -74,7 +89,7 @@ impl SealedSegments {
             .filter(|p| p.extension().is_some_and(|x| x == "parquet"))
             .collect();
         files.sort();
-        Ok(Self { name: name.into(), files, source: Some((dir.to_path_buf(), None)) })
+        Ok(Self { name: name.into(), files, source: Some((dir.to_path_buf(), None)), cache: Default::default() })
     }
 
     /// A set over an explicit list of files, in the order given after sorting.
@@ -87,7 +102,7 @@ impl SealedSegments {
         files.sort();
         // No source: an explicit list is exactly what the caller asked for and refreshing it would
         // be inventing an intent. Such a set is not re-listed for the seam, and `refresh` says so.
-        Self { name: name.into(), files, source: None }
+        Self { name: name.into(), files, source: None, cache: Default::default() }
     }
 
     /// A set restricted to the segments whose file name starts with `prefix`.
@@ -99,6 +114,7 @@ impl SealedSegments {
         Self {
             name: name.into(),
             source: self.source.as_ref().map(|(d, _)| (d.clone(), Some(prefix.to_string()))),
+            cache: Default::default(),
             files: self
                 .files
                 .iter()
@@ -123,7 +139,12 @@ impl SealedSegments {
         let all = Self::discover(self.name.clone(), dir)?;
         Ok(match prefix {
             Some(p) => all.with_prefix(self.name.clone(), p),
-            None => Self { name: self.name.clone(), files: all.files, source: all.source },
+            None => Self {
+                name: self.name.clone(),
+                files: all.files,
+                source: all.source,
+                cache: Default::default(),
+            },
         })
     }
 
@@ -141,7 +162,16 @@ impl SealedSegments {
     /// sized sensibly at seal time: DuckDB's own guidance is 100k-1M rows per row group, and
     /// sub-5000-row groups degrade reads by 5-10x. Burrmill cannot fix a badly sealed nest at query
     /// time, so it reports the shape rather than hiding it.
-    pub fn morsels(&self) -> Result<Vec<Morsel>> {
+    pub fn morsels(&self) -> Result<std::sync::Arc<Vec<Morsel>>> {
+        if let Some(hit) = self.cache.get() {
+            return Ok(hit.clone());
+        }
+        let cut = std::sync::Arc::new(self.cut_morsels()?);
+        // A racing thread may have won; either list is correct, so keep whichever is stored.
+        Ok(self.cache.get_or_init(|| cut).clone())
+    }
+
+    fn cut_morsels(&self) -> Result<Vec<Morsel>> {
         // **Parallel, because at ten thousand segments this phase was the query.** Reading ten
         // thousand footers on one thread before any fold work starts is a serial prologue DuckDB
         // does not pay, and it showed up as a flat penalty that grew with segment count.
@@ -149,6 +179,7 @@ impl SealedSegments {
             .files
             .par_iter()
             .map(|path| -> Result<Vec<Morsel>> {
+                let arc: std::sync::Arc<Path> = std::sync::Arc::from(path.as_path());
                 let file = std::fs::File::open(path)?;
                 let meta = ArrowReaderMetadata::load(&file, ArrowReaderOptions::new())?;
                 let md = meta.metadata().clone();
@@ -159,7 +190,7 @@ impl SealedSegments {
                     while offset < rows {
                         let len = MORSEL_ROWS.min(rows - offset);
                         out.push(Morsel {
-                            path: path.clone(),
+                            path: arc.clone(),
                             meta: meta.clone(),
                             row_group,
                             offset,
