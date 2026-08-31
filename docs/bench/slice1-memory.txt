@@ -1,0 +1,42 @@
+# Peak RSS at 1M groups, before and after roadmap 1.2.
+#
+# ONE MACHINE, ONE METRIC. A before-and-after across two machines and two different definitions of
+# "RSS" is not a comparison, and the first version of these numbers was exactly that: the macOS
+# harness read `ps -o rss=` (the process's RSS *right now*) while the Linux one read VmHWM (a true
+# high-water mark). Peak in a fold happens while the aggregate and the answer are both live, so the
+# development laptop systematically reported the friendlier number. Both now use getrusage.
+#
+# Box:      32-core Debian 6.12, 62 GB. `nproc` = 32.
+# Fixture:  ROWS=2000000 SEGMENTS=100 ADDRS=1000000 -> 989,690 groups, 42-byte keys.
+# Measure:  peak RSS, operator only (no DuckDB linked, no DataFusion session), REPEATS=1.
+#           REPEATS>1 inflates the high-water mark through allocator retention, so it is not used.
+# before:   commit eec0699, one aggregation per worker, Box<str> per output row.
+# after:    one SharedAgg behind per-partition locks, arena-backed answer.
+#
+# Gate: 256 MB.
+
+threads   before_mb   after_mb   before_ms   after_ms   verdict_after
+1         538         156        870         574        pass
+4         557         191        286         223        pass
+8         584         208        192         178        pass
+16        608         264        183         156        FAIL by 3%
+32        769         350        194         167        FAIL by 37%
+
+# agg_bytes, the aggregation's own live bytes, is 99 MB at EVERY thread count above. That is the
+# whole claim of 1.2 stated as a measurement: the aggregate's size is a property of the data and not
+# of the machine. What still scales with cores is roughly 6 MB per thread of scatter buffer and
+# parquet-rs decode state, and that is what 1.2a has to bound.
+#
+# Two knobs were swept rather than guessed, at 1M groups on 32 threads:
+#
+#   FLUSH_ROWS   rss@32   rss@8    ms
+#   1024         335      204      179
+#   4096         346      204      158   <- taken; better than 16384 on both axes
+#   16384        380      228      161
+#   65536        467      270      177
+#
+#   batch_size   rss@32   rss@8    ms
+#   1024         309      203      173
+#   2048         317      217      154
+#   4096         304      207      163
+#   8192         336      206      164   <- kept; differences are inside run-to-run spread

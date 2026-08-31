@@ -4,6 +4,108 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Roadmap 1.2 — one aggregate for the query, not one per worker — 2026-08-31
+
+**The shape change is done and holds. The gate is met up to eight threads and missed above sixteen.**
+Peak RSS at a million groups fell 2.2x to 3.4x depending on core count, and latency improved at every
+core count rather than being traded away.
+
+### What changed
+
+Each worker used to build an aggregation spanning the whole key space, and twelve of them were merged
+at the end. A million distinct parties therefore meant roughly twelve million live entries to produce
+a 57 MB answer — memory growing with core count, which is exactly the DataFusion behaviour RFC-0044
+§4.1 criticises by name (#6937).
+
+Now there is one `SharedAgg`: sixty-four radix partitions, each behind its own lock, written to by
+every worker. A key exists in exactly one table however many threads touched it. **`agg_bytes` is 99
+MB at one thread and 99 MB at thirty-two**, which is the claim stated as a measurement rather than as
+an intention.
+
+The lock is paid for by batching. A `Scatter` buffers rows per partition and drains 4,096 at a time.
+The size matters in both directions and the two regimes are far apart: a synthetic segment is 20,000
+rows, a real nest segment averages **116**, so flushing per batch would have meant sixty-four lock
+acquisitions per hundred-odd rows. The constant was swept rather than guessed; 16,384 was the first
+guess and was worse on both memory and latency.
+
+**The merge phase is gone entirely.** There is nothing left to merge; the workers were writing into
+the answer as they went.
+
+### Peak RSS and latency, 1M groups, like for like
+
+Same machine (32-core Debian), same fixture, same true high-water mark, single run. The `before`
+column is commit `eec0699` built and measured on that same box, because a before-and-after across two
+machines and two different definitions of "RSS" is not a comparison.
+
+| threads | before | after | before ms | after ms |
+|---:|---:|---:|---:|---:|
+| 1 | 538 MB | **156 MB** | 870 | **574** |
+| 4 | 557 MB | **191 MB** | 286 | **223** |
+| 8 | 584 MB | **208 MB** | 192 | **178** |
+| 16 | 608 MB | **264 MB** | 183 | **156** |
+| 32 | 769 MB | **350 MB** | 194 | **167** |
+
+Against the 256 MB gate: **pass at 1, 4 and 8 threads; miss by 3% at 16; miss by 37% at 32.**
+
+Two things follow. The first is that the old code was 538 MB *on a single thread*, so thread
+duplication was never the whole story — the answer's own representation was most of it. The second is
+that **the RFC's gate does not say at what parallelism**, and parallelism is now the load-bearing
+variable: the aggregate is flat at 99 MB and everything else costs about 6 MB per thread. A budget
+that a build passes on a laptop and fails on a build server is not a budget yet.
+
+### Ratios, unchanged or better
+
+Parity verified on all fourteen sweep configurations. Burrmill ratios 0.16-0.67 against DuckDB, all
+comfortably inside the ≤1.0 gate, and better than before at every point except one.
+
+The exception: 512 groups over 100 segments went 0.76 to 0.82. Sixty-four partition tables are pure
+overhead for an aggregate that fits in L2 as one, and a shared aggregate cannot use the old promotion
+threshold because the partitions are what make it shared. Recorded as a real if small trade rather
+than rounded away.
+
+### Three further defects found on the way
+
+1. **The answer allocated a `Box<str>` per group.** The exact per-key malloc this module's header says
+   it removed from the table, reintroduced at the output and costing more there. The answer now
+   carries one contiguous arena plus a 32-byte index row, and hash tables are freed per partition as
+   their rows are built.
+
+   The first attempt kept the sixty-four partition arenas in place and gave each row a partition
+   index, avoiding a copy. It measured **79 ms of output phase against 26 ms**, because every
+   comparison in the canonical sort then paid two bounds-checked indirections instead of one.
+   Concatenating into one arena costs a single sequential 42 MB memcpy and is decisively faster. The
+   copy is cheaper than the indirection, which is not what the first guess said.
+
+2. **The RSS gate harness was measuring itself.** `fold_only` went through `oracles::burrmill`, which
+   collects the answer into `Vec<(String, i128)>` for the parity comparison — a million fresh
+   `String`s inside the number that was supposed to be the operator's, worth about 80 MB.
+
+3. **`rss_mb()` reported two different quantities depending on the machine.** `ps -o rss=` on macOS is
+   the process's RSS *right now*; `VmHWM` on Linux is a true high-water mark. Peak in a fold happens
+   while the aggregate and the answer are both live, and by the time the harness asked, that moment
+   had passed — so the development laptop systematically reported the friendlier number. Both now go
+   through `getrusage`, and the macOS figure agrees with `/usr/bin/time -l` to the megabyte.
+
+   That is three measurement defects in one day, all the same shape: the harness flattering the thing
+   it exists to check. The parity guard cannot see any of them, because in every case both engines
+   agreed on the answer.
+
+4. **`max_bytes` was a field in `Limits` that nothing read.** Now enforced against the answer's own
+   bytes, which the arena representation makes cheap to compute.
+
+### Where the remaining memory is, at 32 threads
+
+156 MB of floor plus roughly 6 MB per thread. The floor is the aggregate (99 MB, measured), the answer
+(42 MB of keys and 32 MB of index) and the decode path. The per-thread part is the scatter buffer and
+Parquet decode; sweeping the flush size 4x moved about 1 MB per thread and sweeping the Arrow batch
+size moved nothing outside run-to-run spread, so the rest is inside parquet-rs.
+
+Closing it needs a different technique from the one 1.2 named — bounding concurrent decode, pre-sizing
+the partitions from a cardinality estimate, or streaming the output instead of materialising it — and
+that is a decision, not a tuning pass. **Recorded as owed. Slice 1 remains unpassed.**
+
+---
+
 ## Roadmap 1.1 — the real-nest comparison was measuring the wrong thing — 2026-08-31
 
 **The published real-nest ratios were wrong and are restated.** They are also, after a defect the

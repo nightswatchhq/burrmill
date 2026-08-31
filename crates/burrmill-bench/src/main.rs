@@ -38,34 +38,33 @@ fn env_flag(key: &str) -> bool {
     std::env::var(key).map(|v| !matches!(v.trim(), "" | "0" | "false")).unwrap_or(false)
 }
 
+/// **Peak** resident set size, not current.
+///
+/// This used to read `ps -o rss=` on macOS, which reports the process's RSS *right now*. Peak memory
+/// in a fold happens while the aggregate and the answer are both live, and by the time the harness
+/// asks, that moment has passed and the allocator has handed pages back. The Linux branch read
+/// `VmHWM`, a true high-water mark, so the same code reported two different kinds of number
+/// depending on the machine and the friendlier one came from the development laptop. That is the
+/// third measurement defect found in a day and it is the same shape as the other two: the harness
+/// flattering the thing it was built to check.
+///
+/// `getrusage` gives a genuine high-water mark on both. The unit does not agree between them -
+/// bytes on macOS, kilobytes on Linux - which is a trap worth naming rather than a curiosity.
 fn rss_mb() -> u64 {
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(o) = std::process::Command::new("ps")
-            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
-            .output()
-        {
-            if let Ok(s) = String::from_utf8(o.stdout) {
-                if let Ok(kb) = s.trim().parse::<u64>() {
-                    return kb / 1024;
-                }
-            }
+    // SAFETY: `getrusage` writes a plain POD struct through the pointer and returns 0 on success.
+    // Zeroed is a valid `rusage`, and nothing here retains the pointer.
+    unsafe {
+        let mut ru: libc::rusage = std::mem::zeroed();
+        if libc::getrusage(libc::RUSAGE_SELF, &mut ru) != 0 {
+            return 0;
+        }
+        let max = ru.ru_maxrss as u64;
+        if cfg!(target_os = "macos") {
+            max >> 20
+        } else {
+            max >> 10
         }
     }
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
-            for line in s.lines() {
-                if let Some(v) = line.strip_prefix("VmHWM:") {
-                    if let Some(kb) = v.split_whitespace().next().and_then(|k| k.parse::<u64>().ok())
-                    {
-                        return kb / 1024;
-                    }
-                }
-            }
-        }
-    }
-    0
 }
 
 #[tokio::main]

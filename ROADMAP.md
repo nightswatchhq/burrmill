@@ -14,23 +14,33 @@ memory gate failed. Treat its engineer-week figures as an order of magnitude, no
 
 ## Stage 1 — finish slice 1 · IN PROGRESS
 
-Slice 1's gate is "≤1.0x DuckDB at exact parity **under the 256 MB RSS gate**". Latency passed
-everywhere; RSS failed by 3.9x. By the RFC's own rule that is a stop, not a pass, so nothing below
-this line starts until it clears.
+Slice 1's gate is "≤1.0x DuckDB at exact parity **under the 256 MB RSS gate**". Latency passes
+everywhere and has got better. RSS is now under the budget up to eight threads and over it above
+sixteen, which by the RFC's own rule is still a stop rather than a pass, so nothing below this line
+starts until it clears.
+
+**1.2 has moved the blocker rather than cleared it, and it has changed what the gate means.** One
+shared aggregate instead of one per worker cut peak RSS at a million groups by 2.2-3.4x and improved
+latency at every core count. Measured like for like on one 32-core box against commit `eec0699`:
+**538 MB → 156 MB at one thread, 584 → 208 at eight, 769 → 350 at thirty-two.** The aggregate is 99
+MB at every thread count, so that part of the claim is exact; everything else costs about 6 MB per
+thread. The gate passes to 8 threads, misses by 3% at 16 and by 37% at 32.
 
 **1.1 is done and it cost the real-nest numbers.** They were measuring a 38,429-file directory scan
 charged to DuckDB and not to Burrmill. Restated like-for-like they are 0.48-0.78x rather than
 0.11-0.71x, and they only reach that because 1.1 turned up a missing projection pushdown on the way.
-The synthetic sweep never touched that path and stands unchanged. **1.2 is now the whole of the
-remaining gate.**
+The synthetic sweep never touched that path and stands unchanged.
 
 | # | Work | Done when |
 |---|---|---|
 | ~~1.1~~ | ~~Explain DuckDB's flat ~620 ms on the real nest directory~~ | **DONE 2026-08-31. Both halves happened: the comparison was wrong and the numbers are restated downward.** The nest's segments directory holds 38,429 files and DuckDB re-globbed all of them inside every timed run while Burrmill's `read_dir` sat outside the timer. Corrected, the published 0.11-0.71 became 1.00-2.98 — Burrmill *slower*. A fifth defect found in the process (the fold had no projection pushdown and decoded 14 columns to read 3) brings it to 0.48-0.78. See the progress log |
 | 1.1a | A realistic-width synthetic fixture | The fixture is 4 columns and a real event is 12-14, which is precisely why the missing projection survived a whole slice. A fixture that cannot exhibit the defect cannot guard against it |
 | 1.1b | A gate that refuses a flat comparison | The parity guard cannot see a timing that does not vary with input size, and that is what hid 1.1 in plain sight in the results file. Done when a run whose times are independent of row count fails rather than prints |
-| 1.2 | Input repartitioning: workers exchange morsels so each owns a key range, not a row range | Peak RSS ≤256 MB at 1M groups; latency ratios do not regress past 1.0 |
-| 1.3 | A real global memory budget | `mem_pool_bytes` means the process, not one worker; the current doc comment admits it does not |
+| 1.2 | ~~Input repartitioning~~ **One shared partitioned aggregate, not one per worker** · PARTIALLY DONE | Peak RSS at 1M groups **538→156 MB at 1 thread, 584→208 at 8, 769→350 at 32**, latency better at every count, parity verified on all 14 sweep configurations. `agg_bytes` is 99 MB at every thread count, which is the claim as a measurement. **Passes to 8 threads, misses at 16 and 32**, so the gate is not passed |
+| 1.2a | Bound the ~6 MB per thread | The floor is 156 MB and the rest scales with cores: scatter buffers and parquet-rs decode. Sweeping the flush size 4x moved ~1 MB/thread and the Arrow batch size moved nothing outside spread, so the remainder is inside the decoder. Needs bounded concurrent decode, partition pre-sizing from a cardinality estimate, or a streaming output — a decision, not a tuning pass |
+| 1.2c | **State the gate's parallelism** | 256 MB is not a budget until it says at how many threads. The same binary passes on a laptop and fails on a build server, and that is a specification defect rather than a code one. An RFC amendment, not a patch |
+| 1.2b | The small-aggregate regression | 509 groups went 48 MB → 76 MB and 0.76 → 0.82x. Sixty-four partition tables are pure overhead for an aggregate that fits in L2 as one, and a shared aggregate cannot use the old promotion threshold because the partitions are what make it shared. Small, real, and recorded rather than rounded away |
+| ~~1.3~~ | ~~A real global memory budget~~ | **DONE as a consequence of 1.2.** `mem_pool_bytes` is now checked against the query's whole aggregation rather than one worker's share, because there is only one. Still not process RSS — decode buffers sit outside it — and the doc comment says so. `max_bytes`, which was a field nothing read, is now enforced too |
 | 1.4 | Seal-layout canary | A test fails when nuthatch's segment naming or schema changes. Burrmill has no path dependency by design, so today a layout change breaks its *reading*, silently |
 
 **1.1 was first** because it was an evening's work and it decided whether the best numbers already
@@ -39,8 +49,11 @@ the failure mode RFC-0004 exists to prevent, and the lesson to carry is that the
 thing this project is proudest of — is blind to this entire class of error. Parity says the two
 engines agree on the answer. It says nothing about whether they were asked the same question.
 
-**Stop condition:** if repartitioning cannot hold 256 MB without giving back the latency win, the
-honest outcome is a keep-amendment quantifying the trade, not a quietly relaxed budget.
+**Stop condition, and where it stands:** if repartitioning cannot hold 256 MB without giving back the
+latency win, the honest outcome is a keep-amendment quantifying the trade, not a quietly relaxed
+budget. Nothing has been given back — latency improved — so the condition has not been triggered.
+The budget has not been relaxed either. The gate simply is not met at a million groups, and that is
+recorded as a fail rather than argued away.
 
 ---
 

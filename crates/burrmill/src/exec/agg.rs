@@ -235,13 +235,25 @@ struct Pending {
 /// Rows a worker buffers before it takes any lock.
 ///
 /// The whole cost of a shared aggregate is the lock, so it has to be amortised over enough rows that
-/// it disappears, and the two regimes this has to survive are very far apart. A synthetic segment is
+/// it disappears, and the two regimes this has to survive are far apart. A synthetic segment is
 /// twenty thousand rows; a real nest segment averages **a hundred and sixteen**, so flushing per
 /// batch would take sixty-four locks for every hundred-odd rows. Buffering across morsels instead
 /// makes the flush rate a function of rows rather than of how the writer happened to cut the files.
-/// At this size a four-million-row fold takes about fifteen thousand lock acquisitions in total,
-/// spread over sixty-four locks.
-const FLUSH_ROWS: usize = 16_384;
+///
+/// **Four thousand and ninety-six, measured rather than picked.** Every worker holds one of these,
+/// so the constant is multiplied by the core count and shows up directly in peak RSS. Swept at a
+/// million groups on 32 threads:
+///
+/// | `FLUSH_ROWS` | peak RSS, 32 threads | peak RSS, 8 threads | latency |
+/// |---|---:|---:|---:|
+/// | 1 024 | 335 MB | 204 MB | 179 ms |
+/// | **4 096** | **346 MB** | **204 MB** | **158 ms** |
+/// | 16 384 | 380 MB | 228 MB | 161 ms |
+/// | 65 536 | 467 MB | 270 MB | 177 ms |
+///
+/// 16,384 was the first guess and it was worse on both axes. Below 4,096 the lock stops being
+/// amortised and latency goes back up for a saving that is within run-to-run spread.
+const FLUSH_ROWS: usize = 4_096;
 
 /// One worker's outbound buffer: rows sorted into partitions, not yet aggregated.
 ///

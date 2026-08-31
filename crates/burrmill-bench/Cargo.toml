@@ -19,3 +19,6 @@ duckdb = { version = "1", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 anyhow = "1"
 tempfile = "3"
+# Only for getrusage: a true peak RSS. The bench is publish = false, so this stays out of the
+# shipped graph like every other dependency in here.
+libc = "0.2"

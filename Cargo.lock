@@ -688,6 +688,7 @@ dependencies = [
  "burrmill",
  "datafusion",
  "duckdb",
+ "libc",
  "parquet",
  "tempfile",
  "tokio",
