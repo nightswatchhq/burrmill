@@ -93,8 +93,10 @@ Said plainly, because a README that implies otherwise is the thing this project 
   
   A FIFO admission gate (roadmap 5.3) fixed the liveness half: fairness 0.00 to **0.81**, worst-client
   p99 **2378 ms to 601 ms**, every client served, for eight per cent of throughput. The throughput
-  half is open: Burrmill is 89 qps at 32 clients against DuckDB's 170, because DuckDB stops
-  parallelising a query when others are waiting and Burrmill does not yet.
+  half is now partly closed too (5.3a): a sharing query takes a slice of the pool rather than all of
+  it, giving 100 qps and 0.94 fairness at 32 clients, and **beating DuckDB outright at four**.
+  Burrmill is fairer than DuckDB at every client count and has a comparable tail; what remains is raw
+  throughput under load, 100 qps against 168 at thirty-two, which is undiagnosed.
   `docs/bench/serve-concurrency.txt` has the numbers;
   `cargo run -p burrmill-bench --release -- serve <fixture>` re-runs them.
 - **No streaming.** A fold's result is materialised; it is one row per party, so this costs little

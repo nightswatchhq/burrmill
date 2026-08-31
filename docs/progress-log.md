@@ -4,6 +4,53 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 5.3a — a sharing query takes a slice of the pool, not all of it — 2026-08-31
+
+The gate fixed *how many* queries start. It did nothing about how **wide** each one got, so four
+admitted queries still fought over eight workers and throughput stayed where 5.2 left it. A query
+admitted while others are queued now splits into exactly `pool / in_flight` groups, which caps its
+parallel width because rayon cannot run more groups at once than there are.
+
+At 32 clients on the 32-core box, against 5.3:
+
+| | 5.2 | 5.3 (gate) | 5.3a (+degree) |
+|---|---:|---:|---:|
+| throughput | 96 qps | 89 | **100** |
+| worst-client p99 | 2378 ms | 601 | **478** |
+| fairness | 0.00, starved | 0.81 | **0.94** |
+
+At four clients Burrmill now **beats** `duck_multi` outright — 108 qps against 107 — and it is fairer
+at every count: 0.94 against 0.72 at thirty-two. Liveness, tail and fairness are all now at or better
+than DuckDB's.
+
+### The bug in the first version, which the benchmark found and the code could not show
+
+"Alone" was inferred: a degree equal to the pool size meant nobody else was waiting. That comparison
+was made against `rayon::current_num_threads()` inside the pool, which is not necessarily the number
+the caller divided by — and when the two disagreed, a solo query was treated as *sharing* and capped
+to eight groups instead of over-decomposed four-ways-per-thread for balance.
+
+The cost was invisible in the median and plain in the tail: single-query samples went from
+`185 188 189 190 191 199` to `187 189 195 198 242 266`. Nothing in the code looked wrong, because
+nothing in the code *was* wrong except an assumption about what a library function returns.
+
+The caller now says `None` for "I have the pool to myself" rather than leaving the executor to work
+it out. Single query back to `185 191 191 192 192 197` against a baseline band of 185-199.
+
+**A/B against the one changed line is what found it.** Removing `.with_degree(...)` and rebuilding
+took two minutes and turned "probably noise, the code path is identical" into a measurement. It was
+not noise, and the code path was not identical.
+
+### The standing gap, stated plainly
+
+Burrmill is **100 qps at 32 clients against DuckDB's 168** — about 0.6x — and that is now the honest
+remaining weakness. It is no longer a fairness or liveness problem; it is raw throughput under load
+and it is undiagnosed. The obvious suspects are per-query fixed cost (footers are parsed afresh on
+every query, and there is no plan or metadata cache at all) and a narrow query still paying the full
+morsel-scheduling setup. Filed as 5.4 rather than guessed at.
+
+---
+
 ## 5.3 — the starvation was a liveness bug, and it is gone — 2026-08-31
 
 5.2 reported clients being "starved". Before building anything I checked whether that was my harness

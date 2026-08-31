@@ -67,7 +67,7 @@ impl Gate {
         }
         st.in_flight += 1;
         st.peak = st.peak.max(st.in_flight);
-        Pass { gate: self }
+        Pass { gate: self, in_flight: st.in_flight }
     }
 
     pub fn peak_in_flight(&self) -> usize {
@@ -78,6 +78,19 @@ impl Gate {
 /// A turn through the gate. Releasing it wakes whoever is next in line.
 pub struct Pass<'a> {
     gate: &'a Gate,
+    /// How many queries were inside the pool when this one was admitted, itself included.
+    ///
+    /// A query that is sharing the machine should stop paying for parallelism it cannot use: 5.2
+    /// measured that splitting every query across the whole pool regardless of the queue behind it
+    /// costs about half the throughput of running more queries narrower. This is the number that
+    /// decides how wide to be.
+    in_flight: usize,
+}
+
+impl Pass<'_> {
+    pub fn in_flight(&self) -> usize {
+        self.in_flight
+    }
 }
 
 impl Drop for Pass<'_> {

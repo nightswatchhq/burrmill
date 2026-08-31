@@ -83,15 +83,36 @@ threads=16  32       burrmill        129.0     36.1     1431.8    0.00  0..55  S
 
 peak_rss_mb=471
 
-## What the admission width buys, 32 clients, 8-thread pool
+############################################################################
+## AFTER roadmap 5.3a: a sharing query takes a slice of the pool, not all of it
+############################################################################
 #
-# Throughput rises 72 -> 98 qps across the entire range while fairness collapses and the tail
-# grows fourfold. Width is not the throughput lever; the default of half the pool sits at the
-# knee. The remaining gap to duck_multi is per-query parallelism, not admission - see 5.3a.
+# The gate limited how many queries START. It did not limit how WIDE each one got, so four
+# admitted queries still fought over eight workers. A query admitted while others are queued
+# now splits into exactly pool/in_flight groups, which caps its parallel width because rayon
+# cannot run more groups at once than there are.
+#
+# 'Alone' is stated by the caller (degree = None), not inferred from a thread count. Inferring
+# it cost 199 -> 266 ms on the single-query tail, because rayon::current_num_threads() inside
+# the pool did not agree with the number the caller had divided by, so a solo query was treated
+# as sharing and capped to 8 groups instead of over-decomposed for balance.
 
-width=1   32       burrmill         72.6    405.9      428.8    0.92  12..13
-width=2   32       burrmill         82.8    353.1      488.4    0.93  13..14
-width=4   32       burrmill         90.0    318.3      622.0    0.81  13..16
-width=8   32       burrmill         93.8    270.7     1153.0    0.53  10..19
-width=16  32       burrmill         99.5    187.0     3023.4    0.00  0..27  STARVED (slowest warm-up 5236 ms of a 5237 ms window)
-width=32  32       burrmill         95.8     29.6     2737.5    0.00  0..91  STARVED (slowest warm-up 5291 ms of a 5291 ms window)
+1        duck_shared      56.3     17.5       19.8    1.00  282..282
+1        duck_multi       55.2     17.6       24.0    1.00  277..277
+1        burrmill         82.0     12.1       13.5    1.00  410..410
+
+4        duck_shared      54.2     17.6       25.8    0.00  0..275  STARVED (slowest warm-up 5073 ms of a 5073 ms window)
+4        duck_multi      109.7     35.6       59.2    0.94  134..142
+4        burrmill        110.5     31.4      116.8    0.94  135..143
+
+16       duck_shared      52.3     17.5       25.7    0.00  0..277  STARVED (slowest warm-up 5297 ms of a 5297 ms window)
+16       duck_multi      159.1     91.7      177.3    0.47  35..75
+16       burrmill        109.8    133.6      263.1    0.92  33..36
+
+32       duck_shared      49.9     17.6       19.5    0.00  0..281  STARVED (slowest warm-up 5633 ms of a 5634 ms window)
+32       duck_multi      166.6    175.7      456.0    0.69  22..32
+32       burrmill         99.8    296.5      424.2    0.94  16..17
+
+peak_rss_mb=489
+
+# Single query, unchanged: 185 191 191 192 192 197 ms against a baseline band of 185-199.

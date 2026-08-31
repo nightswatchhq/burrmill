@@ -303,14 +303,22 @@ impl Burrmill {
         // **Through the gate, then into the pool.** The gate is taken before `install` and released
         // when this scope ends, so a query waits in a queue whose order we control rather than in
         // rayon's injector, which under load is a queue nobody is obliged to visit.
-        let _pass = self.gate.enter();
+        let pass = self.gate.enter();
+        // A query sharing the pool takes a slice of it; alone, it takes all of it and **nothing
+        // about the single-query path changes** - `None` says so outright rather than leaving the
+        // executor to infer it from a thread count that may not be the one divided by here.
+        let degree = match pass.in_flight() {
+            0 | 1 => None,
+            n => Some((self.pool.current_num_threads() / n).max(1)),
+        };
 
         // **Inside the bounded pool.** Peak RSS at a million groups is 147 MB on one thread and 349
         // on thirty-two, so an unbounded fold makes `mem_pool_bytes` a statement about the machine
         // rather than about the query. Nested `install` on the same pool is free.
         let (rows, metrics) = self.pool.install(|| {
-            let mut exec =
-                exec::SignedFoldExec::new(fold, &segments, limits).with_cancel(cancel);
+            let mut exec = exec::SignedFoldExec::new(fold, &segments, limits)
+                .with_cancel(cancel)
+                .with_degree(degree);
             if let Some(seam) = seam.as_ref() {
                 exec = exec.with_seam(seam);
             }

@@ -81,6 +81,14 @@ pub struct SignedFoldExec<'a> {
     segments: &'a [&'a SealedSegments],
     limits: Limits,
     cancel: CancelToken,
+    /// How many parallel groups this query may split into when it is **sharing** the pool.
+    ///
+    /// `None` means "this query has the pool to itself": decompose for balance and use every worker.
+    /// It is deliberately not "degree equals the pool size", because that would make the answer
+    /// depend on `rayon::current_num_threads()` agreeing with the number the caller divided by, and
+    /// when those two disagreed the single-query tail went from 199 ms to 266 for no reason visible
+    /// in the code. A caller that knows it is alone says so.
+    degree: Option<usize>,
     /// The pinned seam, when a hot tip is registered. See [`crate::seam`] for why the watermark and
     /// the rows arrive together rather than as two reads.
     seam: Option<&'a Seam<'a>>,
@@ -96,7 +104,7 @@ pub struct Seam<'a> {
 
 impl<'a> SignedFoldExec<'a> {
     pub fn new(plan: &'a SignedFold, segments: &'a [&'a SealedSegments], limits: Limits) -> Self {
-        Self { plan, segments, limits, cancel: CancelToken::new(), seam: None }
+        Self { plan, segments, limits, cancel: CancelToken::new(), degree: None, seam: None }
     }
 
     /// Branches grouped by the table they read, so a table is scanned **once** however many arms
@@ -115,6 +123,16 @@ impl<'a> SignedFoldExec<'a> {
             }
         }
         out
+    }
+
+    /// Cap this query's parallel width (roadmap 5.3a).
+    ///
+    /// A query admitted while others are queued should occupy a slice of the pool, not all of it.
+    /// Without this the gate limits how many queries *start* and not how wide each one gets, so four
+    /// admitted queries still fight over eight workers and the throughput stays where 5.2 found it.
+    pub fn with_degree(mut self, degree: Option<usize>) -> Self {
+        self.degree = degree.map(|d| d.max(1));
+        self
     }
 
     pub fn with_seam(mut self, seam: &'a Seam<'a>) -> Self {
@@ -149,7 +167,7 @@ impl<'a> SignedFoldExec<'a> {
         // this RFC criticises DataFusion for (#6937), so reproducing it would have been embarrassing
         // as well as slow.
         let scan_started = Instant::now();
-        let batches = coalesce(&morsels);
+        let batches = coalesce(&morsels, self.degree);
 
         // **One aggregate for the whole query, not one per worker.** The previous version gave each
         // worker a table spanning the whole key space and merged twelve of them at the end; that
@@ -670,19 +688,35 @@ fn projection_mask(
     Some(ProjectionMask::roots(descr, idx))
 }
 
-fn coalesce(morsels: &[(usize, Morsel)]) -> Vec<&[(usize, Morsel)]> {
+fn coalesce(morsels: &[(usize, Morsel)], degree: Option<usize>) -> Vec<&[(usize, Morsel)]> {
     let total: usize = morsels.iter().map(|(_, m)| m.len).sum();
     let threads = rayon::current_num_threads().max(1);
-    // Four units per thread: enough slack for work-stealing to even out the bimodal size
-    // distribution, without cutting the units so fine that the fixed cost returns.
-    let target = (total / (threads * 4)).clamp(4_096, crate::segment::MORSEL_ROWS);
+
+    // **Two genuinely different cases, and conflating them is what 5.2 measured.**
+    //
+    // Alone - `degree` is `None` - decompose four ways per thread so work-stealing can even out the
+    // bimodal seal sizes, and let rayon use every worker. That is the behaviour the latency gate
+    // measures and it is untouched.
+    //
+    // Sharing - `degree` is `Some(d)` - and the group count **is** the width cap, because rayon
+    // cannot run more groups at once than there are. So it must be exactly `d`. Over-decomposing
+    // here would hand the query the whole pool again and undo the point of admitting it narrowly.
+    let (groups, target) = match degree {
+        Some(d) => (d, (total / d.max(1)).max(1)),
+        None => (
+            usize::MAX,
+            (total / (threads * 4)).clamp(4_096, crate::segment::MORSEL_ROWS),
+        ),
+    };
 
     let mut out = Vec::new();
     let mut start = 0usize;
     let mut rows = 0usize;
     for (i, (_, m)) in morsels.iter().enumerate() {
         rows += m.len;
-        if rows >= target {
+        // When sharing, the last group takes the remainder rather than splitting further, so the
+        // count is exactly `groups` and the width cap actually holds.
+        if rows >= target && out.len() + 1 < groups {
             out.push(&morsels[start..=i]);
             start = i + 1;
             rows = 0;
