@@ -22,6 +22,7 @@
 mod fixture;
 mod generate;
 mod oracles;
+mod serve;
 mod shapes;
 
 use std::path::{Path, PathBuf};
@@ -78,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
         Some("nest") => nest(),
         Some("gen") => generated(),
         Some("cast") => cast_table(),
+        Some("serve") => serve::run(&std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: serve <fixture-dir>"))?),
         Some("shapes") => shapes::run(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some("slt") => slt_against_duckdb(),
         Some("duckdb-gaps") => duckdb_gaps(),

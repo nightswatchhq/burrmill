@@ -49,8 +49,18 @@ impl Default for Limits {
 impl Limits {
     /// A serving profile: something a public endpoint can hold open without a slow query becoming
     /// an availability problem. #986 measured DuckDB's p99 going from 29.5 ms to 7066 ms between 1
-    /// and 32 clients, flat on throughput, because it sits behind one connection mutex. Burrmill
-    /// takes no global lock, so the interesting limit here is per-query and not per-process.
+    /// and 32 clients, flat on throughput, because it sits behind one connection mutex.
+    ///
+    /// **Four threads rather than eight, and roadmap 5.2 says that is still not the answer.** The
+    /// pool is per handle and shared by every concurrent query, so a larger `max_threads` does not
+    /// make a serving path faster - it makes each query hog more of the pool and the queue behind it
+    /// longer. Measured at 32 clients on a 32-core box: one thread per query gives 15 qps and serves
+    /// **everybody**; four gives 55 qps and serves some clients **nothing**; eight gives 99 qps and
+    /// starves them just as thoroughly.
+    ///
+    /// So four is a guess between two bad ends rather than a setting anybody derived, and no
+    /// constant here is the fix. What is needed is a fair queue in front of the pool and a
+    /// per-query parallelism that shrinks as load rises - roadmap 5.3.
     pub fn serving() -> Self {
         Self {
             max_rows: 100_000,

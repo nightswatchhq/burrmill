@@ -102,10 +102,21 @@ impl Answer {
 
 /// The handle. One per nest, cheap to clone into as many concurrent queries as you like.
 ///
-/// **There is no global lock in here.** DuckDB in nuthatch sits behind a single connection mutex,
-/// and the measured consequence is a p99 that goes from 29.5 ms to 7066 ms between one client and
-/// thirty-two while throughput stays flat at about 40 qps. That is not a tuning problem, it is the
-/// architecture, and not having it is most of why a serving path wants this.
+/// **There is no global lock in here, and roadmap 5.2 measured that this is not enough.**
+///
+/// DuckDB embedded the way nuthatch embeds it - one connection behind a mutex - does exactly what
+/// #986 said: throughput flat at 55 qps from one client to thirty-two, and some client served *not
+/// at all*. That much reproduces.
+///
+/// What does not reproduce is the conclusion. Embedded its own way - one database, a connection per
+/// client - DuckDB scales to 171 qps at thirty-two clients where Burrmill manages 96, with a worst
+/// client p99 of 423 ms against Burrmill's 2378, and it serves every client where Burrmill starves
+/// some. Burrmill is the faster engine at one client and the slower one at sixteen.
+///
+/// The absence of a lock was never the whole story. What replaced it is a **bounded shared pool**,
+/// and a bounded pool that hands every worker to one query at a time starves the queue just as
+/// effectively as a mutex does. See `docs/bench/serve-concurrency.txt`, and roadmap 5.3 for the
+/// shape of the fix.
 /// **Parallelism is bounded here, not inherited from the host.** See [`Limits::max_threads`]. The
 /// pool is built once per handle and shared by every clone, so a query pays nothing to be bounded.
 #[derive(Clone)]

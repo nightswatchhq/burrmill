@@ -1,0 +1,52 @@
+# Roadmap 5.2: the concurrency sweep (RFC-0044 §3.5). MEASURED, AND IT IS NOT THE HEADLINE.
+#
+# §3.5 expected this to be 'the easiest headline in the project' because Burrmill takes no
+# global lock. It is not. Properly-embedded DuckDB beats it under load on throughput, on tail
+# latency and on fairness, and the reason is that Burrmill has no lock but does have a bounded
+# shared pool - and a bounded pool with unfair scheduling starves clients just as effectively.
+#
+# Three arms, because 'DuckDB is slow under load' is only true of one way of embedding it:
+#   duck_shared - one Connection behind a Mutex. What nuthatch does; what #986 measured.
+#   duck_multi  - one database, one connection per client. DuckDB's own concurrent model.
+#   burrmill    - one handle cloned; every client shares ONE 8-thread pool (roadmap 1.2c).
+#
+# worstp99 is the WORST CLIENT'S OWN p99, not a pooled percentile. Pooling weights by
+# throughput, so a starved client contributes almost no samples and cannot move the number
+# however badly it was treated: the first version of this reported 82 qps at 32 clients with a
+# 14 ms p99, two figures that cannot both be true. The per-client counts said why - one client
+# ran 191 queries and another ran none.
+#
+# fair = slowest client's query count / fastest client's. 1.00 is perfect sharing, 0.00 is a
+# client that was never served at all.
+#
+# Reproduce: CLIENTS=1,4,16,32 SECONDS=5 burrmill-bench serve <fixture>
+# 2026-08-31T15:04:11Z
+
+## 32-core Debian, 8 threads per query
+parity:  verified on 9896 parties, 5s per point, 8 threads per query
+
+clients  engine            qps   p50_ms   worstp99    fair  queries per client: min..max
+1        duck_shared      55.4     17.6       24.1    1.00  278..278
+1        duck_multi       55.6     17.6       25.3    1.00  278..278
+1        burrmill         80.0     12.4       15.3    1.00  401..401
+
+4        duck_shared      53.7     17.8       28.4    0.00  0..272  STARVED
+4        duck_multi      108.8     35.6       60.6    0.94  133..141
+4        burrmill         99.4     24.7      285.6    0.72  104..145
+
+16       duck_shared      53.0     17.6       19.7    0.00  0..281  STARVED
+16       duck_multi      154.8     90.1      181.0    0.46  32..70
+16       burrmill        103.3     28.8     1575.8    0.00  0..84  STARVED
+
+32       duck_shared      48.8     17.7       25.5    0.00  0..274  STARVED
+32       duck_multi      171.1    173.3      422.6    0.69  22..32
+32       burrmill         96.0     29.7     2377.8    0.00  0..91  STARVED
+
+peak_rss_mb=487
+
+## What the thread budget does to it, 32 clients, 32-core Debian
+threads=1   32       burrmill         15.1   1526.6     1552.1    0.67  2..3
+threads=2   32       burrmill         31.9    473.8     2590.1    0.00  0..13  STARVED
+threads=4   32       burrmill         55.4     46.1     2025.8    0.00  0..50  STARVED
+threads=8   32       burrmill         98.8     29.1     1776.6    0.00  0..76  STARVED
+threads=16  32       burrmill        129.0     36.1     1431.8    0.00  0..55  STARVED

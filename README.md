@@ -80,6 +80,17 @@ Said plainly, because a README that implies otherwise is the thing this project 
   `cargo run -p burrmill-bench --release -- cast` prints the divergence table.
 - **Eight threads per query by default.** `Limits::max_threads`. Deliberate: the cores past it buy
   6% and cost the concurrency story that is most of why a serving path wants this.
+- **It does not yet win under concurrent load, and that was expected to be the easy part.** RFC-0044
+  §3.5 reasoned that DuckDB's single-connection mutex - throughput flat from one client to
+  thirty-two, p99 29.5 ms to 7066 ms - made this the project's easiest headline. Measured: that
+  reproduces exactly for DuckDB *embedded the way nuthatch embeds it*, but embedded its own way, one
+  database with a connection per client, DuckDB reaches **171 qps at 32 clients where Burrmill
+  manages 96**, with a worst-client p99 of **423 ms against 2378 ms**, and it serves every client
+  where Burrmill starves some outright. Burrmill is the faster engine at one client and the slower
+  one at sixteen. The absence of a lock was never the whole story: what replaced it is a bounded
+  shared pool, and a pool that hands every worker to one query at a time starves the queue just as a
+  mutex does. `docs/bench/serve-concurrency.txt` has the numbers;
+  `cargo run -p burrmill-bench --release -- serve <fixture>` re-runs them.
 - **No streaming.** A fold's result is materialised; it is one row per party, so this costs little
   today and will be revisited with the async cancellation contract.
 - **No DataFusion fallback.** Deliberately not yet built. Building the fast path first is what makes

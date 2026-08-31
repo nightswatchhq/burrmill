@@ -104,17 +104,22 @@ publishing that honestly from the start is what stops "hybrid now, own more late
 
 ---
 
-## Stage 5 — serving
+## Stage 5 — serving · **the concurrency claim did not survive measurement**
 
-Where the concurrency win is banked. #986 measured DuckDB going from 40.3 to 39.6 qps between one
-client and thirty-two while p99 went 29.5 ms to 7066 ms, because it sits behind one connection
-mutex. Burrmill takes no global lock, so this should be the easiest headline in the project — which
-is exactly why it must be measured rather than assumed.
+Where the concurrency win was *expected* to be banked. It was not. §7 called this "the easiest
+headline in the project" because Burrmill takes no global lock; 5.2 measured it and properly-embedded
+DuckDB wins on throughput, tail latency and fairness alike.
+
+The lock was never the whole story. What replaced it is a bounded shared pool, and a bounded pool
+that hands every worker to one query at a time starves the queue exactly as a mutex does. Measuring
+this before building 5.1 on top of it was the right order, and it is the only reason the streaming
+work is not now sitting on an assumption.
 
 | # | Work | Done when |
 |---|---|---|
 | 5.1 | Streaming results and the async cancellation contract (Q5) | Cancellation delay bounded by one morsel, demonstrated |
-| 5.2 | Re-run the #986 sweep | p99 ≤ DuckDB's at 32 clients, RSS within budget |
+| ~~5.2~~ | ~~Re-run the #986 sweep~~ **· DONE, AND BURRMILL LOSES** | #986 reproduces exactly for DuckDB-behind-a-mutex: flat 55 qps from 1 to 32 clients, some client served **not at all**. But embedded its own way - one database, a connection per client - DuckDB scales to **171 qps** at 32 clients where Burrmill manages **96**, worst-client p99 **423 ms against 2378 ms**, and it serves every client where Burrmill starves some. Burrmill is faster at one client and slower at sixteen. Full result in `docs/bench/serve-concurrency.txt` |
+| 5.3 | **Admission control and adaptive parallelism** · the fix 5.2 asks for | No lock, but a bounded shared pool - and a pool that gives every worker to one query at a time starves the queue exactly as a mutex does. The arithmetic is stark: at 32 clients one thread per query gives 15 qps *and serves everyone*, eight gives 99 qps and serves some clients nothing. Eight independent single-threaded queries would be ~120 qps by that scaling; 8-way parallelising one at a time gives 99. **Parallelism per query must shrink as load rises**, with a fair queue in front of the pool |
 
 ---
 

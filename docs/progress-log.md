@@ -4,6 +4,84 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 5.2 — the concurrency claim did not survive being measured — 2026-08-31
+
+RFC-0044 §7 calls this "the easiest headline in the project", on the grounds that DuckDB sits behind
+one connection mutex and Burrmill takes no global lock. Half of that is right and the conclusion is
+wrong.
+
+### What reproduces
+
+DuckDB embedded the way nuthatch embeds it — one `Connection` behind a `Mutex` — behaves exactly as
+#986 said. On a 32-core box: **55 qps at one client, 49 at thirty-two**, flat, and at every count
+above one some client is served **not at all**. The mutex finding is real.
+
+### What does not
+
+Embedded its own way — one database, a connection per client — DuckDB scales.
+
+| clients | duck_shared | duck_multi | burrmill |
+|---:|---:|---:|---:|
+| 1 | 55 qps | 56 qps | **80 qps** |
+| 4 | 54 | 109 | 99 |
+| 16 | 53 | **155** | 103 |
+| 32 | 49 | **171** | 96 |
+
+Worst-client p99 at 32 clients: DuckDB **423 ms**, Burrmill **2378 ms**. Fairness: DuckDB serves
+every client, Burrmill serves some of them nothing at all.
+
+**Burrmill is the faster engine at one client and the slower one at sixteen.**
+
+### Why, and it is not the lock
+
+There is no lock. There is a **bounded shared pool**, and a pool that hands all eight workers to one
+query at a time starves the queue exactly as a mutex does. The thread budget makes it plain — 32
+clients, 32-core box:
+
+| threads per query | qps | fairness |
+|---:|---:|---:|
+| 1 | 15 | 0.67, everybody served |
+| 2 | 32 | starved |
+| 4 | 55 | starved |
+| 8 | 99 | starved |
+| 16 | 129 | starved |
+
+One thread per query serves everyone at 15 qps. Eight threads serve some clients nothing at 99. And
+the arithmetic between those rows is the finding: **eight independent single-threaded queries would
+be about 120 qps by that scaling, where eight-way parallelising one query at a time gives 99.**
+Parallelism per query is not free under load, and Burrmill spends it regardless of how many clients
+are waiting. DuckDB stops parallelising each query when there are others to run; we do not.
+
+Filed as 5.3: a fair queue in front of the pool, and per-query parallelism that shrinks as load
+rises. Note that no constant fixes this — `max_threads` picks between "slow and fair" and "faster and
+starving", and neither is a serving profile.
+
+### The measurement lied first, as usual
+
+The first version reported **82 qps at 32 clients with a 14 ms p99**, which cannot both be true: 32
+clients sharing one mutex at 12 ms a query is not 82 qps. Pooling every client's latencies weights by
+throughput, so a starved client contributes almost no samples and cannot move a percentile however
+badly it was treated. The per-client counts said what was happening: one client ran 191 queries and
+another ran **none**.
+
+`worstp99` is now the worst client's own p99 and `fair` is the slowest client's share of the
+fastest's. That is the seventh measurement fault in this project's short life, and the second where
+the naive metric was flattering in *both* directions at once.
+
+There was also a strawman in DuckDB's favour, caught on the first run: `Connection::open_in_memory()`
+per client is a fresh **database** per client, so four clients meant four independent DuckDB
+instances with eight threads each. It read as DuckDB scaling beautifully at 221 qps against eight
+threads' worth of work, which is what gave it away.
+
+### Why this was the right order
+
+5.1 is streaming results and the async cancellation contract, and it would have been built directly
+on top of the assumption this just falsified. Measuring the claim before building on it is the whole
+of the argument for doing 5.2 first, and it is the second time today that running the experiment
+first saved building the wrong thing.
+
+---
+
 ## 4.1d — every fold in the workload now plans and runs — 2026-08-31
 
 **Fold sub-plans: 8 of 8.** The last one carries two aggregates over a composite key, which the real
