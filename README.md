@@ -94,9 +94,39 @@ BREAK_PARITY=1 cargo run -p burrmill-bench --release
 # Page-cache order is a confound; a ratio that survives both orderings is about the engines.
 ORDER=burrmill_first cargo run -p burrmill-bench --release
 
-# Against real sealed segments, read-only.
+# Against real sealed segments, read-only. A ratio that is mostly fixed cost is not printed as a
+# number; the field reads UNSAFE_fixed_duck=NNpct instead. See docs/bench/method.md.
 cargo run -p burrmill-bench --release -- inspect /path/to/nest/segments
 cargo run -p burrmill-bench --release -- explain /path/to/nest/segments
+cargo run -p burrmill-bench --release -- nest /path/to/nest/segments <table-prefix>
+```
+
+## Checking it is right
+
+Correctness has its own commands, and they are not the benchmark. `cargo test` runs the fast half of
+this on every invocation.
+
+```sh
+# Generated cases against DuckDB: answers, refusals, and the ones where the two disagree about
+# whether the query is answerable at all.
+CASES=3000 cargo run -p burrmill-bench --release -- gen
+
+# The hand-computed .slt corpus, pointed at the other engine. It runs against Burrmill in `cargo
+# test`; this is the same files against DuckDB, which is the reason for using a standard format.
+cargo run -p burrmill-bench --release -- slt
+
+# Where Burrmill's TRY_CAST and DuckDB's disagree, printed rather than assumed.
+cargo run -p burrmill-bench --release -- cast
+
+# DuckDB silently wrapping a HUGEINT sum, reproduced across threads and file counts.
+cargo run -p burrmill-bench --release -- duckdb-gaps
+
+# The seal-layout canary against a real nest: naming, schema, and every table opening.
+BURRMILL_NEST=/path/to/nest/segments cargo test --test seal_layout -- --nocapture
+
+# More generated cases than the default, or one exact case again.
+BURRMILL_CASES=5000 cargo test --test generated_folds
+BURRMILL_SEED=1234 cargo test --test generated_folds
 ```
 
 ## Licence
