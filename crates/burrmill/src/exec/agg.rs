@@ -464,20 +464,31 @@ const LEN_MASK: u32 = 0xFFFF;
 /// batch would take sixty-four locks for every hundred-odd rows. Buffering across morsels instead
 /// makes the flush rate a function of rows rather than of how the writer happened to cut the files.
 ///
-/// **Four thousand and ninety-six, measured rather than picked.** Every worker holds one of these,
-/// so the constant is multiplied by the core count and shows up directly in peak RSS. Swept at a
-/// million groups on 32 threads:
+/// **Sixteen thousand three hundred and eighty-four, and the first answer was tuned at the wrong
+/// operating point.** Every worker holds one of these, so the constant is multiplied by the fold's
+/// width and shows up in peak RSS - which is how it came to be swept at a million groups on
+/// thirty-two threads, where memory was the binding constraint and 4,096 won:
 ///
 /// | `FLUSH_ROWS` | peak RSS, 32 threads | peak RSS, 8 threads | latency |
 /// |---|---:|---:|---:|
 /// | 1 024 | 335 MB | 204 MB | 179 ms |
-/// | **4 096** | **346 MB** | **204 MB** | **158 ms** |
+/// | 4 096 | 346 MB | 204 MB | 158 ms |
 /// | 16 384 | 380 MB | 228 MB | 161 ms |
 /// | 65 536 | 467 MB | 270 MB | 177 ms |
 ///
-/// 16,384 was the first guess and it was worse on both axes. Below 4,096 the lock stops being
-/// amortised and latency goes back up for a saving that is within run-to-run spread.
-const FLUSH_ROWS: usize = 4_096;
+/// That operating point is not the serving one. A serving query is *small*, and a small query is
+/// where the flush size stops being a memory knob and becomes a **contention** knob: each flush
+/// takes up to sixty-four partition locks, so a worker that flushes four times as often contends
+/// four times as much. On a 500k-row query at eight threads the scan goes **18 ms to 11**, and the
+/// single-threaded cost does not move at all - which is exactly the signature of contention rather
+/// than work.
+///
+/// The serving sweep agrees: 123 → 133-143 qps at four clients, 112 → 115-124 at thirty-two, with
+/// better tails and the same fairness. The memory gate holds at 223-226 MB against 218, which is
+/// six megabytes for eight to sixteen per cent of throughput.
+///
+/// Sixty-five thousand is worse on both counts, so this is an optimum and not a direction.
+const FLUSH_ROWS: usize = 16_384;
 
 /// One worker's outbound buffer: rows sorted into partitions, not yet aggregated.
 ///

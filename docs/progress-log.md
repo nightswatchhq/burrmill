@@ -4,6 +4,54 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 5.5 — it did not need a scheduler, it needed the constant tuned at the right size — 2026-08-31
+
+5.5 was filed as "work-stealing across queries; a scheduler, not a constant". Before costing that,
+the question worth asking was why a *single* query only gets 3.3x from eight threads.
+
+**It depends on query size.** A 181 ms fold scales 7.9x. A 48 ms one scales 4x. Not per-segment cost
+— the speedup is the same with one segment as with two hundred — and not decode.
+
+It is **lock contention** on the aggregate's sixty-four partitions. Each flush takes up to sixty-four
+locks, so a worker that flushes proportionally more often contends proportionally more, and a small
+query flushes more often relative to its total work. `FLUSH_ROWS` 4,096 → 16,384 takes a 500k-row
+scan from **18 ms to 11** at eight threads while the single-threaded cost does not move at all —
+parallel time changes, serial time does not, which is contention and nothing else.
+
+### Why the constant was wrong
+
+It was swept in roadmap 1.2, honestly and with a table, at **a million groups on thirty-two
+threads**. At that operating point memory binds: every worker holds a scatter buffer, so the constant
+multiplies by the fold's width, and 4,096 won on peak RSS.
+
+A serving query is small, runs at eight threads, and is nowhere near the memory budget. There the
+same constant is a *contention* knob rather than a memory one, and the answer is four times larger.
+The sweep was not wrong; it answered a question about the wrong workload, and I never went back to
+ask whether the workload had changed underneath it.
+
+That is worth naming, because it is the day's most repeatable mistake in a new form: a number
+measured properly, at an operating point that later stopped being the one that mattered.
+
+### What it bought
+
+| clients | before | after |
+|---:|---:|---:|
+| 4 | 123 qps | **133-143** |
+| 16 | 123 qps | **127-135** |
+| 32 | 112 qps | **115-124** |
+
+Tails better, fairness unchanged at ~0.90, and the memory gate holds at **218 MB** with ratios
+0.43-0.50 and parity verified. Six megabytes for eight to sixteen per cent.
+
+### And a reminder that a busy machine lies
+
+The first run of this measured the 1M-group fold at 653 ms against 196, and serving at 41 qps — with
+**DuckDB collapsing by the same factor**, which is what gave it away. A DuckDB rebuild was running:
+load average 34, five `cc1plus` at 100%. Every number in that block was void. Two engines degrading
+together is a machine, not a change; had only one moved I might have believed it.
+
+---
+
 ## 5.4 — the throughput gap was utilisation, not work — 2026-08-31
 
 The obvious suspects were per-query fixed cost: footers parsed afresh on every query, no plan cache,

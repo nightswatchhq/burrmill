@@ -95,9 +95,9 @@ Said plainly, because a README that implies otherwise is the thing this project 
   p99 **2378 ms to 601 ms**, every client served, for eight per cent of throughput. The throughput
   half is now partly closed too (5.3a): a sharing query takes a slice of the pool rather than all of
   it, giving 100 qps and 0.94 fairness at 32 clients, and **beating DuckDB outright at four**.
-  Burrmill wins outright to four clients (**123 qps against 109**), is markedly fairer at every count
+  Burrmill wins outright below eight clients (**133-143 qps against 110** at four), is markedly fairer at every count
   (0.89 against 0.57 at thirty-two) and has a comparable tail. It trails on raw throughput above
-  eight clients: 112 qps against 168. That gap is diagnosed and not fixed — it is utilisation rather
+  sixteen clients: 135 against 160. That gap is diagnosed and not fixed — it is utilisation rather
   than work, since the fold costs 53 ms on one thread against DuckDB'''s implied 48, but eight threads
   buy only 3.3x.
   `docs/bench/serve-concurrency.txt` has the numbers;
