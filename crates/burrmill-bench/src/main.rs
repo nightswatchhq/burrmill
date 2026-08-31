@@ -238,24 +238,39 @@ async fn bench() -> anyhow::Result<()> {
 fn fold_only() -> anyhow::Result<()> {
     let dir = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: fold <dir>"))?;
     let repeats = env_usize("REPEATS", 3).max(1);
+    let db = burrmill::Burrmill::open_segments("t", Path::new(&dir))?;
+    let sql = "SELECT addr, SUM(d) AS net FROM (\
+                 SELECT \"to\" AS addr, TRY_CAST(\"value\" AS HUGEINT) AS d FROM t \
+                 UNION ALL \
+                 SELECT \"from\" AS addr, -TRY_CAST(\"value\" AS HUGEINT) AS d FROM t\
+               ) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr";
+
     let mut all = Vec::new();
     let mut rows = 0usize;
     let mut metrics = burrmill::FoldMetrics::default();
     for _ in 0..repeats {
-        let (r, ms, m) = oracles::burrmill(Path::new(&dir))?;
-        rows = r.len();
-        metrics = m;
-        all.push(ms);
+        let t = Instant::now();
+        // **Nothing is materialised here, and that is the point of this subcommand.** The RSS gate
+        // is a claim about the operator, so the harness must not add a copy of the answer to the
+        // thing it is measuring. `oracles::burrmill` collects into `Vec<(String, i128)>` because the
+        // parity comparison needs owned rows; doing that here put a million fresh `String`s inside
+        // the number and made the operator look 80 MB worse than it is. Same family of defect as
+        // roadmap 1.1: a harness measuring itself.
+        let answer = db.query(sql, burrmill::Limits::default())?;
+        all.push(t.elapsed().as_millis());
+        rows = answer.rows().len();
+        metrics = answer.metrics();
     }
     all.sort_unstable();
     println!(
-        "FOLD\tgroups={rows}\tmorsels={}\trows_read={}\tmedian_ms={}\tplan_ms={}\tscan_ms={}\tmerge_ms={}\tall={all:?}\tpeak_rss_mb={}",
+        "FOLD\tgroups={rows}\tmorsels={}\trows_read={}\tmedian_ms={}\tplan_ms={}\tscan_ms={}\tmerge_ms={}\tagg_mb={}\tall={all:?}\tpeak_rss_mb={}",
         metrics.morsels,
         metrics.rows_read,
         all[all.len() / 2],
         metrics.plan_ms,
         metrics.scan_ms,
         metrics.merge_ms,
+        metrics.agg_bytes >> 20,
         rss_mb()
     );
     Ok(())
@@ -420,7 +435,7 @@ fn nest() -> anyhow::Result<()> {
         let t = std::time::Instant::now();
         let a = db.query(&sql, burrmill::Limits::default())?;
         let ms = t.elapsed().as_millis();
-        Ok((a.rows().iter().map(|(k, v)| (k.to_string(), *v)).collect(), ms, a.metrics()))
+        Ok((a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect(), ms, a.metrics()))
     };
 
     // Burrmill paying for its own catalog, which the previous harness did outside the timer.

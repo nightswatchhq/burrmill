@@ -63,12 +63,16 @@ pub struct FoldMetrics {
     /// Merging the per-morsel tables, plus the canonical sort.
     pub merge_ms: u128,
     pub elapsed_ms: u128,
+    /// The aggregate's own live bytes at the moment the scan finished, before any row is built.
+    /// This is what `mem_pool_bytes` is checked against, and printing it beside peak RSS is how you
+    /// tell an aggregation that is too big from an output phase that is.
+    pub agg_bytes: usize,
 }
 
 /// The aggregation lives in [`crate::exec::agg`]. It is not a `HashMap<String, i128>` and the
 /// reason is measured rather than aesthetic: see that module's header for the three versions this
 /// replaced and what each of them cost.
-use crate::exec::agg::{merge_partition, PartTable, PartitionedAgg, PARTITIONS};
+use crate::exec::agg::{Rows, Scatter, SharedAgg};
 
 pub struct SignedFoldExec<'a> {
     plan: &'a SignedFold,
@@ -88,7 +92,7 @@ impl<'a> SignedFoldExec<'a> {
     }
 
     /// Run the fold and return the canonically ordered rows plus what it cost.
-    pub fn run(&self) -> Result<(Vec<(Box<str>, i128)>, FoldMetrics)> {
+    pub fn run(&self) -> Result<(Rows, FoldMetrics)> {
         let started = Instant::now();
         let morsels = self.segments.morsels()?;
         let plan_ms = started.elapsed().as_millis();
@@ -102,80 +106,53 @@ impl<'a> SignedFoldExec<'a> {
         // as well as slow.
         let scan_started = Instant::now();
         let batches = coalesce(&morsels);
-        let per_worker: Vec<(PartitionedAgg, u64, u64)> = batches
+
+        // **One aggregate for the whole query, not one per worker.** The previous version gave each
+        // worker a table spanning the whole key space and merged twelve of them at the end; that
+        // passed on latency and failed the memory gate by 3.9x, because a million distinct parties
+        // became roughly twelve million live entries to produce a 57 MB answer. Here a key lives in
+        // exactly one partition table however many threads touched it, so the aggregate's size is a
+        // property of the data rather than of the core count. See [`crate::exec::agg::SharedAgg`].
+        let shared = SharedAgg::default();
+        let counted: Vec<(u64, u64)> = batches
             .par_iter()
             .try_fold(
-                || (PartitionedAgg::default(), 0u64, 0u64),
-                |mut st, batch| -> Result<(PartitionedAgg, u64, u64)> {
+                || (Scatter::default(), 0u64, 0u64),
+                |mut st, batch| -> Result<(Scatter, u64, u64)> {
                     for m in *batch {
-                        let (read, skipped) = self.fold_morsel(m, deadline, &mut st.0)?;
+                        let (read, skipped) = self.fold_morsel(m, deadline, &mut st.0, &shared)?;
                         st.1 += read;
                         st.2 += skipped;
                     }
+                    // Drained at every batch boundary, so a worker's buffer never outlives the batch
+                    // that filled it and the fold state can be dropped without a final pass.
+                    st.0.flush(&shared)?;
                     // Per batch, not per row. The first version read the clock once per merged
                     // entry - five million clock reads at ten thousand morsels, to enforce a budget
                     // that cannot change that fast. Checking a limit must not cost more than the
                     // work it is limiting.
-                    self.check_budget(st.0.bytes(), started)?;
+                    self.check_budget(shared.bytes(), started)?;
                     Ok(st)
                 },
             )
+            .map(|r| r.map(|(_, read, skipped)| (read, skipped)))
             .collect::<Result<Vec<_>>>()?;
         let scan_ms = scan_started.elapsed().as_millis();
+
+        let agg_bytes = shared.bytes();
 
         let merge_started = Instant::now();
         let mut rows_read = 0u64;
         let mut rows_skipped = 0u64;
-        let drop_zero = self.plan.drop_zero;
-        let mut per_worker = per_worker;
-        for (_, read, skipped) in &per_worker {
+        for (read, skipped) in &counted {
             rows_read += read;
             rows_skipped += skipped;
         }
 
-        // **Two merge strategies, and the cheap one is the default.** If no worker's table grew past
-        // the promotion threshold, the whole aggregate is small and a serial combine of a dozen
-        // tables costs less than the machinery to parallelise it. Forcing the partitioned path on a
-        // small aggregate measured 1.55x DuckDB where the serial one was 0.90x.
-        let any_promoted = per_worker.iter().any(|(a, _, _)| a.is_promoted());
-        let mut out: Vec<(Box<str>, i128)> = if !any_promoted {
-            let tables: Vec<PartTable> = per_worker
-                .into_iter()
-                .filter_map(|(agg, _, _)| agg.parts.into_iter().next())
-                .collect();
-            merge_partition(tables)?.into_rows(drop_zero)
-        } else {
-            // Promotion is itself parallel: it is a full pass over a worker's entries, and doing a
-            // dozen of those on the collecting thread is how the previous version lost.
-            per_worker
-                .par_iter_mut()
-                .try_for_each(|(agg, _, _)| agg.ensure_partitioned())?;
-
-            // Transpose workers-by-partitions into partitions-by-workers. Moves only, no rehashing,
-            // and it is what makes the merge parallel: partition p's tables never meet partition
-            // q's, so each partition is combined and emitted independently.
-            let mut columns: Vec<Vec<PartTable>> =
-                (0..PARTITIONS).map(|_| Vec::with_capacity(per_worker.len())).collect();
-            for (agg, _, _) in per_worker {
-                for (p, table) in agg.parts.into_iter().enumerate() {
-                    if !table.is_empty() {
-                        columns[p].push(table);
-                    }
-                }
-            }
-            let per_partition: Vec<Vec<(Box<str>, i128)>> = columns
-                .into_par_iter()
-                .map(|tables| -> Result<Vec<(Box<str>, i128)>> {
-                    Ok(merge_partition(tables)?.into_rows(drop_zero))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let total: usize = per_partition.iter().map(|v| v.len()).sum();
-            let mut out = Vec::with_capacity(total);
-            for part in per_partition {
-                out.extend(part);
-            }
-            out
-        };
+        // There is no merge left to do. The workers wrote into the answer as they went, so this is
+        // the output phase and nothing else: each partition's table becomes rows, in parallel,
+        // because a partition's keys never meet another's.
+        let mut out = shared.into_rows(self.plan.drop_zero);
 
         let groups = out.len();
         if groups as u64 > self.limits.max_rows {
@@ -185,10 +162,19 @@ impl<'a> SignedFoldExec<'a> {
             )));
         }
 
+        let bytes = out.bytes();
+        if bytes as u64 > self.limits.max_bytes {
+            return Err(BurrmillError::LimitExceeded(format!(
+                "the result is {} MB, over max_bytes {} MB",
+                bytes >> 20,
+                self.limits.max_bytes >> 20
+            )));
+        }
+
         // **Canonical ordering, applied unconditionally** (§3.3). Byte-wise ascending on the key.
         // Required here twice over: an oracle whose row order varies between runs is not one anybody
         // can build on, and the partitions come back in hash order, which is no order at all.
-        out.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        out.sort_canonical();
         let merge_ms = merge_started.elapsed().as_millis();
 
         Ok((
@@ -202,6 +188,7 @@ impl<'a> SignedFoldExec<'a> {
                 scan_ms,
                 merge_ms,
                 elapsed_ms: started.elapsed().as_millis(),
+                agg_bytes,
             },
         ))
     }
@@ -214,7 +201,8 @@ impl<'a> SignedFoldExec<'a> {
         &self,
         m: &Morsel,
         deadline: Instant,
-        acc: &mut PartitionedAgg,
+        scatter: &mut Scatter,
+        shared: &SharedAgg,
     ) -> Result<(u64, u64)> {
         if self.cancel.is_cancelled() {
             return Err(BurrmillError::Cancelled);
@@ -269,24 +257,24 @@ impl<'a> SignedFoldExec<'a> {
                     continue;
                 };
                 let minus_d = checked_neg(d, debit.value(i))?;
-                acc.add(credit.value(i).as_bytes(), d)?;
-                acc.add(debit.value(i).as_bytes(), minus_d)?;
+                scatter.push(credit.value(i).as_bytes(), d, shared)?;
+                scatter.push(debit.value(i).as_bytes(), minus_d, shared)?;
             }
         }
         Ok((rows_read, rows_skipped))
     }
 
-    /// The budget is per worker, and the docs say so rather than implying a process-wide guarantee.
+    /// The budget is now the query's whole aggregation rather than one worker's share of it.
     ///
-    /// A fold running on twelve threads holds twelve of these, so the real ceiling is
-    /// `mem_pool_bytes * threads` - which is honest about the shape of the thing rather than
-    /// flattering. Making it a genuine global budget needs the workers to coordinate, and that is
-    /// the concurrency slice's job, not this one's.
+    /// This used to read `mem_pool_bytes * threads` in practice and said so, because twelve workers
+    /// each held a table of their own. With a single shared aggregate the number passed in is the
+    /// real total, which is most of roadmap 1.3. It is still not process RSS: Parquet decode buffers
+    /// and the Arrow batches in flight sit outside it, and the doc comment says so rather than
+    /// implying a guarantee the operator cannot make.
     fn check_budget(&self, bytes: usize, started: Instant) -> Result<()> {
         if bytes as u64 > self.limits.mem_pool_bytes {
             return Err(BurrmillError::LimitExceeded(format!(
-                "a worker's aggregation table is {} MB, over the per-worker mem_pool_bytes budget \
-                 of {} MB",
+                "the query's aggregation is {} MB, over the mem_pool_bytes budget of {} MB",
                 bytes >> 20,
                 self.limits.mem_pool_bytes >> 20
             )));
@@ -324,14 +312,14 @@ fn utf8_column(batch: &RecordBatch, name: &str) -> Result<StringArray> {
 /// The sum is `Decimal128(38, 0)`, which is exactly i128 - not a float, and not text. uint256 needs
 /// 78 decimal digits and `Decimal256` stops at 76, which is why the *stored* value stays text and
 /// only the fold's output is a decimal.
-pub fn to_record_batch(rows: &[(Box<str>, i128)], plan: &SignedFold) -> Result<RecordBatch> {
+pub fn to_record_batch(rows: &Rows, plan: &SignedFold) -> Result<RecordBatch> {
     let schema = Arc::new(Schema::new(vec![
         Field::new(&plan.key_alias, DataType::Utf8, false),
         Field::new(&plan.sum_alias, DataType::Decimal128(38, 0), false),
     ]));
-    let keys: ArrayRef = Arc::new(StringArray::from_iter_values(rows.iter().map(|(k, _)| k.as_ref())));
+    let keys: ArrayRef = Arc::new(StringArray::from_iter_values(rows.iter().map(|(k, _)| k)));
     let sums: ArrayRef = Arc::new(
-        Decimal128Array::from_iter_values(rows.iter().map(|(_, v)| *v))
+        Decimal128Array::from_iter_values(rows.iter().map(|(_, v)| v))
             .with_precision_and_scale(38, 0)?,
     );
     Ok(RecordBatch::try_new(schema, vec![keys, sums])?)

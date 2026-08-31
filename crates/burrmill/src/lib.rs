@@ -52,6 +52,7 @@ pub mod plan;
 pub mod segment;
 
 pub use error::{BurrmillError, Result};
+pub use exec::agg::Rows;
 pub use exec::{CancelToken, FoldMetrics};
 pub use limits::Limits;
 pub use plan::{Plan, SignedFold};
@@ -67,14 +68,17 @@ use arrow::record_batch::RecordBatch;
 /// cancellation contract belong to the concurrency slice; today a fold's result is a materialised,
 /// canonically ordered table, which is what the folds produce anyway - one row per party.
 pub struct Answer {
-    rows: Vec<(Box<str>, i128)>,
+    rows: Rows,
     plan: Plan,
     metrics: FoldMetrics,
 }
 
 impl Answer {
     /// Key and exact i128 sum, canonically ordered.
-    pub fn rows(&self) -> &[(Box<str>, i128)] {
+    ///
+    /// The keys live in the arenas they were aggregated in rather than in an allocation each, so
+    /// this borrows rather than handing out a `Vec<(Box<str>, i128)>`. See [`Rows`].
+    pub fn rows(&self) -> &Rows {
         &self.rows
     }
 

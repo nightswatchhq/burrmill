@@ -89,6 +89,6 @@ pub fn burrmill(seg: &Path) -> anyhow::Result<(Rows, u128, burrmill::FoldMetrics
     let t = Instant::now();
     let answer = db.query(sql, burrmill::Limits::default())?;
     let ms = t.elapsed().as_millis();
-    let rows = answer.rows().iter().map(|(k, v)| (k.to_string(), *v)).collect();
+    let rows = answer.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
     Ok((rows, ms, answer.metrics()))
 }

@@ -25,8 +25,11 @@
 //!    soon as its rows are produced.
 
 use hashbrown::HashTable;
+use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::hash::Hasher;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use crate::error::Result;
 use crate::exec::checked::checked_add;
@@ -122,143 +125,274 @@ impl PartTable {
         Ok(())
     }
 
-    /// Fold another partition table of the same partition into this one.
-    fn absorb(&mut self, other: &PartTable) -> Result<()> {
-        for e in other.table.iter() {
-            let key = &other.arena[e.off as usize..e.off as usize + e.len as usize];
-            self.add(e.hash, key, e.sum)?;
-        }
-        Ok(())
-    }
 
-    /// Move every entry into `dest`, chosen by radix. Used once, when a table outgrows being one
-    /// table.
-    fn redistribute(self, dest: &mut [PartTable]) -> Result<()> {
-        let Self { arena, table } = self;
-        for e in table.iter() {
-            let key = &arena[e.off as usize..e.off as usize + e.len as usize];
-            dest[partition_of(e.hash)].add(e.hash, key, e.sum)?;
-        }
-        Ok(())
-    }
 
-    /// Consume the table into rows, applying `HAVING SUM(d) <> 0`.
-    pub fn into_rows(self, drop_zero: bool) -> Vec<(Box<str>, i128)> {
+    /// Consume the table into an index over its own arena, applying `HAVING SUM(d) <> 0`.
+    ///
+    /// **The arena is moved out, not copied.** The previous version built a `Box<str>` per group,
+    /// which put a million individual forty-two byte mallocs between the aggregate and the answer -
+    /// the exact per-key allocation this module's header says it removed, reintroduced at the output
+    /// and costing more there than it ever did in the table. The hash table is dropped here, so a
+    /// partition's buckets are freed the moment its rows exist.
+    fn into_index(self, drop_zero: bool) -> (Vec<u8>, Vec<(u32, u32, i128)>) {
         let Self { arena, table } = self;
-        table
+        let idx = table
             .into_iter()
             .filter(|e| !drop_zero || e.sum != 0)
-            .map(|e| {
-                let bytes = &arena[e.off as usize..e.off as usize + e.len as usize];
-                // Lossy would silently corrupt an address. The bytes came out of a Utf8 Arrow array,
-                // so this cannot fail; if it ever did, a mangled key is worse than a panic.
-                let s: Box<str> = std::str::from_utf8(bytes)
-                    .expect("keys are copied verbatim out of a Utf8 array")
-                    .into();
-                (s, e.sum)
-            })
-            .collect()
+            .map(|e| (e.off, e.len, e.sum))
+            .collect();
+        (arena, idx)
     }
 }
 
-/// Entries in one table before it is split into [`PARTITIONS`].
+
+/// One row of the answer: where its key sits in the arena, and the exact sum.
 ///
-/// **Partitioning is not free and it is not always worth it.** Measured on a hundred-segment table:
-/// partitioning unconditionally took the ten-thousand-group case from 0.90x DuckDB to 1.00x, because
-/// sixty-four arenas and sixty-four control-byte arrays for ten thousand entries is sixty-four times
-/// the cache footprint for a table that fits comfortably in L2 as one. It is a large win only once a
-/// single table stops fitting - which is also when the serial merge it avoids starts hurting. So the
-/// table starts as one and promotes itself, the same shape of decision DuckDB makes when it decides
-/// to repartition a growing aggregate.
-const PROMOTE_AT: usize = 32_768;
-
-/// One worker's whole aggregation: one table, or a table per radix partition once it has grown.
-pub struct PartitionedAgg {
-    pub parts: Vec<PartTable>,
-    promoted: bool,
+/// Thirty-two bytes, which is what an `i128`'s alignment costs whatever else is in the struct, and
+/// the same width as the `(Box<str>, i128)` this replaced. The saving is not the width, it is the
+/// million individual mallocs that are no longer behind it.
+#[derive(Clone, Copy)]
+struct Row {
+    off: u32,
+    len: u32,
+    sum: i128,
 }
 
-impl Default for PartitionedAgg {
-    fn default() -> Self {
-        Self { parts: vec![PartTable::default()], promoted: false }
+/// The answer: every key in one contiguous arena, plus an index.
+///
+/// A result set that copies each key into its own allocation carries two copies of the answer at the
+/// moment it can least afford to - peak memory is exactly when the aggregate is complete and the
+/// rows are being built - and then makes the canonical sort chase a pointer per comparison.
+///
+/// **One arena rather than sixty-four.** The first version of this kept the partition arenas where
+/// they were and gave each row a partition index, which avoids a copy and looked obviously better.
+/// It measured 79 ms of output phase against 26 ms, because every comparison in the sort then paid
+/// two bounds-checked indirections instead of one. Concatenating costs a single sequential 42 MB
+/// memcpy and buys the sort contiguous keys. The copy is cheaper than the indirection, which is not
+/// what the first guess said.
+pub struct Rows {
+    arena: Vec<u8>,
+    idx: Vec<Row>,
+}
+
+impl Rows {
+    pub fn len(&self) -> usize {
+        self.idx.len()
     }
-}
 
-impl PartitionedAgg {
+    pub fn is_empty(&self) -> bool {
+        self.idx.is_empty()
+    }
+
     #[inline]
-    pub fn add(&mut self, key: &[u8], v: i128) -> Result<()> {
-        let h = hash_key(key);
-        if self.promoted {
-            return self.parts[partition_of(h)].add(h, key, v);
-        }
-        self.parts[0].add(h, key, v)?;
-        if self.parts[0].len() > PROMOTE_AT {
-            self.promote()?;
-        }
-        Ok(())
+    fn bytes_of<'a>(arena: &'a [u8], r: &Row) -> &'a [u8] {
+        &arena[r.off as usize..r.off as usize + r.len as usize]
     }
 
-    fn promote(&mut self) -> Result<()> {
-        let single = std::mem::take(&mut self.parts).into_iter().next().unwrap_or_default();
-        let mut parts: Vec<PartTable> = (0..PARTITIONS).map(|_| PartTable::default()).collect();
-        single.redistribute(&mut parts)?;
-        self.parts = parts;
-        self.promoted = true;
-        Ok(())
+    #[inline]
+    pub fn key(&self, i: usize) -> &str {
+        // Lossy would silently corrupt an address. The bytes came out of a Utf8 Arrow array, so this
+        // cannot fail; if it ever did, a mangled key is worse than a panic.
+        std::str::from_utf8(Self::bytes_of(&self.arena, &self.idx[i]))
+            .expect("keys are copied verbatim out of a Utf8 array")
     }
 
-    /// Bring an unpromoted aggregation up to [`PARTITIONS`] tables so it can be transposed against
-    /// its peers. A worker that never saw enough groups to promote still has to line up with one
-    /// that did.
+    #[inline]
+    pub fn sum(&self, i: usize) -> i128 {
+        self.idx[i].sum
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, i128)> + '_ {
+        (0..self.len()).map(move |i| (self.key(i), self.idx[i].sum))
+    }
+
+    /// Live bytes of the answer itself. Feeds `max_bytes`, which until now was a field in
+    /// `Limits` that nothing read.
+    pub fn bytes(&self) -> usize {
+        self.arena.capacity() + self.idx.capacity() * std::mem::size_of::<Row>()
+    }
+
+    /// **Canonical ordering, byte-wise ascending on the key** (RFC-0044 §3.3).
     ///
-    /// Only worth calling when *some* worker did promote. Doing it unconditionally cost the
-    /// ten-thousand-group case 1.55x DuckDB against 0.90x, because promoting twelve small tables on
-    /// one thread is a hundred and twenty thousand re-inserts to buy a parallel merge that a
-    /// hundred and twenty thousand entries did not need.
-    pub fn ensure_partitioned(&mut self) -> Result<()> {
-        if !self.promoted {
-            self.promote()?;
+    /// `par_sort_unstable_by` rather than the stable sort on purpose: it is an in-place parallel
+    /// quicksort and allocates no scratch, and the keys are distinct so stability decides nothing.
+    pub fn sort_canonical(&mut self) {
+        let arena = &self.arena;
+        self.idx
+            .par_sort_unstable_by(|a, b| Self::bytes_of(arena, a).cmp(Self::bytes_of(arena, b)));
+    }
+}
+
+/// A row waiting to be applied, keyed into its [`Scatter`]'s own arena.
+#[derive(Clone, Copy)]
+struct Pending {
+    hash: u64,
+    off: u32,
+    len: u32,
+    val: i128,
+}
+
+/// Rows a worker buffers before it takes any lock.
+///
+/// The whole cost of a shared aggregate is the lock, so it has to be amortised over enough rows that
+/// it disappears, and the two regimes this has to survive are very far apart. A synthetic segment is
+/// twenty thousand rows; a real nest segment averages **a hundred and sixteen**, so flushing per
+/// batch would take sixty-four locks for every hundred-odd rows. Buffering across morsels instead
+/// makes the flush rate a function of rows rather than of how the writer happened to cut the files.
+/// At this size a four-million-row fold takes about fifteen thousand lock acquisitions in total,
+/// spread over sixty-four locks.
+const FLUSH_ROWS: usize = 16_384;
+
+/// One worker's outbound buffer: rows sorted into partitions, not yet aggregated.
+///
+/// It owns its key bytes rather than borrowing them from the Arrow batch, which costs one memcpy per
+/// row - about eight milliseconds on two million rows - and buys the freedom to buffer across morsel
+/// boundaries. Borrowing would tie the flush to the lifetime of a batch, and on a real nest a batch
+/// is a hundred rows.
+pub struct Scatter {
+    arena: Vec<u8>,
+    parts: Vec<Vec<Pending>>,
+    pending: usize,
+}
+
+impl Default for Scatter {
+    fn default() -> Self {
+        Self { arena: Vec::new(), parts: (0..PARTITIONS).map(|_| Vec::new()).collect(), pending: 0 }
+    }
+}
+
+impl Scatter {
+    #[inline]
+    pub fn push(&mut self, key: &[u8], val: i128, into: &SharedAgg) -> Result<()> {
+        let hash = hash_key(key);
+        let off = self.arena.len() as u32;
+        self.arena.extend_from_slice(key);
+        self.parts[partition_of(hash)].push(Pending { hash, off, len: key.len() as u32, val });
+        self.pending += 1;
+        if self.pending >= FLUSH_ROWS {
+            self.flush(into)?;
         }
         Ok(())
     }
 
-    pub fn is_promoted(&self) -> bool {
-        self.promoted
+    /// Drain every partition into the shared aggregate, one lock at a time.
+    ///
+    /// Partition `p`'s lock is taken once and held for its whole run of pending rows, so contention
+    /// is a function of flushes rather than of rows. On an error the buffer is left dirty on
+    /// purpose: the query is being abandoned, and tidying state nobody will read is work for its own
+    /// sake.
+    pub fn flush(&mut self, into: &SharedAgg) -> Result<()> {
+        let Self { arena, parts, pending } = self;
+        for (p, rows) in parts.iter_mut().enumerate() {
+            if rows.is_empty() {
+                continue;
+            }
+            // A poisoned lock means another worker panicked mid-flush and this query is already
+            // dying. Take the data anyway rather than panicking a second time and burying the first.
+            let mut table = into.parts[p].lock().unwrap_or_else(|e| e.into_inner());
+            for r in rows.iter() {
+                let key = &arena[r.off as usize..r.off as usize + r.len as usize];
+                table.add(r.hash, key, r.val)?;
+            }
+            into.bytes[p].store(table.bytes(), Ordering::Relaxed);
+            rows.clear();
+        }
+        arena.clear();
+        *pending = 0;
+        Ok(())
+    }
+}
+
+/// The query's whole aggregation: one table per radix partition, shared by every worker.
+///
+/// **This is the fix for slice 1's memory gate and it is a change of shape, not a tuning knob.** The
+/// previous version gave each worker a table spanning the whole key space, so a million distinct
+/// parties meant roughly twelve million live entries to produce a 57 MB answer, and peak RSS came in
+/// at 1008 MB against a 256 MB budget. That is also precisely the DataFusion behaviour RFC-0044 §4.1
+/// criticises by name (#6937, memory growing with core count), so reproducing it was embarrassing as
+/// well as over budget.
+///
+/// Here a key exists in exactly one table no matter how many threads touched it, so the aggregate's
+/// size is a property of the data and not of the machine. What replaces the duplication is a lock
+/// per partition, amortised by [`Scatter`] over [`FLUSH_ROWS`] rows, and the merge phase disappears
+/// entirely: there is nothing left to merge, because the workers were writing into the answer all
+/// along.
+pub struct SharedAgg {
+    parts: Vec<Mutex<PartTable>>,
+    /// Published on flush and read without locking. The budget check runs at every batch boundary
+    /// and must not be the thing that serialises the workers it is measuring.
+    bytes: Vec<AtomicUsize>,
+}
+
+impl Default for SharedAgg {
+    fn default() -> Self {
+        Self {
+            parts: (0..PARTITIONS).map(|_| Mutex::new(PartTable::default())).collect(),
+            bytes: (0..PARTITIONS).map(|_| AtomicUsize::new(0)).collect(),
+        }
+    }
+}
+
+impl SharedAgg {
+    /// Approximate live bytes across every partition. Lock-free, and slightly stale by design - a
+    /// budget checked at batch boundaries cannot be tighter than one batch anyway.
+    pub fn bytes(&self) -> usize {
+        self.bytes.iter().map(|b| b.load(Ordering::Relaxed)).sum()
     }
 
     pub fn len(&self) -> usize {
-        self.parts.iter().map(|p| p.len()).sum()
+        self.parts.iter().map(|m| m.lock().map(|t| t.len()).unwrap_or(0)).sum()
     }
 
-    pub fn bytes(&self) -> usize {
-        self.parts.iter().map(|p| p.bytes()).sum()
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
-}
 
-/// Merge one partition's tables from every worker.
-///
-/// Largest first, and the rest folded into it: merging a large table into a small one would rehash
-/// and recopy the bulk of the entries for nothing.
-pub fn merge_partition(mut tables: Vec<PartTable>) -> Result<PartTable> {
-    if tables.is_empty() {
-        return Ok(PartTable::default());
+    /// Consume the aggregate into rows, one partition per task.
+    ///
+    /// Parallel because a partition's rows never meet another's: the radix split that bounds the
+    /// memory also hands the output phase its parallelism for nothing. Each partition's hash table
+    /// is freed as its index is built, so the buckets and the rows are never both fully live.
+    pub fn into_rows(self, drop_zero: bool) -> Rows {
+        let tables: Vec<PartTable> = self
+            .parts
+            .into_iter()
+            .map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner()))
+            .collect();
+        let per_partition: Vec<(Vec<u8>, Vec<(u32, u32, i128)>)> =
+            tables.into_par_iter().map(|t| t.into_index(drop_zero)).collect();
+
+        let total_rows: usize = per_partition.iter().map(|(_, idx)| idx.len()).sum();
+        let total_keys: usize = per_partition.iter().map(|(a, _)| a.len()).sum();
+
+        // Both allocated exactly once, at the exact size. Each partition's arena is dropped as soon
+        // as it has been copied across, so the two copies of the key bytes only ever overlap by the
+        // partition being moved rather than by the whole answer.
+        let mut arena = Vec::with_capacity(total_keys);
+        let mut idx = Vec::with_capacity(total_rows);
+        for (part_arena, rows) in per_partition {
+            let base = arena.len() as u32;
+            arena.extend_from_slice(&part_arena);
+            drop(part_arena);
+            for (off, len, sum) in rows {
+                idx.push(Row { off: base + off, len, sum });
+            }
+        }
+        Rows { arena, idx }
     }
-    let biggest = tables
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, t)| t.len())
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let mut base = tables.swap_remove(biggest);
-    for t in &tables {
-        base.absorb(t)?;
-    }
-    Ok(base)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Materialise an answer for comparison. Tests want owned, sorted, comparable rows; the
+    /// production path deliberately does not, which is the whole point of [`Rows`].
+    fn collect(rows: &Rows) -> Vec<(String, i128)> {
+        let mut v: Vec<(String, i128)> = rows.iter().map(|(k, s)| (k.to_string(), s)).collect();
+        v.sort();
+        v
+    }
 
     /// The partition split must actually spread. A hash whose entropy is in the low bits would put
     /// every key in partition zero, and nothing downstream would notice - the answer would still be
@@ -279,25 +413,17 @@ mod tests {
     }
 
     #[test]
-    fn absorbing_preserves_exact_sums() {
-        let mut a = PartitionedAgg::default();
-        let mut b = PartitionedAgg::default();
+    fn two_scatters_into_one_aggregate_sum_exactly() {
+        let shared = SharedAgg::default();
+        let mut a = Scatter::default();
+        let mut b = Scatter::default();
         for i in 0..1000u64 {
-            a.add(format!("0x{i:040x}").as_bytes(), i as i128).unwrap();
-            b.add(format!("0x{i:040x}").as_bytes(), -(i as i128) * 2).unwrap();
+            a.push(format!("0x{i:040x}").as_bytes(), i as i128, &shared).unwrap();
+            b.push(format!("0x{i:040x}").as_bytes(), -(i as i128) * 2, &shared).unwrap();
         }
-        a.ensure_partitioned().unwrap();
-        b.ensure_partitioned().unwrap();
-        let mut rows = Vec::new();
-        for p in 0..PARTITIONS {
-            let merged = merge_partition(vec![
-                std::mem::take(&mut a.parts[p]),
-                std::mem::take(&mut b.parts[p]),
-            ])
-            .unwrap();
-            rows.extend(merged.into_rows(true));
-        }
-        rows.sort();
+        a.flush(&shared).unwrap();
+        b.flush(&shared).unwrap();
+        let rows = collect(&shared.into_rows(true));
         assert_eq!(rows.len(), 999, "party zero nets to zero and HAVING drops it");
         for (k, v) in &rows {
             let i = i128::from_str_radix(k.trim_start_matches("0x"), 16).unwrap();
@@ -306,19 +432,76 @@ mod tests {
     }
 
     #[test]
-    fn overflow_in_the_merge_is_refused() {
-        let mut a = PartitionedAgg::default();
-        let mut b = PartitionedAgg::default();
-        a.add(b"0xdead", i128::MAX).unwrap();
-        b.add(b"0xdead", 1).unwrap();
-        a.ensure_partitioned().unwrap();
-        b.ensure_partitioned().unwrap();
-        let p = partition_of(hash_key(b"0xdead"));
-        let err = merge_partition(vec![
-            std::mem::take(&mut a.parts[p]),
-            std::mem::take(&mut b.parts[p]),
-        ])
-        .unwrap_err();
+    fn overflow_across_two_workers_is_refused() {
+        let shared = SharedAgg::default();
+        let mut a = Scatter::default();
+        let mut b = Scatter::default();
+        a.push(b"0xdead", i128::MAX, &shared).unwrap();
+        a.flush(&shared).unwrap();
+        b.push(b"0xdead", 1, &shared).unwrap();
+        let err = b.flush(&shared).unwrap_err();
         assert!(matches!(err, crate::BurrmillError::Overflow(_)), "got {err:?}");
+    }
+
+    /// **The property the shared aggregate exists to preserve.** Many threads writing into one
+    /// partitioned table must produce exactly what one thread writing serially produces - every key,
+    /// every sum, no lost update. A per-partition lock that was merely *mostly* right would show up
+    /// here as a handful of short balances and nowhere else, and a balance that is quietly short is
+    /// the worst failure this project has.
+    #[test]
+    fn concurrent_scatter_equals_serial_scatter() {
+        const KEYS: u64 = 20_000;
+        const WORKERS: usize = 8;
+        const ROUNDS: u64 = 5;
+
+        let serial = SharedAgg::default();
+        let mut one = Scatter::default();
+        for _ in 0..(WORKERS as u64 * ROUNDS) {
+            for i in 0..KEYS {
+                one.push(format!("0x{i:040x}").as_bytes(), i as i128, &serial).unwrap();
+            }
+        }
+        one.flush(&serial).unwrap();
+        let expected = collect(&serial.into_rows(false));
+
+        let shared = SharedAgg::default();
+        std::thread::scope(|s| {
+            for _ in 0..WORKERS {
+                s.spawn(|| {
+                    let mut sc = Scatter::default();
+                    for _ in 0..ROUNDS {
+                        for i in 0..KEYS {
+                            sc.push(format!("0x{i:040x}").as_bytes(), i as i128, &shared).unwrap();
+                        }
+                    }
+                    sc.flush(&shared).unwrap();
+                });
+            }
+        });
+        let got = collect(&shared.into_rows(false));
+
+        assert_eq!(got.len(), KEYS as usize, "every key must survive the exchange");
+        assert_eq!(got, expected, "concurrent and serial aggregation must agree exactly");
+    }
+
+    /// A key must land in exactly one partition table, whoever wrote it. This is the memory claim
+    /// stated as an assertion rather than as a benchmark: if a key could be duplicated across
+    /// tables, the whole point of the change is gone and only a profiler would tell you.
+    #[test]
+    fn a_key_lives_in_exactly_one_partition() {
+        let shared = SharedAgg::default();
+        let sref = &shared;
+        std::thread::scope(|s| {
+            for w in 0..6 {
+                s.spawn(move || {
+                    let mut sc = Scatter::default();
+                    for i in 0..5_000u64 {
+                        sc.push(format!("0x{i:040x}").as_bytes(), w as i128, sref).unwrap();
+                    }
+                    sc.flush(sref).unwrap();
+                });
+            }
+        });
+        assert_eq!(shared.len(), 5_000, "six workers, one table per key, no duplication");
     }
 }
