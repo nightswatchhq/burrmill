@@ -146,32 +146,35 @@ impl PartTable {
 }
 
 
-/// One row of the answer: where its key sits in the arena, and the exact sum.
+/// One row of the answer: which partition arena holds its key, where, and the exact sum.
 ///
 /// Thirty-two bytes, which is what an `i128`'s alignment costs whatever else is in the struct, and
 /// the same width as the `(Box<str>, i128)` this replaced. The saving is not the width, it is the
 /// million individual mallocs that are no longer behind it.
 #[derive(Clone, Copy)]
 struct Row {
+    part: u32,
     off: u32,
     len: u32,
     sum: i128,
 }
 
-/// The answer: every key in one contiguous arena, plus an index.
+/// The answer, keyed into the partition arenas it was aggregated in.
 ///
 /// A result set that copies each key into its own allocation carries two copies of the answer at the
 /// moment it can least afford to - peak memory is exactly when the aggregate is complete and the
 /// rows are being built - and then makes the canonical sort chase a pointer per comparison.
 ///
-/// **One arena rather than sixty-four.** The first version of this kept the partition arenas where
-/// they were and gave each row a partition index, which avoids a copy and looked obviously better.
-/// It measured 79 ms of output phase against 26 ms, because every comparison in the sort then paid
-/// two bounds-checked indirections instead of one. Concatenating costs a single sequential 42 MB
-/// memcpy and buys the sort contiguous keys. The copy is cheaper than the indirection, which is not
-/// what the first guess said.
+/// **The arenas are moved across, never copied, and this took three attempts.** A `Box<str>` per
+/// group was the original and was the worst of both. Concatenating the sixty-four arenas into one
+/// was the second: it sorted fast but allocated a second 42 MB copy of every key and then freed it,
+/// and glibc holds a free that size rather than returning it, so it showed up in peak RSS twice
+/// over. The third keeps the arenas where they are and hoists their base pointers into a flat slice
+/// before sorting, which is the difference between two bounds-checked indirections per comparison
+/// and one against sixty-four pointers that stay in L1. That was the whole reason the second attempt
+/// looked necessary.
 pub struct Rows {
-    arena: Vec<u8>,
+    arenas: Vec<Vec<u8>>,
     idx: Vec<Row>,
 }
 
@@ -185,16 +188,17 @@ impl Rows {
     }
 
     #[inline]
-    fn bytes_of<'a>(arena: &'a [u8], r: &Row) -> &'a [u8] {
-        &arena[r.off as usize..r.off as usize + r.len as usize]
+    fn bytes_at<'a>(bases: &[&'a [u8]], r: &Row) -> &'a [u8] {
+        &bases[r.part as usize][r.off as usize..r.off as usize + r.len as usize]
     }
 
     #[inline]
     pub fn key(&self, i: usize) -> &str {
+        let r = &self.idx[i];
+        let bytes = &self.arenas[r.part as usize][r.off as usize..r.off as usize + r.len as usize];
         // Lossy would silently corrupt an address. The bytes came out of a Utf8 Arrow array, so this
         // cannot fail; if it ever did, a mangled key is worse than a panic.
-        std::str::from_utf8(Self::bytes_of(&self.arena, &self.idx[i]))
-            .expect("keys are copied verbatim out of a Utf8 array")
+        std::str::from_utf8(bytes).expect("keys are copied verbatim out of a Utf8 array")
     }
 
     #[inline]
@@ -209,17 +213,23 @@ impl Rows {
     /// Live bytes of the answer itself. Feeds `max_bytes`, which until now was a field in
     /// `Limits` that nothing read.
     pub fn bytes(&self) -> usize {
-        self.arena.capacity() + self.idx.capacity() * std::mem::size_of::<Row>()
+        self.arenas.iter().map(|a| a.capacity()).sum::<usize>()
+            + self.idx.capacity() * std::mem::size_of::<Row>()
     }
 
     /// **Canonical ordering, byte-wise ascending on the key** (RFC-0044 §3.3).
     ///
+    /// The base pointers are hoisted out of the `Vec<Vec<u8>>` first. Indexing the nested vector
+    /// inside the comparator measured 79 ms against 26 ms for a sort over a single flat arena; a
+    /// sixty-four entry slice of `&[u8]` costs one bounds check and stays resident, and gets that
+    /// back without duplicating 42 MB of keys to do it.
+    ///
     /// `par_sort_unstable_by` rather than the stable sort on purpose: it is an in-place parallel
     /// quicksort and allocates no scratch, and the keys are distinct so stability decides nothing.
     pub fn sort_canonical(&mut self) {
-        let arena = &self.arena;
-        self.idx
-            .par_sort_unstable_by(|a, b| Self::bytes_of(arena, a).cmp(Self::bytes_of(arena, b)));
+        let Self { arenas, idx } = self;
+        let bases: Vec<&[u8]> = arenas.iter().map(|a| a.as_slice()).collect();
+        idx.par_sort_unstable_by(|a, b| Self::bytes_at(&bases, a).cmp(Self::bytes_at(&bases, b)));
     }
 }
 
@@ -375,22 +385,18 @@ impl SharedAgg {
             tables.into_par_iter().map(|t| t.into_index(drop_zero)).collect();
 
         let total_rows: usize = per_partition.iter().map(|(_, idx)| idx.len()).sum();
-        let total_keys: usize = per_partition.iter().map(|(a, _)| a.len()).sum();
 
-        // Both allocated exactly once, at the exact size. Each partition's arena is dropped as soon
-        // as it has been copied across, so the two copies of the key bytes only ever overlap by the
-        // partition being moved rather than by the whole answer.
-        let mut arena = Vec::with_capacity(total_keys);
+        // The index is allocated once at the exact size. The arenas are **moved**, not copied: these
+        // are the same bytes the fold wrote, and the answer simply takes ownership of them.
+        let mut arenas = Vec::with_capacity(per_partition.len());
         let mut idx = Vec::with_capacity(total_rows);
-        for (part_arena, rows) in per_partition {
-            let base = arena.len() as u32;
-            arena.extend_from_slice(&part_arena);
-            drop(part_arena);
+        for (part, (arena, rows)) in per_partition.into_iter().enumerate() {
             for (off, len, sum) in rows {
-                idx.push(Row { off: base + off, len, sum });
+                idx.push(Row { part: part as u32, off, len, sum });
             }
+            arenas.push(arena);
         }
-        Rows { arena, idx }
+        Rows { arenas, idx }
     }
 }
 

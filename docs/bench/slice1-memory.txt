@@ -8,35 +8,68 @@
 #
 # Box:      32-core Debian 6.12, 62 GB. `nproc` = 32.
 # Fixture:  ROWS=2000000 SEGMENTS=100 ADDRS=1000000 -> 989,690 groups, 42-byte keys.
-# Measure:  peak RSS, operator only (no DuckDB linked, no DataFusion session), REPEATS=1.
-#           REPEATS>1 inflates the high-water mark through allocator retention, so it is not used.
+# Measure:  peak RSS, operator only (no DuckDB linked, no DataFusion session), REPEATS=1,
+#           median of three separate processes. Spread is +-3%.
 # before:   commit eec0699, one aggregation per worker, Box<str> per output row.
-# after:    one SharedAgg behind per-partition locks, arena-backed answer.
+# after:    one SharedAgg behind per-partition locks, answer keyed into the moved arenas.
 #
-# Gate: 256 MB.
+# Gate: 256 MB. THE GATE DOES NOT NAME A THREAD COUNT, AND THAT IS NOW THE PROBLEM (roadmap 1.2c).
 
 threads   before_mb   after_mb   before_ms   after_ms   verdict_after
-1         538         156        870         574        pass
-4         557         191        286         223        pass
-8         584         208        192         178        pass
-16        608         264        183         156        FAIL by 3%
-32        769         350        194         167        FAIL by 37%
+1         538         146        870         575        pass
+4         557         186        286         221        pass
+8         584         210        192         185        pass
+16        608         259        183         162        FAIL by 1%
+32        769         349        194         167        FAIL by 36%
 
 # agg_bytes, the aggregation's own live bytes, is 99 MB at EVERY thread count above. That is the
 # whole claim of 1.2 stated as a measurement: the aggregate's size is a property of the data and not
-# of the machine. What still scales with cores is roughly 6 MB per thread of scatter buffer and
-# parquet-rs decode state, and that is what 1.2a has to bound.
-#
-# Two knobs were swept rather than guessed, at 1M groups on 32 threads:
-#
-#   FLUSH_ROWS   rss@32   rss@8    ms
-#   1024         335      204      179
-#   4096         346      204      158   <- taken; better than 16384 on both axes
-#   16384        380      228      161
-#   65536        467      270      177
-#
-#   batch_size   rss@32   rss@8    ms
-#   1024         309      203      173
-#   2048         317      217      154
-#   4096         304      207      163
-#   8192         336      206      164   <- kept; differences are inside run-to-run spread
+# of the machine.
+
+## How much of the peak is memory that is free but not returned
+
+glibc holds a large free rather than handing it back, and the fold frees 57 MB of hash tables at
+once when it turns the aggregate into rows. Forcing prompt return quantifies it. Three runs each,
+stable to +-3 MB:
+
+  threads   default   MALLOC_TRIM_THRESHOLD_=131072   retained
+  8         208       172                             36 MB
+  16        260       213                             47 MB
+  32        338       271                             67 MB
+
+So roughly 35-67 MB of the peak is retention rather than working set, and it grows with thread count.
+It is still RSS and it still counts against the gate; the point of measuring it is that the remaining
+overage is mostly NOT live data, so the next move is not "allocate less" - the tables have to exist
+and then stop existing. A serving binary can remove it with one environment variable. The library
+does not call `malloc_trim` itself: reaching into the host's allocator is not a library's business,
+and it does not exist on macOS.
+
+## REPEATS inflates peak RSS and must be 1 for this measurement
+
+Retention accumulates across folds inside one process. Same code, 1M groups:
+
+  threads   REPEATS=1   REPEATS=3
+  8         208         274
+  16        259         397
+  32        349         507
+
+## Two knobs swept rather than guessed, at 1M groups on 32 threads
+
+  FLUSH_ROWS   rss@32   rss@8    ms
+  1024         335      204      179
+  4096         346      204      158   <- taken; better than 16384 on both axes
+  16384        380      228      161
+  65536        467      270      177
+
+  batch_size   rss@32   rss@8    ms
+  1024         309      203      173
+  2048         317      217      154
+  4096         304      207      163
+  8192         336      206      164   <- kept; differences are inside run-to-run spread
+
+## Decode scales far less than the aggregate does
+
+With a trivial aggregate (509 groups) the same 2M-row scan costs 24 MB on one thread and 64 MB on
+thirty-two - 1.3 MB per thread. At 989,690 groups the per-thread term is 5.6 MB. So the scaling is
+not the Parquet decoder; it is concurrent hash-table growth and the freed memory behind it. That
+measurement is why the fix was not "bound concurrent decode", which was the first guess.

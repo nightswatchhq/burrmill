@@ -39,13 +39,13 @@ machines and two different definitions of "RSS" is not a comparison.
 
 | threads | before | after | before ms | after ms |
 |---:|---:|---:|---:|---:|
-| 1 | 538 MB | **156 MB** | 870 | **574** |
-| 4 | 557 MB | **191 MB** | 286 | **223** |
-| 8 | 584 MB | **208 MB** | 192 | **178** |
-| 16 | 608 MB | **264 MB** | 183 | **156** |
-| 32 | 769 MB | **350 MB** | 194 | **167** |
+| 1 | 538 MB | **146 MB** | 870 | **575** |
+| 4 | 557 MB | **186 MB** | 286 | **221** |
+| 8 | 584 MB | **210 MB** | 192 | **185** |
+| 16 | 608 MB | **259 MB** | 183 | **162** |
+| 32 | 769 MB | **349 MB** | 194 | **167** |
 
-Against the 256 MB gate: **pass at 1, 4 and 8 threads; miss by 3% at 16; miss by 37% at 32.**
+Against the 256 MB gate: **pass at 1, 4 and 8 threads; miss by 1% at 16; miss by 36% at 32.**
 
 Two things follow. The first is that the old code was 538 MB *on a single thread*, so thread
 duplication was never the whole story — the answer's own representation was most of it. The second is
@@ -70,11 +70,14 @@ than rounded away.
    carries one contiguous arena plus a 32-byte index row, and hash tables are freed per partition as
    their rows are built.
 
-   The first attempt kept the sixty-four partition arenas in place and gave each row a partition
-   index, avoiding a copy. It measured **79 ms of output phase against 26 ms**, because every
-   comparison in the canonical sort then paid two bounds-checked indirections instead of one.
-   Concatenating into one arena costs a single sequential 42 MB memcpy and is decisively faster. The
-   copy is cheaper than the indirection, which is not what the first guess said.
+   This took three attempts and the middle one was wrong in an instructive way. Keeping the
+   sixty-four partition arenas in place and giving each row a partition index avoids a copy, and
+   measured **79 ms of output phase against 26 ms** — so the second attempt concatenated them into
+   one arena, which sorted fast and allocated a second 42 MB copy of every key to do it. The third
+   attempt keeps the arenas where they are and hoists their base pointers into a flat `&[&[u8]]`
+   before sorting. That was the entire cause of the 79 ms: indexing a `Vec<Vec<u8>>` inside the
+   comparator is two bounds-checked indirections, and sixty-four pointers in a flat slice stay in L1.
+   The copy was never necessary; it was paying 42 MB to work around a nested index.
 
 2. **The RSS gate harness was measuring itself.** `fold_only` went through `oracles::burrmill`, which
    collects the answer into `Vec<(String, i128)>` for the parity comparison — a million fresh
@@ -93,16 +96,43 @@ than rounded away.
 4. **`max_bytes` was a field in `Limits` that nothing read.** Now enforced against the answer's own
    bytes, which the arena representation makes cheap to compute.
 
-### Where the remaining memory is, at 32 threads
+### Where the remaining memory is, and why the obvious fixes are the wrong ones
 
-156 MB of floor plus roughly 6 MB per thread. The floor is the aggregate (99 MB, measured), the answer
-(42 MB of keys and 32 MB of index) and the decode path. The per-thread part is the scatter buffer and
-Parquet decode; sweeping the flush size 4x moved about 1 MB per thread and sweeping the Arrow batch
-size moved nothing outside run-to-run spread, so the rest is inside parquet-rs.
+Three candidates were on the table for closing the gap. Two were ruled out by measurement rather than
+by argument, which is the only reason the third is worth doing.
 
-Closing it needs a different technique from the one 1.2 named — bounding concurrent decode, pre-sizing
-the partitions from a cardinality estimate, or streaming the output instead of materialising it — and
-that is a decision, not a tuning pass. **Recorded as owed. Slice 1 remains unpassed.**
+**Not streaming the output.** A globally sorted answer needs every row live whatever you do with it,
+so streaming cannot reduce the peak of a `query()` that returns one. It is a serving-path change
+(stage 5), not a memory one.
+
+**Not bounding concurrent decode**, which was the first guess and looked obviously right. With a
+trivial aggregate the same 2M-row scan costs 24 MB on one thread and 64 MB on thirty-two — **1.3 MB
+per thread**. At 989,690 groups the per-thread term is 5.6 MB. The scaling is therefore not the
+Parquet decoder at all; it follows the aggregate's size, which means concurrent hash-table growth and
+the memory freed behind it.
+
+**Most of the remaining overage is free memory that has not been returned.** The fold frees 57 MB of
+hash tables in one go when it turns the aggregate into rows, and glibc holds a free that size rather
+than handing it back. Forcing prompt return quantifies it:
+
+| threads | default | `MALLOC_TRIM_THRESHOLD_=131072` | retained |
+|---:|---:|---:|---:|
+| 8 | 208 MB | 172 MB | 36 MB |
+| 16 | 260 MB | 213 MB | 47 MB |
+| 32 | 338 MB | 271 MB | 67 MB |
+
+It is still RSS and it still counts. The point of measuring it is that the overage is mostly *not*
+live data, so "allocate less" is not the fix — the tables have to exist and then stop existing. A
+serving binary removes it with one environment variable. The library does not call `malloc_trim`
+itself: reaching into the host's allocator is not a library's business, and it does not exist on
+macOS.
+
+Two things also worth knowing about the measurement. `REPEATS` must be 1, because retention
+accumulates across folds inside one process and turns 349 MB into 507. And **the gate does not name a
+thread count**, which is now the load-bearing omission: the same binary passes at eight threads and
+fails at thirty-two. Filed as 1.2c, an RFC amendment rather than a patch.
+
+**Slice 1 remains unpassed.**
 
 ---
 
