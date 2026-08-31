@@ -4,6 +4,57 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Roadmap 1.4 — the seal-layout canary, and the empty answer it found — 2026-08-31
+
+Burrmill has no path dependency on nuthatch by design, which is what makes the pure-Rust dependency
+claim true and lets the two evolve separately. The cost is that a layout change cannot break the
+build; it breaks the *reading*, at runtime, quietly. `tests/seal_layout.rs` writes the contract down
+as assertions instead of as a paragraph, and `BURRMILL_NEST=<dir>` checks it against a real nest.
+
+### It found a real bug before it found anything about layout
+
+Pointing the harness at a table name that does not exist: **DuckDB refused with "No files found that
+match the pattern". Burrmill planned `files=0 morsels=0` and would have returned an empty answer.**
+
+That is the failure this project exists to refuse, in its purest form. "No rows" and "no such table"
+are different answers, and the first is a wrong answer that looks entirely plausible — the balances
+came back empty, so presumably nobody staked anything. A nest keeps all 34 of its tables' segments in
+one directory, so a mistyped name is always exactly one prefix away.
+
+`open_nest_table` now returns `BurrmillError::NoSegments` and names the prefixes that *are* present,
+because the mistake is nearly always a near-miss and a list of neighbours turns a puzzled afternoon
+into a glance.
+
+### The canary's own grammar was wrong, and that is the point of having one
+
+The contract asserted that a table is `<contract>__<event>`. The first run against a real nest failed
+on `grt_total_supply` — a **call** table, sealed from an `eth_call` rather than from a log, carrying
+`calldata` / `result` / `reverted` / `content_address` and no event name at all. The grammar was this
+crate's assumption, not nuthatch's.
+
+Corrected to what is true: `<table>-<hex content hash>.parquet`, where the table part may or may not
+be event-shaped. The event/call mix is now *reported* rather than asserted, because a nest growing a
+third shape is news and not necessarily a fault.
+
+Filed as 1.4a: **the fold has only ever run on event tables.** The signed fold has no meaning on a
+call table, but the catalog will open one quite happily, and the admitted subset should probably have
+an opinion about that.
+
+### The hazard that is not hypothetical
+
+A real nest carries both `staking__stake_delegated` and `staking__stake_delegated_withdrawn`. Bare
+`starts_with` would fold the second into the first and report delegations larger than they are — a
+wrong balance that reads as perfectly reasonable. The trailing separator is what prevents it, which
+makes the separator load-bearing and puts it in a test rather than in a comment.
+
+Verified the canary actually fires: renaming a real segment's separator from `-` to `_` fails it with
+"the layout Burrmill assumes has changed and every table would now resolve to zero segments". A guard
+nobody has watched refuse is not a guard.
+
+Against the real nest: 38,428 segments, 34 tables, all of them open.
+
+---
+
 ## Roadmap 1.1a and 1.1b — making the harness able to catch what it missed — 2026-08-31
 
 Three measurement defects turned up in one day and the parity guard saw none of them, because in

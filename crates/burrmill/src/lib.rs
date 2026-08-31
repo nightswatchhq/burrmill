@@ -124,8 +124,35 @@ impl Burrmill {
     /// Register the segments of a nest table whose files share a `<contract>__<event>-` prefix.
     pub fn open_nest_table(name: &str, segments_dir: &Path, prefix: &str) -> Result<Self> {
         let all = SealedSegments::discover("_all", segments_dir)?;
+        let table = all.with_prefix(name, prefix);
+        // **A table name that matches nothing is refused, not answered emptily.** Found by pointing
+        // the harness at a table that does not exist: DuckDB said "No files found that match the
+        // pattern" and Burrmill planned `files=0 morsels=0` and would have handed back an empty
+        // answer. A nest keeps every table's segments in one directory, so a mistyped table name is
+        // always exactly one prefix away, and an empty balance sheet is a plausible-looking lie.
+        //
+        // The error names what *is* there, because the failure is nearly always a near-miss and a
+        // list of neighbours turns a puzzled afternoon into a glance.
+        if table.files().is_empty() {
+            let mut found: Vec<String> = all
+                .files()
+                .iter()
+                .filter_map(|p| p.file_name().and_then(|f| f.to_str()))
+                .filter_map(|f| f.rsplit_once('-').map(|(head, _)| head.to_string()))
+                .collect();
+            found.sort();
+            found.dedup();
+            let shown: Vec<&str> = found.iter().map(|s| s.as_str()).take(12).collect();
+            return Err(BurrmillError::NoSegments(format!(
+                "no segment in {} matches `{prefix}`; {} table prefixes are present{}: {}",
+                segments_dir.display(),
+                found.len(),
+                if found.len() > shown.len() { ", first 12" } else { "" },
+                shown.join(", ")
+            )));
+        }
         let mut catalog = Catalog::new();
-        catalog.register(all.with_prefix(name, prefix));
+        catalog.register(table);
         Ok(Self { catalog })
     }
 

@@ -677,6 +677,7 @@ dependencies = [
  "rayon",
  "rustc-hash",
  "sqlparser",
+ "tempfile",
 ]
 
 [[package]]

@@ -33,6 +33,15 @@ pub enum BurrmillError {
     Substrate(String),
     /// SQL that will not parse at all.
     Parse(String),
+    /// A table name resolved to **no segments at all**.
+    ///
+    /// This is a refusal rather than an empty answer on purpose, and it was found by pointing the
+    /// harness at a table name that does not exist: DuckDB refused, Burrmill planned `files=0
+    /// morsels=0` and would have returned an empty result. "No rows" and "no such table" are
+    /// different answers, and the first one is a wrong answer that looks entirely plausible - the
+    /// balances came back empty, so presumably nobody staked anything. A nest's segment directory
+    /// holds every table, so a typo in a table name is one prefix away at all times.
+    NoSegments(String),
 }
 
 impl fmt::Display for BurrmillError {
@@ -46,6 +55,7 @@ impl fmt::Display for BurrmillError {
             Self::LimitExceeded(m) => write!(f, "limit exceeded: {m}"),
             Self::Substrate(m) => write!(f, "substrate error: {m}"),
             Self::Parse(m) => write!(f, "parse error: {m}"),
+            Self::NoSegments(m) => write!(f, "no segments: {m}"),
         }
     }
 }

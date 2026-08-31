@@ -21,3 +21,8 @@ rustc-hash.workspace = true
 hashbrown.workspace = true
 rayon.workspace = true
 sqlparser.workspace = true
+
+# Test-only. The seal-layout canary writes throwaway segment directories, and a canary that leaves
+# litter in /tmp on every run is one people start ignoring.
+[dev-dependencies]
+tempfile = "3"
