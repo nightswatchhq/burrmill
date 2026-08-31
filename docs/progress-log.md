@@ -4,6 +4,61 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 4.1b — the subset was not too narrow so much as wrong about SQL — 2026-08-31
+
+Fold sub-plans admitted go **1 of 8 to 6 of 8**. The interesting part is why, because I expected one
+cause and there were three, and two of them were Burrmill being wrong rather than strict.
+
+**`lower()` on the group key** (4 folds). The real ERC-20 balance view is
+`SELECT lower("to") AS addr, ... UNION ALL SELECT lower("from")`, because an address differing only
+in case is the same address and a fold that treats them as two parties reports two half balances with
+no error at all. Admitted as a deliberately tiny allowlist — `lower` and `upper`, one bare column —
+rather than an expression evaluator, because admitting arbitrary expressions is admitting a language.
+The list grows one measured entry at a time.
+
+**An alias demanded where SQL does not name one** (1 fold). A union takes its column names from its
+first arm; later arms are positional. `SELECT indexer, -CAST(tokens AS HUGEINT) FROM ...` is perfectly
+well formed as a second arm, and Burrmill refused it over a rule SQL does not have.
+
+**Later arms checked against the first** (1 fold). Worse than the last one, because I *added* that
+check in 4.1a. A five-table staking fold reads `indexer AS sp` in its first arm and `"serviceProvider"`
+in its third — two different columns holding the same thing, which is precisely what a union is for.
+Even an explicit alias on a later arm is ignored by every engine, so the check is gone.
+
+Both of the last two were **my rules, not the RFC's**, and both were refusing SQL that every other
+engine accepts. "The admitted subset is small" is a design decision; "the admitted subset is wrong
+about the language" is a bug, and it is worth keeping the two apart.
+
+`lower()` and the positional-arm shape are tested by **execution**, not by planning: a test asserts
+that three spellings of one address fold to one party with the right total, and that without `lower()`
+the same data is three parties. The difference is a fact rather than a claim.
+
+No regression: 100-104 ms and 245 MB at a million groups, which is the pre-generalisation baseline to
+the millisecond.
+
+### A correction to yesterday's A4 headline
+
+I wrote that the one-table-read-twice shape "occurs **zero** times in the workload it was built for".
+That was wrong. My detector counted union arms without checking whether the arms read *different*
+tables, so a two-arm fold over one table was filed as multi-table.
+
+Measured properly: of the 8 folds, **4 read one table** — the ERC-20 `Transfer` shape, where one row
+carries both a payer and a payee — and 4 read several. The one-table shape was being refused over a
+`lower()` call, not over its shape.
+
+The substance survives: the multi-table form was entirely unsupported and is 4 of 8. But "the operator
+was built for a shape that does not exist" was too strong, and the tool now reports the split so the
+claim cannot drift again. Sixth measurement fault of the day, and the second I published before
+catching.
+
+### What is left
+
+Two folds, both the same thing: a **composite group key with several aggregates** —
+`SELECT delegator, sp, SUM(tok), SUM(sh) ... GROUP BY 1, 2`. That is a genuinely different operator,
+not another relaxation, and it is filed as 4.1c.
+
+---
+
 ## 4.1a — the fold is n-branch now, and the shape it was built for was the wrong one — 2026-08-31
 
 A4 found that Burrmill folded *one table read twice* and that no real query does. `SignedFold` now

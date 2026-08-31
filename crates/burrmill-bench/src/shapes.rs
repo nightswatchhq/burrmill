@@ -277,6 +277,34 @@ fn as_query(stmt: &Statement) -> Option<String> {
 /// one column crediting and one debiting - and **not one statement in the workload does that**,
 /// because a credit and a debit are different events and therefore different tables. Counting the
 /// general form says how much a small generalisation would be worth.
+fn fold_tables(q: &Query) -> Vec<String> {
+    let mut out = Vec::new();
+    if let SetExpr::Select(sel) = q.body.as_ref() {
+        if let Some(twj) = sel.from.first() {
+            if let TableFactor::Derived { subquery, .. } = &twj.relation {
+                fn walk(s: &SetExpr, out: &mut Vec<String>) {
+                    match s {
+                        SetExpr::Select(sel) => {
+                            if let Some(t) = sel.from.first() {
+                                if let TableFactor::Table { name, .. } = &t.relation {
+                                    out.push(name.to_string().replace('"', ""));
+                                }
+                            }
+                        }
+                        SetExpr::SetOperation { left, right, .. } => {
+                            walk(left, out);
+                            walk(right, out);
+                        }
+                        _ => {}
+                    }
+                }
+                walk(&subquery.body, &mut out);
+            }
+        }
+    }
+    out
+}
+
 fn is_n_table_signed_fold(q: &Query) -> Option<usize> {
     let SetExpr::Select(sel) = q.body.as_ref() else { return None };
     // One grouped SUM over a derived table.
@@ -375,6 +403,7 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
     let mut admitted = 0usize;
     let mut nfold: BTreeMap<usize, usize> = BTreeMap::new();
     let (mut subplans, mut subplans_admitted) = (0usize, 0usize);
+    let (mut one_table, mut multi_table) = (0usize, 0usize);
     let mut subplan_refusals: BTreeMap<String, usize> = BTreeMap::new();
     let mut refusals: BTreeMap<String, usize> = BTreeMap::new();
 
@@ -414,6 +443,13 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
                 for fq in found {
                     let n = is_n_table_signed_fold(fq).unwrap_or(0);
                     *nfold.entry(n).or_default() += 1;
+                    let tables = fold_tables(fq);
+                    let distinct: std::collections::BTreeSet<_> = tables.iter().collect();
+                    if distinct.len() == 1 {
+                        one_table += 1;
+                    } else {
+                        multi_table += 1;
+                    }
                     // **Plan the fold itself, not the statement it sits in.** Every one of these is
                     // a sub-query inside a CTE or a join, so statement-level coverage cannot move
                     // until CTEs and joins are admitted - which is a different item. What an owned
@@ -421,9 +457,16 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
                     subplans += 1;
                     match burrmill::plan::plan(&fq.to_string()) {
                         Ok(_) => subplans_admitted += 1,
-                        Err(e) => *subplan_refusals
-                            .entry(e.to_string().chars().take(72).collect())
-                            .or_default() += 1,
+                        Err(e) => {
+                            if std::env::var("DUMP").is_ok() {
+                                eprintln!("--- refused: {e}
+{}
+", fq);
+                            }
+                            *subplan_refusals
+                                .entry(e.to_string().chars().take(72).collect())
+                                .or_default() += 1
+                        }
                     }
                 }
             }
@@ -483,7 +526,7 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
         nfold.iter().map(|(n, c)| format!("{n}x{c}")).collect::<Vec<_>>()
     );
     println!(
-        "  Burrmill admits only the one-table-read-twice case. Every fold above reads n DIFFERENT\n           tables, because a credit and a debit are different events - so the admitted shape occurs\n           ZERO times in the workload it was built for."
+        "  Of those, {one_table} read ONE table - the ERC-20 `Transfer` shape, where a single row\n           carries both a payer and a payee - and {multi_table} read several, because for most events a\n           credit and a debit are different events and therefore different tables. The first version of\n           this said the one-table shape occurred ZERO times, which was wrong: the detector counted\n           union arms without checking whether the tables differed."
     );
 
     println!("\n  count  plan family");

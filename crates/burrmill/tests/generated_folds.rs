@@ -429,3 +429,96 @@ fn having_still_drops_the_zero_row_in_an_n_table_fold() {
     let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
     assert_eq!(got, vec![("0xaa".into(), 5i128)], "bb nets to zero and is dropped");
 }
+
+/// **`lower()` on the group key, executed** (roadmap 4.1b).
+///
+/// The real ERC-20 balance view is `SELECT lower("to") AS addr, ... UNION ALL SELECT lower("from")`,
+/// because an address differing only in case is the same address. A fold that treated them as two
+/// parties would report two half balances and no error — which is the class of wrong answer this
+/// whole project is arranged against, so it is worth executing rather than merely planning.
+#[test]
+fn lower_on_the_key_folds_mixed_case_addresses_into_one_party() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink = "0x0000000000000000000000000000000000000000".to_string();
+    // The same address in three spellings. Without lower() these are three parties.
+    let a_lc = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd".to_string();
+    let a_uc = "0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD".to_string();
+    let a_mx = "0xAbCdEfabcdefABCDEFabcdefABCDEFabcdefAbCd".to_string();
+    let rows = vec![
+        Row { from: sink.clone(), to: a_lc.clone(), value: "10".into() },
+        Row { from: sink.clone(), to: a_uc.clone(), value: "20".into() },
+        Row { from: a_mx.clone(), to: sink.clone(), value: "5".into() },
+    ];
+    write_segments(dir.path(), &rows, 2);
+
+    let mut catalog = burrmill::Catalog::new();
+    catalog.register(burrmill::SealedSegments::discover("t", dir.path()).unwrap());
+    let db = burrmill::Burrmill::with_threads(catalog, 4).unwrap();
+
+    let sql = "SELECT addr, SUM(d) AS balance FROM (
+                 SELECT lower(\"to\") AS addr,  TRY_CAST(\"value\" AS HUGEINT) AS d FROM t
+                 UNION ALL
+                 SELECT lower(\"from\") AS addr, -TRY_CAST(\"value\" AS HUGEINT) AS d FROM t
+               ) GROUP BY addr HAVING SUM(d) <> 0";
+    let a = db.query(sql, Limits::default()).expect("lower() on the key must plan and run");
+    let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
+    assert_eq!(
+        got,
+        vec![(sink.clone(), -25i128), (a_lc.clone(), 25i128)],
+        "the three spellings are one party: +10 +20 -5 = 25"
+    );
+
+    // And without lower(), the same data is three parties. Stated as a test so the difference is a
+    // fact rather than a claim.
+    let raw = sql.replace("lower(\"to\")", "\"to\"").replace("lower(\"from\")", "\"from\"");
+    let b = db.query(&raw, Limits::default()).unwrap();
+    assert_eq!(b.rows().len(), 4, "without lower(): sink plus three spellings");
+}
+
+/// A five-arm fold whose later arms are **positional** — no aliases, and a different source column
+/// from the first arm. That is ordinary SQL and it is exactly what the real staking view writes.
+#[test]
+fn later_union_arms_are_positional_and_may_name_a_different_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let mk = |name: &str, col: &str, rows: &[(&str, u64)]| {
+        let sub = dir.path().join(name);
+        std::fs::create_dir_all(&sub).unwrap();
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(col, arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("tokens", arrow::datatypes::DataType::Utf8, false),
+        ]));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                std::sync::Arc::new(arrow::array::StringArray::from(
+                    rows.iter().map(|(w, _)| *w).collect::<Vec<_>>(),
+                )),
+                std::sync::Arc::new(arrow::array::StringArray::from(
+                    rows.iter().map(|(_, v)| v.to_string()).collect::<Vec<_>>(),
+                )),
+            ],
+        )
+        .unwrap();
+        let f = std::fs::File::create(sub.join("seg.parquet")).unwrap();
+        let mut w = parquet::arrow::ArrowWriter::try_new(f, schema, None).unwrap();
+        w.write(&batch).unwrap();
+        w.close().unwrap();
+        burrmill::SealedSegments::discover(name, &sub).unwrap()
+    };
+    let mut catalog = burrmill::Catalog::new();
+    catalog.register(mk("legacy_deposited", "indexer", &[("0xaa", 100)]));
+    catalog.register(mk("legacy_withdrawn", "indexer", &[("0xaa", 10)]));
+    catalog.register(mk("horizon_deposited", "serviceProvider", &[("0xaa", 7)]));
+    let db = burrmill::Burrmill::with_threads(catalog, 2).unwrap();
+
+    let sql = "SELECT sp, SUM(t) AS net FROM (
+                 SELECT indexer AS sp, CAST(tokens AS HUGEINT) AS t FROM legacy_deposited
+                 UNION ALL
+                 SELECT indexer, -CAST(tokens AS HUGEINT) FROM legacy_withdrawn
+                 UNION ALL
+                 SELECT \"serviceProvider\", CAST(tokens AS HUGEINT) FROM horizon_deposited
+               ) GROUP BY 1";
+    let a = db.query(sql, Limits::default()).expect("positional arms are ordinary SQL");
+    let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
+    assert_eq!(got, vec![("0xaa".into(), 97i128)], "100 - 10 + 7");
+}

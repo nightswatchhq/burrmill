@@ -46,6 +46,20 @@ pub struct SignedFold {
     pub drop_zero: bool,
 }
 
+/// A function Burrmill will evaluate on the group key.
+///
+/// **A deliberately tiny allowlist, not an expression evaluator.** `lower(addr)` is what a real
+/// balance view over an ERC-20 `Transfer` table is written with, because an address differing only
+/// in case is the same address and a fold that treats them as two parties reports two half balances.
+/// Refusing the whole query over one function call was refusing the workload; admitting arbitrary
+/// expressions would be admitting a language. This is the middle, and it grows one measured entry at
+/// a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyFn {
+    Lower,
+    Upper,
+}
+
 /// One arm of the fold: a table, the column it groups by, the column it sums, and its sign.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoldBranch {
@@ -53,6 +67,8 @@ pub struct FoldBranch {
     pub table: String,
     /// The column this arm contributes as the group key.
     pub key_col: String,
+    /// A function applied to the key before grouping, if the query asked for one.
+    pub key_fn: Option<KeyFn>,
     /// Column holding the exact integer, stored as text because uint256 is 78 decimal digits and
     /// `Decimal256` tops out at 76.
     pub value_col: String,
@@ -154,20 +170,18 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     // The FROM must be a single derived table - the UNION ALL - with no joins.
     let derived = single_derived_table(select)?;
     let arms = union_all_branches(&derived.body)?;
-    let mut matched: Vec<(FoldBranch, String, String)> = Vec::with_capacity(arms.len());
-    for arm in &arms {
-        matched.push(match_branch(arm)?);
+    let mut matched: Vec<(FoldBranch, Option<String>, Option<String>)> = Vec::with_capacity(arms.len());
+    for (i, arm) in arms.iter().enumerate() {
+        matched.push(match_branch(arm, i == 0)?);
     }
-    let (_, first_key_alias, first_value_alias) = &matched[0];
-    let (first_key_alias, first_value_alias) = (first_key_alias.clone(), first_value_alias.clone());
-    for (_, k, v) in &matched {
-        if *k != first_key_alias || *v != first_value_alias {
-            return Err(not_allowed(
-                "every arm of the union must use the same output aliases, or the group key and the \
-                 summed column would not line up",
-            ));
-        }
-    }
+    let (_, k0, v0) = &matched[0];
+    let first_key_alias = k0.clone().expect("the first arm is matched as named");
+    let first_value_alias = v0.clone().expect("the first arm is matched as named");
+    // **Later arms carry no names at all, and that is SQL rather than leniency.** A union's column
+    // names come from its first arm; the rest are positional, and an alias written on one of them is
+    // ignored by every engine. Checking later arms against the first refused a real five-table fold
+    // whose third arm reads `"serviceProvider"` where the first reads `indexer AS sp` - two
+    // different columns holding the same thing, which is exactly what a union is for.
     let branches: Vec<FoldBranch> = matched.into_iter().map(|(b, _, _)| b).collect();
 
     if summed != first_value_alias {
@@ -223,7 +237,10 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
 /// two negative, which is one way to spell a two-table fold and not the only one; with n arms it is
 /// not even well defined. A fold whose arms are all positive is a perfectly ordinary sum over
 /// several tables, and refusing it would be refusing arithmetic.
-fn match_branch(select: &Select) -> Result<(FoldBranch, String, String)> {
+fn match_branch(
+    select: &Select,
+    named: bool,
+) -> Result<(FoldBranch, Option<String>, Option<String>)> {
     reject_unsupported_clauses(select)?;
     if select.projection.len() != 2 {
         return Err(not_allowed(
@@ -236,10 +253,9 @@ fn match_branch(select: &Select) -> Result<(FoldBranch, String, String)> {
             "the arms of the union must be bare projections - no WHERE, GROUP BY or HAVING",
         ));
     }
-    let (key_alias, key_expr) = projection_item(select, 0)?;
-    let key_col = ident_name(key_expr)
-        .ok_or_else(|| not_allowed("the party column must be a bare column reference"))?;
-    let (value_alias, value_expr) = projection_item(select, 1)?;
+    let (key_alias, key_expr) = projection_item_opt(select, 0, named)?;
+    let (key_col, key_fn) = key_column(key_expr)?;
+    let (value_alias, value_expr) = projection_item_opt(select, 1, named)?;
 
     let (negated, inner) = match value_expr {
         Expr::UnaryOp { op: UnaryOperator::Minus, expr } => (true, expr.as_ref()),
@@ -248,7 +264,11 @@ fn match_branch(select: &Select) -> Result<(FoldBranch, String, String)> {
     let (value_col, strict_cast) = cast_to_i128(inner)?;
     let table = single_named_table(select)?;
 
-    Ok((FoldBranch { table, key_col, value_col, negated, strict_cast }, key_alias, value_alias))
+    Ok((
+        FoldBranch { table, key_col, key_fn, value_col, negated, strict_cast },
+        key_alias,
+        value_alias,
+    ))
 }
 
 /// `TRY_CAST(<col> AS HUGEINT | DECIMAL(38,0) | INT128)`.
@@ -391,14 +411,26 @@ fn single_named_table(select: &Select) -> Result<String> {
     }
 }
 
-fn projection_item(select: &Select, i: usize) -> Result<(String, &Expr)> {
+/// One projected item and the name it carries, if any.
+///
+/// `named` is false for arms after the first of a `UNION ALL`. **That is SQL's rule, not a
+/// relaxation**: a union takes its column names from its first arm and later arms are positional, so
+/// `SELECT indexer, -CAST(tokens AS HUGEINT) FROM ...` is perfectly well formed as a second arm and
+/// nonsense as a first. Demanding an alias everywhere refused a five-table fold in the real workload
+/// over a rule SQL does not have.
+fn projection_item_opt(select: &Select, i: usize, named: bool) -> Result<(Option<String>, &Expr)> {
     match select.projection.get(i) {
-        Some(SelectItem::ExprWithAlias { expr, alias }) => Ok((unquote(&alias.to_string()), expr)),
+        Some(SelectItem::ExprWithAlias { expr, alias }) => {
+            // Even an explicit alias on a later arm is ignored by SQL - the union's names come from
+            // the first arm and nowhere else - so it is dropped here rather than checked against.
+            Ok((named.then(|| unquote(&alias.to_string())), expr))
+        }
         Some(SelectItem::UnnamedExpr(expr)) => {
-            let name = ident_name(expr).ok_or_else(|| {
-                not_allowed("a computed projection needs an explicit alias")
-            })?;
-            Ok((name, expr))
+            let name = ident_name(expr);
+            if named && name.is_none() {
+                return Err(not_allowed("a computed projection needs an explicit alias"));
+            }
+            Ok((if named { name } else { None }, expr))
         }
         Some(SelectItem::Wildcard(_)) | Some(SelectItem::QualifiedWildcard(..)) => Err(not_allowed(
             "SELECT * is not admitted: the result schema is part of the contract",
@@ -411,6 +443,42 @@ fn projection_item(select: &Select, i: usize) -> Result<(String, &Expr)> {
         ))),
         None => Err(not_allowed("projection is shorter than the shape requires")),
     }
+}
+
+fn projection_item(select: &Select, i: usize) -> Result<(String, &Expr)> {
+    let (name, expr) = projection_item_opt(select, i, true)?;
+    Ok((name.expect("named = true guarantees a name"), expr))
+}
+
+/// The group key: a bare column, or one wrapped in an admitted function.
+fn key_column(expr: &Expr) -> Result<(String, Option<KeyFn>)> {
+    if let Some(name) = ident_name(expr) {
+        return Ok((name, None));
+    }
+    if let Expr::Function(f) = expr {
+        let key_fn = match f.name.to_string().to_ascii_lowercase().as_str() {
+            "lower" => Some(KeyFn::Lower),
+            "upper" => Some(KeyFn::Upper),
+            _ => None,
+        };
+        if let (Some(kf), sqlparser::ast::FunctionArguments::List(l)) = (key_fn, &f.args) {
+            if l.args.len() == 1 {
+                if let sqlparser::ast::FunctionArg::Unnamed(
+                    sqlparser::ast::FunctionArgExpr::Expr(inner),
+                ) = &l.args[0]
+                {
+                    if let Some(col) = ident_name(inner) {
+                        return Ok((col, Some(kf)));
+                    }
+                }
+            }
+        }
+    }
+    Err(not_allowed(
+        "the party column must be a bare column reference, optionally wrapped in lower() or \
+         upper(). Anything else is an expression, and evaluating arbitrary expressions is a \
+         language rather than a shape",
+    ))
 }
 
 fn strip_varchar_cast(expr: &Expr) -> &Expr {

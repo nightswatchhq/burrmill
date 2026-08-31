@@ -363,6 +363,7 @@ impl<'a> SignedFoldExec<'a> {
             };
 
             let mut parsed: Vec<Option<i128>> = vec![None; value_cols.len()];
+            let mut keybuf = String::new();
             for i in 0..batch.num_rows() {
                 if let (Some(blocks), Some(seam)) = (&blocks, self.seam) {
                     // `None` means nothing has been sealed, so nothing in a segment can be cold.
@@ -409,8 +410,19 @@ impl<'a> SignedFoldExec<'a> {
                         rows_skipped += 1;
                         continue;
                     };
-                    let signed = if b.negated { checked_neg(d, key.value(i))? } else { d };
-                    scatter.push(key.value(i).as_bytes(), signed, shared)?;
+                    let raw = key.value(i);
+                    let signed = if b.negated { checked_neg(d, raw)? } else { d };
+                    // `lower(addr)` is what a real balance view is written with, because an address
+                    // differing only in case is the same address. Applied into a buffer that is
+                    // reused down the batch, so folding a million rows does not mean a million
+                    // little allocations - the sin this aggregation's arena exists to avoid.
+                    match b.key_fn {
+                        None => scatter.push(raw.as_bytes(), signed, shared)?,
+                        Some(kf) => {
+                            fold_case(raw, kf, &mut keybuf);
+                            scatter.push(keybuf.as_bytes(), signed, shared)?;
+                        }
+                    }
                 }
             }
         }
@@ -578,4 +590,25 @@ fn block_column(batch: &RecordBatch, name: &str) -> Result<arrow::array::UInt64A
         .downcast_ref::<arrow::array::UInt64Array>()
         .ok_or_else(|| BurrmillError::Seam(format!("`{name}` will not cast to UInt64")))?
         .clone())
+}
+
+/// Apply an admitted key function into a reusable buffer.
+///
+/// The ASCII fast path is not an approximation: for a string that is entirely ASCII, Unicode case
+/// folding and ASCII case folding agree by definition, and blockchain addresses are hex. Anything
+/// else takes the full Unicode path, because a key that is *nearly* right is a party's balance split
+/// in two.
+#[inline]
+fn fold_case(s: &str, kf: crate::plan::KeyFn, out: &mut String) {
+    out.clear();
+    match (kf, s.is_ascii()) {
+        (crate::plan::KeyFn::Lower, true) => {
+            out.extend(s.chars().map(|c| c.to_ascii_lowercase()))
+        }
+        (crate::plan::KeyFn::Upper, true) => {
+            out.extend(s.chars().map(|c| c.to_ascii_uppercase()))
+        }
+        (crate::plan::KeyFn::Lower, false) => out.extend(s.chars().flat_map(|c| c.to_lowercase())),
+        (crate::plan::KeyFn::Upper, false) => out.extend(s.chars().flat_map(|c| c.to_uppercase())),
+    }
 }

@@ -9,17 +9,17 @@ A4: plan shapes in a real workload
   top 10 shapes cover 35/65 (54%)
   top 5 families cover 31/65 (48%)
 
-  FOLD SUB-PLANS  1/8 admitted  (12%)  <- what an owned
+  FOLD SUB-PLANS  6/8 admitted  (75%)  <- what an owned
            operator can execute today. Statement-level coverage stays at 0/65
            because every one of these folds sits inside a CTE or a join.
-      4  not in the admitted subset: the party column must be a bare column refer
       2  not in the admitted subset: the signed-fold shape projects exactly the k
-      1  not in the admitted subset: a computed projection needs an explicit alia
 
   n-table signed folds: 8/65 statements, branch counts ["2x5", "4x2", "5x1"]
-  Burrmill admits only the one-table-read-twice case. Every fold above reads n DIFFERENT
-           tables, because a credit and a debit are different events - so the admitted shape occurs
-           ZERO times in the workload it was built for.
+  Of those, 4 read ONE table - the ERC-20 `Transfer` shape, where a single row
+           carries both a payer and a payee - and 4 read several, because for most events a
+           credit and a debit are different events and therefore different tables. The first version of
+           this said the one-table shape occurred ZERO times, which was wrong: the detector counted
+           union arms without checking whether the tables differed.
 
   count  plan family
      11  group-by+agg
