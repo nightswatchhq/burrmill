@@ -15,7 +15,8 @@ pub struct Limits {
     pub max_bytes: u64,
     /// Wall-clock budget, checked at morsel boundaries.
     ///
-    /// Cancellation is checked there too, **and at the admission gate** - see .
+    /// Cancellation is checked there too, **and at the admission gate** - see
+    /// `tests/cancellation.rs`.
     /// The gate was not a yield point when it was introduced, which turned §3.5's one-morsel bound
     /// into a queue-length bound for 57 ms of a 110 ms query.
     pub timeout: Duration,
