@@ -1,0 +1,50 @@
+# TRY_CAST and the refusal path.
+#
+# `nulls` holds three rows: "not a number", "", and " 7". The first two cast to NULL and SUM ignores
+# NULLs, so those rows contribute nothing - skipped, never substituted with zero, which would be a
+# different answer that happens to look plausible. The third is seven: DuckDB trims surrounding
+# whitespace and so, since stage 2 found us silently dropping the row, do we.
+
+query TI
+SELECT addr, SUM(d) AS net FROM (
+  SELECT "to" AS addr, TRY_CAST("value" AS HUGEINT) AS d FROM nulls
+  UNION ALL
+  SELECT "from" AS addr, -TRY_CAST("value" AS HUGEINT) AS d FROM nulls
+) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr
+----
+0xaa	-7
+0xbb	7
+
+# i128::MAX is representable exactly. The engine must return it, not approximate it and not refuse
+# it - the whole point of exact integer arithmetic is that the edge is usable.
+
+query TI
+SELECT addr, SUM(d) AS net FROM (
+  SELECT "to" AS addr, TRY_CAST("value" AS HUGEINT) AS d FROM boundary
+  UNION ALL
+  SELECT "from" AS addr, -TRY_CAST("value" AS HUGEINT) AS d FROM boundary
+) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr
+----
+0xaa	-170141183460469231731687303715884105727
+0xbb	170141183460469231731687303715884105727
+
+# One past the edge is refused. A wrapped balance is the worst failure an indexer has, because it
+# looks like a balance.
+#
+# skipif duckdb, and the reason is worth reading rather than trusting. DuckDB does NOT refuse this:
+# with two or more threads AND two or more files - that is, whenever its aggregation actually runs
+# in parallel - it returns i128::MIN for a sum whose true value is i128::MAX + 1. A wrapped balance,
+# silently, on the exact case this corpus exists to pin down. At one thread or one file it refuses
+# correctly, so the check is in the single-threaded path and missing from the partial-aggregate
+# combine. Measured on libduckdb-sys 1.10501.0.
+#
+# `cargo run -p burrmill-bench --release -- duckdb-gaps` reproduces it across the grid. If that ever
+# prints "refused" everywhere, DuckDB has fixed it and this skip should come out.
+
+skipif duckdb
+statement error exact arithmetic overflow
+SELECT addr, SUM(d) AS net FROM (
+  SELECT "to" AS addr, TRY_CAST("value" AS HUGEINT) AS d FROM overflow
+  UNION ALL
+  SELECT "from" AS addr, -TRY_CAST("value" AS HUGEINT) AS d FROM overflow
+) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr

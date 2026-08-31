@@ -24,3 +24,6 @@ tempfile = "3"
 libc = "0.2"
 # For the order-dependence probe, which varies the pool size inside one process.
 rayon.workspace = true
+# The same corpus, pointed at the other engine. This is the reason 2.3 uses a standard format
+# instead of a bespoke one.
+sqllogictest = "0.28"

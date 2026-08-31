@@ -77,6 +77,8 @@ async fn main() -> anyhow::Result<()> {
         Some("nest") => nest(),
         Some("gen") => generated(),
         Some("cast") => cast_table(),
+        Some("slt") => slt_against_duckdb(),
+        Some("duckdb-gaps") => duckdb_gaps(),
         _ => bench().await,
     }
 }
@@ -662,7 +664,7 @@ fn generated() -> anyhow::Result<()> {
             .query(sql, burrmill::Limits::default())
             .map(|a| a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect::<Vec<_>>());
 
-        let glob = format!("{}/t-*.parquet", dir.path().display());
+        let glob = format!("{}/seg-*.parquet", dir.path().display());
         let conn = duckdb::Connection::open_in_memory()?;
         conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"))?;
         let theirs: Result<Vec<(String, i128)>, String> = (|| {
@@ -746,5 +748,171 @@ fn cast_table() -> anyhow::Result<()> {
         println!("{:<45} {ours:<24} {theirs:<24}{mark}", format!("{l:?}"));
     }
     println!("\n{diffs} of {} literals diverge", lits.len());
+    Ok(())
+}
+
+/// Run the `.slt` corpus against **DuckDB** (roadmap 2.3).
+///
+/// The corpus lives in `crates/burrmill/tests/slt/` and runs against Burrmill on every `cargo test`.
+/// This points the identical files at the other engine, and it is the whole reason for using a
+/// standard format rather than inventing one: it turns "these are the answers Burrmill gives" into
+/// "these are the answers the standard gives, and Burrmill gives them too". When DuckDB leaves the
+/// graph in Q4 the files keep working; only this command goes.
+fn slt_against_duckdb() -> anyhow::Result<()> {
+    struct Duck(duckdb::Connection);
+
+    impl sqllogictest::DB for Duck {
+        // `anyhow::Error` does not implement `std::error::Error`, which the trait requires, so the
+        // corpus sees DuckDB's own error type. That is the right one anyway: `statement error`
+        // matches against the engine's message, and wrapping it would blur what was actually said.
+        type Error = duckdb::Error;
+        type ColumnType = sqllogictest::DefaultColumnType;
+
+        fn run(
+            &mut self,
+            sql: &str,
+        ) -> Result<sqllogictest::DBOutput<Self::ColumnType>, duckdb::Error> {
+            // DuckDB's client cannot hand a HUGEINT back directly, so the projection is cast to text
+            // and the harness reads the digits. A mechanical, documented rewrite of the projection
+            // only - the fold, the grouping and the ordering are the corpus's own text.
+            let sql = sql.replace("SUM(d) AS net", "SUM(d)::VARCHAR AS net");
+            let mut stmt = self.0.prepare(&sql)?;
+            let mut out = Vec::new();
+            let mut rows = stmt.query([])?;
+            while let Some(r) = rows.next()? {
+                out.push(vec![r.get::<_, String>(0)?, r.get::<_, String>(1)?]);
+            }
+            Ok(sqllogictest::DBOutput::Rows {
+                types: vec![
+                    sqllogictest::DefaultColumnType::Text,
+                    sqllogictest::DefaultColumnType::Integer,
+                ],
+                rows: out,
+            })
+        }
+
+        fn engine_name(&self) -> &str {
+            "duckdb"
+        }
+    }
+
+    // The same tables the Burrmill runner builds, written as Parquet and exposed as views.
+    let max = "170141183460469231731687303715884105727";
+    let tables: Vec<(&str, Vec<generate::Row>)> = vec![
+        ("t", vec![("0xaa", "0xbb", "100"), ("0xbb", "0xcc", "30"), ("0xaa", "0xcc", "5")]),
+        ("zeros", vec![("0xaa", "0xbb", "50"), ("0xbb", "0xaa", "50")]),
+        ("nulls", vec![("0xaa", "0xbb", "not a number"), ("0xaa", "0xbb", ""), ("0xaa", "0xbb", " 7")]),
+        ("boundary", vec![("0xaa", "0xbb", max)]),
+        ("overflow", vec![("0xaa", "0xbb", max), ("0xaa", "0xbb", "1")]),
+    ]
+    .into_iter()
+    .map(|(n, rows)| {
+        (n, rows.into_iter().map(|(f, t, v)| generate::Row {
+            from: f.into(),
+            to: t.into(),
+            value: v.into(),
+        }).collect())
+    })
+    .collect();
+
+    let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../burrmill/tests/slt");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&corpus)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "slt"))
+        .collect();
+    files.sort();
+    anyhow::ensure!(!files.is_empty(), "no .slt files in {}", corpus.display());
+
+    let mut failures = 0usize;
+    for splits in [1usize, 2, 7] {
+        let root = tempfile::tempdir()?;
+        let conn = duckdb::Connection::open_in_memory()?;
+        for (name, rows) in &tables {
+            let dir = root.path().join(name);
+            std::fs::create_dir_all(&dir)?;
+            generate::write_segments(&dir, rows, splits)?;
+            conn.execute_batch(&format!(
+                "CREATE VIEW {name} AS SELECT * FROM read_parquet('{}/seg-*.parquet');",
+                dir.display()
+            ))?;
+        }
+        for file in &files {
+            let c = conn.try_clone()?;
+            let mut runner =
+                sqllogictest::Runner::new(|| std::future::ready(Ok(Duck(c.try_clone().unwrap()))));
+            if let Err(e) = runner.run_file(file) {
+                failures += 1;
+                eprintln!("DuckDB disagrees with {} at {splits} segment(s):\n{e}", file.display());
+            }
+        }
+    }
+    println!("SLT\tengine=duckdb\tfiles={}\tlayouts=3\tfailures={failures}", files.len());
+    anyhow::ensure!(failures == 0, "{failures} corpus expectation(s) are not the standard's answers");
+    Ok(())
+}
+
+/// **A reproduction of DuckDB silently wrapping a `HUGEINT` sum.** Kept as a command because a
+/// third-party bug this project relies on being absent is a thing to re-check, not to remember.
+///
+/// Two rows credit one party with `i128::MAX` and then `1`. The true sum is `MAX + 1`, which no
+/// 128-bit integer can hold, and DuckDB **returns `i128::MIN`** - a wrapped balance, silently - as
+/// soon as the aggregation genuinely runs in parallel. At one thread, or over a single file, the
+/// same query correctly refuses. The check is in the single-threaded path and missing from the
+/// partial-aggregate combine.
+///
+/// Measured on libduckdb-sys 1.10501.0. This is the "not watertight everywhere" that the README
+/// hedges about, made concrete, and it is precisely the failure mode Burrmill exists to remove: a
+/// wrong number that looks exactly like a balance.
+///
+/// If this ever prints "refused" everywhere, DuckDB has fixed it and the `skipif duckdb` in
+/// `tests/slt/cast_and_overflow.slt` should come out.
+fn duckdb_gaps() -> anyhow::Result<()> {
+    let max = "170141183460469231731687303715884105727";
+    let rows = vec![
+        generate::Row { from: "0xaa".into(), to: "0xbb".into(), value: max.into() },
+        generate::Row { from: "0xaa".into(), to: "0xbb".into(), value: "1".into() },
+    ];
+    println!("true sum for 0xbb is MAX+1 = 170141183460469231731687303715884105728, NOT representable");
+    println!("i128::MIN                  = {}\n", i128::MIN);
+    for threads in [1, 2, 4] {
+        for splits in [1usize, 2, 3] {
+            let root = tempfile::tempdir()?;
+            let dir = root.path().join("overflow");
+            std::fs::create_dir_all(&dir)?;
+            generate::write_segments(&dir, &rows, splits)?;
+            let conn = duckdb::Connection::open_in_memory()?;
+            conn.execute_batch(&format!("SET threads TO {threads};"))?;
+            conn.execute_batch(&format!(
+                "CREATE VIEW overflow AS SELECT * FROM read_parquet('{}/seg-*.parquet');",
+                dir.display()
+            ))?;
+            let sql = "SELECT addr, SUM(d)::VARCHAR AS net FROM (\
+                 SELECT \"to\" AS addr, TRY_CAST(\"value\" AS HUGEINT) AS d FROM overflow \
+                 UNION ALL \
+                 SELECT \"from\" AS addr, -TRY_CAST(\"value\" AS HUGEINT) AS d FROM overflow\
+               ) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr";
+            print!("duck_threads={threads} files={splits} -> ");
+            match conn.prepare(sql).and_then(|mut st| {
+                let mut out = Vec::new();
+                let mut r = st.query([])?;
+                while let Some(row) = r.next()? {
+                    out.push((row.get::<_, String>(0)?, row.get::<_, String>(1)?));
+                }
+                Ok(out)
+            }) {
+                Ok(v) => {
+                    let bb = v.iter().find(|(a, _)| a == "0xbb").map(|(_, n)| n.clone());
+                    match bb.as_deref() {
+                        Some("-170141183460469231731687303715884105728") => {
+                            println!("WRAPPED: 0xbb = i128::MIN, true value is MAX+1")
+                        }
+                        Some(other) => println!("answered 0xbb = {other}"),
+                        None => println!("answered, 0xbb absent: {v:?}"),
+                    }
+                }
+                Err(e) => println!("refused ({})", e.to_string().lines().next().unwrap_or("")),
+            }
+        }
+    }
     Ok(())
 }

@@ -4,6 +4,51 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Stage 2.3 — the corpus, and the DuckDB bug it found on its first run — 2026-08-31
+
+`crates/burrmill/tests/slt/` holds hand-computed expectations over tables small enough to check on
+paper. They run against Burrmill on every `cargo test`, at three segment layouts, and against DuckDB
+through `burrmill-bench slt`. Both green, and mutation-checked: a wrong expected value and a wrong
+expected error both fail it.
+
+Expectations are hand-computed rather than recorded from the engine. A corpus whose answers came out
+of the thing under test is a regression test — worth having, but it cannot tell you the engine was
+ever right.
+
+### Why the standard format, and the vindication
+
+The argument for `sqllogictest` over something bespoke was that DuckDB leaves the graph in Q4, and
+every oracle that *is* DuckDB leaves with it, whereas a `.slt` file can be pointed at either engine
+and keeps working afterwards. That argument paid on the first run, in a way I did not expect.
+
+**DuckDB silently wraps a `HUGEINT` sum.**
+
+Two rows credit one party with `i128::MAX` and then `1`. The true sum is `MAX + 1`, which no 128-bit
+integer holds. DuckDB returns **`i128::MIN`**:
+
+| threads | files | result |
+|---:|---:|---|
+| 1 | 1, 2, 3 | refuses correctly |
+| 2 | 1 | refuses correctly |
+| **2, 4** | **2, 3** | **`0xbb = i128::MIN`, wrapped, silently** |
+
+It only goes wrong once the aggregation genuinely runs in parallel, which needs both more than one
+thread and more than one file. So the check is in the single-threaded path and missing from the
+partial-aggregate combine — and it therefore only misbehaves when the data is big enough to matter.
+Measured on libduckdb-sys 1.10501.0, reproducible with `burrmill-bench duckdb-gaps`.
+
+The README hedged that DuckDB "is not watertight everywhere". It now says exactly where, because a
+hedge with a reproduction attached is an argument and a hedge without one is a hope. This is the
+project's own thesis handed to it by the incumbent: a wrong number that looks exactly like a balance.
+
+The corpus keeps asserting the correct behaviour and carries `skipif duckdb` on that one statement,
+with the reason written at the line rather than in a commit message. If `duckdb-gaps` ever prints
+"refused" everywhere, the skip comes out.
+
+Filed as 2.3a: reporting it upstream is outward-facing, so it is Chief's call rather than mine.
+
+---
+
 ## Stage 2.1 and 2.2 — a generated corpus, and the two things it found — 2026-08-31
 
 Nineteen hand-written refusals and three overflow tests were not a corpus. There are now two oracles,

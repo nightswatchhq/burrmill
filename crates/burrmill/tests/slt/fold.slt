@@ -1,0 +1,29 @@
+# The signed fold, on tables small enough to check by hand. See tests/slt_corpus.rs for the data.
+#
+# aa sends 100 to bb, bb sends 30 to cc, aa sends 5 to cc.
+#   aa = -100 - 5   = -105
+#   bb = +100 - 30  =  +70
+#   cc =  +30 + 5   =  +35
+# The three net to zero, as any closed transfer set must.
+
+query TI
+SELECT addr, SUM(d) AS net FROM (
+  SELECT "to" AS addr, TRY_CAST("value" AS HUGEINT) AS d FROM t
+  UNION ALL
+  SELECT "from" AS addr, -TRY_CAST("value" AS HUGEINT) AS d FROM t
+) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr
+----
+0xaa	-105
+0xbb	70
+0xcc	35
+
+# HAVING SUM(d) <> 0 removes a party, it does not report them as zero. aa and bb send each other 50,
+# so both net to nothing and the answer is empty rather than two zero rows.
+
+query TI
+SELECT addr, SUM(d) AS net FROM (
+  SELECT "to" AS addr, TRY_CAST("value" AS HUGEINT) AS d FROM zeros
+  UNION ALL
+  SELECT "from" AS addr, -TRY_CAST("value" AS HUGEINT) AS d FROM zeros
+) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr
+----

@@ -69,7 +69,8 @@ Owning execution means owning the bugs, and nineteen hand-written refusals are n
 | 2.1a | **Decide the `TRY_CAST` divergence** | 8 of 20 edge literals differed. Whitespace is fixed (` 7` is seven, and we were dropping the row). DuckDB also takes `1e18`, `7.0`, `1_000` and **rounds `7.9` to 8**; adopting silent rounding into an engine whose first claim is exactness needs a decision. `burrmill-bench cast` prints the table |
 | 2.1b | **Decide whether refusal should be order-independent** | Refusal fires when an intermediate partial sum leaves `i128`, not when the answer does: `MAX, +1, -1` sums to exactly `MAX` and is declined. DuckDB does it too, in both directions. Fixing it means accumulating wider than `i128`, which costs 16 bytes per group — against a memory gate already being missed. `tests/generated_folds.rs` pins today's behaviour so a fix inverts a test deliberately |
 | ~~2.2~~ | ~~Overflow reached by generation~~ | **DONE.** 86 of 180 generated cases in the library test reach the refusal path, against a benchmark fixture that topped out at 1e20 and could never have reached it at all |
-| 2.3 | `sqllogictest-rs` corpus | The parity oracle that survives DuckDB's own removal (Q4) |
+| ~~2.3~~ | ~~`sqllogictest-rs` corpus~~ | **DONE 2026-08-31.** Hand-computed expectations in `crates/burrmill/tests/slt/`, run against Burrmill on every `cargo test` at three segment layouts, and against DuckDB via `burrmill-bench slt`. Both green. Mutation-checked. Choosing the standard format paid immediately: pointing the same files at DuckDB is what turned up 2.3a |
+| 2.3a | **Report the DuckDB wrap upstream** | With ≥2 threads and ≥2 files, `SUM(HUGEINT)` returns `i128::MIN` where the true sum is `i128::MAX + 1` — a silently wrapped balance. Refuses correctly at 1 thread or 1 file, so the check is missing from the partial-aggregate combine. Reproduced by `burrmill-bench duckdb-gaps` on libduckdb-sys 1.10501.0. Outward-facing, so Chief's call |
 
 ---
 

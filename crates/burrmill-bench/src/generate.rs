@@ -141,7 +141,7 @@ pub fn write_segments(dir: &Path, rows: &[Row], splits: usize) -> anyhow::Result
                 Arc::new(StringArray::from(chunk.iter().map(|r| r.value.as_str()).collect::<Vec<_>>())),
             ],
         )?;
-        let f = std::fs::File::create(dir.join(format!("t-{i:05}.parquet")))?;
+        let f = std::fs::File::create(dir.join(format!("seg-{i:05}.parquet")))?;
         let mut w = parquet::arrow::ArrowWriter::try_new(f, schema.clone(), None)?;
         w.write(&batch)?;
         w.close()?;
