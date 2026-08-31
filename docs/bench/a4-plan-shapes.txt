@@ -9,10 +9,10 @@ A4: plan shapes in a real workload
   top 10 shapes cover 35/65 (54%)
   top 5 families cover 31/65 (48%)
 
-  FOLD SUB-PLANS  6/8 admitted  (75%)  <- what an owned
+  FOLD SUB-PLANS  7/8 admitted  (88%)  <- what an owned
            operator can execute today. Statement-level coverage stays at 0/65
            because every one of these folds sits inside a CTE or a join.
-      2  not in the admitted subset: the signed-fold shape projects exactly the k
+      1  not in the admitted subset: a group key column must be a bare column, a 
 
   n-table signed folds: 8/65 statements, branch counts ["2x5", "4x2", "5x1"]
   Of those, 4 read ONE table - the ERC-20 `Transfer` shape, where a single row
@@ -80,15 +80,12 @@ A4: plan shapes in a real workload
       1  sum+count+min/max+group-by+order-by+window+cte
 
   count  why the planner refuses
+     24  the second projected column must be SUM(<value>)
      15  common table expressions are not in the admitted subset
-      8  the signed-fold shape projects exactly the key and the sum; got 4 items
-      8  the signed-fold shape projects exactly the key and the sum; got 5 items
-      6  the signed-fold shape projects exactly the key and the sum; got 11 items
+      8  the only admitted aggregate in this shape is SUM; got `max`
       5  the outer query must be a SELECT
-      5  the signed-fold shape projects exactly the key and the sum; got 6 items
-      4  the second projected column must be SUM(<value>)
-      4  the signed-fold shape projects exactly the key and the sum; got 3 items
-      4  the signed-fold shape projects exactly the key and the sum; got 7 items
-      2  the signed-fold shape projects exactly the key and the sum; got 12 items
-      2  the signed-fold shape projects exactly the key and the sum; got 13 items
-      2  the signed-fold shape projects exactly the key and the sum; got 8 items
+      4  SUM must be applied to a bare column
+      3  the only admitted aggregate in this shape is SUM; got `arg_max`
+      2  the only admitted aggregate in this shape is SUM; got `COUNT`
+      2  the only admitted aggregate in this shape is SUM; got `MAX`
+      2  the only admitted aggregate in this shape is SUM; got `round`

@@ -4,6 +4,46 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 4.1c — composite keys, and a decision about what *not* to build — 2026-08-31
+
+Fold sub-plans **6 of 8 to 7 of 8**. The two remaining folds looked like one job and are two, which is
+the whole content of this item.
+
+- `SELECT curator, position, SUM(sig) ... GROUP BY 1, 2` needs a **composite key**. The aggregate
+  never learns about it: the executor builds one byte string and the table hashes bytes.
+- `SELECT delegator, sp, SUM(tok), SUM(sh) ... GROUP BY 1, 2` needs **two aggregates**. `Entry`
+  carries one `i128` and would need m, which is a different operator and a real regression risk to a
+  gate that only just started passing.
+
+So the cheap, safe one is done and the expensive one is filed as 4.1d rather than rushed at the end
+of a long day.
+
+A key column is now a bare column, a string literal, `lower`/`upper` of a column, a cast of one to
+text, or any `||` concatenation of those. The literal is not decoration: the real curation view tags
+its key `'v:' || id` against `'n:' || id`, and without the tag a subgraph's *version* signal and its
+*name* signal - different ids in different namespaces - are added together as one position. A test
+asserts both halves of that: tagged gives two positions of 100 and 5, untagged gives one of 105.
+
+**Length-prefixed, not delimiter-joined.** `("ab","c")` and `("a","bc")` are different keys, and any
+separator byte turns up in data somebody has not shown me yet. Four bytes of length per column beats
+a delimiter and a hope.
+
+### Two things the tests caught, both the same mistake
+
+**The prefix condition did not match the un-prefix condition.** The executor prefixed whenever it
+left the fast path; `Rows` un-prefixed only when the arity was above one. A `lower(addr)` key is
+arity one *and* off the fast path, so the caller got `"*\0\0\00xabcdef..."` with a correct sum
+attached. Two halves of one decision must share one condition.
+
+**And the fast path stopped being fast.** Deciding per row whether an arm was simple, by reaching
+through a `Vec<Vec<Option<StringArray>>>`, cost **20%** of the fold - 100 ms to 120. The split is now
+made once per batch, so an arm with one bare column keeps a `StringArray` in hand and a loop with
+nothing in it but the push. Back to 101-103 ms, and 208 MB on the canonical box with parity verified.
+
+New machinery has to be free when it is not used. It was not, and only the benchmark said so.
+
+---
+
 ## 4.1b — the subset was not too narrow so much as wrong about SQL — 2026-08-31
 
 Fold sub-plans admitted go **1 of 8 to 6 of 8**. The interesting part is why, because I expected one

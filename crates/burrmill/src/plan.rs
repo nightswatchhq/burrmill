@@ -37,8 +37,10 @@ pub struct SignedFold {
     /// the degenerate one - the same table listed twice with opposite signs - and nothing is lost by
     /// generalising, which is usually the sign that the general form was the right one all along.
     pub branches: Vec<FoldBranch>,
-    /// Output name of the group key.
+    /// Output name of the first group key, kept for `EXPLAIN` and single-key callers.
     pub key_alias: String,
+    /// Output names of every group key column, in order.
+    pub key_aliases: Vec<String>,
     /// Output name of the sum.
     pub sum_alias: String,
     /// `HAVING SUM(d) <> 0` - drop the parties that net out. Part of the answer, not a filter we
@@ -60,15 +62,35 @@ pub enum KeyFn {
     Upper,
 }
 
-/// One arm of the fold: a table, the column it groups by, the column it sums, and its sign.
+/// One piece of a group key column.
+///
+/// Real views build keys like `'v:' || CAST("subgraphDeploymentID" AS VARCHAR)` — a tag telling two
+/// namespaces apart, concatenated onto an id. Without it the curation fold would add a subgraph's
+/// *version* signal to its *name* signal as though they were one thing, so the tag is load-bearing
+/// arithmetic rather than presentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyPart {
+    Literal(String),
+    Column { name: String, key_fn: Option<KeyFn> },
+}
+
+/// One projected group-key column, built by concatenating its parts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyCol {
+    pub parts: Vec<KeyPart>,
+}
+
+/// One arm of the fold: a table, the columns it groups by, the column it sums, and its sign.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoldBranch {
     /// Registered table name. Resolved against the catalog, never against a path.
     pub table: String,
-    /// The column this arm contributes as the group key.
-    pub key_col: String,
-    /// A function applied to the key before grouping, if the query asked for one.
-    pub key_fn: Option<KeyFn>,
+    /// The group-key columns this arm contributes, in projection order.
+    ///
+    /// More than one is an ordinary composite `GROUP BY a, b`. The aggregate never learns about it:
+    /// the executor builds one byte string from the parts and the table hashes bytes, so a composite
+    /// key costs the aggregation nothing at all.
+    pub key: Vec<KeyCol>,
     /// Column holding the exact integer, stored as text because uint256 is 78 decimal digits and
     /// `Decimal256` tops out at 76.
     pub value_col: String,
@@ -98,10 +120,24 @@ impl Plan {
                 f.branches
                     .iter()
                     .map(|b| format!(
-                        "{}{}.{}{}",
+                        "{}{}.[{}]{}",
                         if b.negated { "-" } else { "+" },
                         b.table,
-                        b.key_col,
+                        b.key
+                            .iter()
+                            .map(|k| k
+                                .parts
+                                .iter()
+                                .map(|p| match p {
+                                    KeyPart::Literal(l) => format!("{l:?}"),
+                                    KeyPart::Column { name, key_fn: None } => name.clone(),
+                                    KeyPart::Column { name, key_fn: Some(f) } =>
+                                        format!("{f:?}({name})").to_lowercase(),
+                                })
+                                .collect::<Vec<_>>()
+                                .join("||"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
                         if b.strict_cast { " strict" } else { "" }
                     ))
                     .collect::<Vec<_>>()
@@ -155,16 +191,35 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     // The outer projection: the group key, then the sum. A `CAST(SUM(d) AS VARCHAR)` wrapper is
     // accepted and dropped - it exists in the incumbent SQL only because i128 does not survive a
     // client's integer type, and Burrmill returns exact i128 either way.
-    let (key_alias, key_expr) = projection_item(select, 0)?;
-    let (sum_alias, sum_expr) = projection_item(select, 1)?;
-    if select.projection.len() != 2 {
+    // **k group-key columns and one sum.** `GROUP BY a, b` is an ordinary composite key and real
+    // views use it to keep two namespaces apart; the aggregate never learns about it, because the
+    // executor builds one byte string and the table hashes bytes.
+    // Wildcards are checked before arity, so `SELECT * FROM t` says what is actually wrong with it
+    // rather than complaining that one item is not enough. A refusal that misdiagnoses is only
+    // marginally better than no refusal: the reader goes and fixes the wrong thing.
+    if select
+        .projection
+        .iter()
+        .any(|p| matches!(p, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..)))
+    {
+        return Err(not_allowed(
+            "SELECT * is not admitted: the result schema is part of the contract",
+        ));
+    }
+    if select.projection.len() < 2 {
         return Err(not_allowed(format!(
-            "the signed-fold shape projects exactly the key and the sum; got {} items",
+            "the signed-fold shape projects one or more group keys and exactly one sum; got {} items",
             select.projection.len()
         )));
     }
-    let key_ident = ident_name(key_expr)
-        .ok_or_else(|| not_allowed("the first projected column must be the bare group key"))?;
+    let arity = select.projection.len() - 1;
+    let mut key_idents = Vec::with_capacity(arity);
+    for i in 0..arity {
+        let (alias, _) = projection_item(select, i)?;
+        key_idents.push(alias);
+    }
+    let key_alias = key_idents[0].clone();
+    let (sum_alias, sum_expr) = projection_item(select, arity)?;
     let summed = sum_argument(strip_varchar_cast(sum_expr))?;
 
     // The FROM must be a single derived table - the UNION ALL - with no joins.
@@ -172,7 +227,7 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     let arms = union_all_branches(&derived.body)?;
     let mut matched: Vec<(FoldBranch, Option<String>, Option<String>)> = Vec::with_capacity(arms.len());
     for (i, arm) in arms.iter().enumerate() {
-        matched.push(match_branch(arm, i == 0)?);
+        matched.push(match_branch(arm, i == 0, arity)?);
     }
     let (_, k0, v0) = &matched[0];
     let first_key_alias = k0.clone().expect("the first arm is matched as named");
@@ -189,24 +244,38 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
             "SUM must be over the union's value column `{first_value_alias}`; got `{summed}`"
         )));
     }
-    if key_ident != first_key_alias {
+    if key_alias != first_key_alias {
         return Err(not_allowed(format!(
-            "the projected key must be the union's key column `{first_key_alias}`; got `{key_ident}`"
+            "the projected key must be the union's key column `{first_key_alias}`; got `{key_alias}`"
         )));
     }
 
     // GROUP BY the key, and only the key.
     match &select.group_by {
         GroupByExpr::Expressions(exprs, modifiers) if modifiers.is_empty() => {
-            // `GROUP BY 1` as well as `GROUP BY <key>`. The ordinal form is what the real views are
-            // written with (A4), it is unambiguous over a two-column projection, and refusing it
-            // would have been refusing a spelling rather than a shape.
-            let by_name = ident_name(&exprs[0]).as_deref() == Some(key_ident.as_str());
-            let by_ordinal = matches!(&exprs[0], Expr::Value(v) if v.value.to_string() == "1");
-            if exprs.len() != 1 || !(by_name || by_ordinal) {
+            // `GROUP BY 1, 2` as well as `GROUP BY a, b`. The ordinal form is what the real views
+            // are written with (A4) and refusing it would have been refusing a spelling rather than
+            // a shape. Every key column must appear, in order: grouping by fewer would aggregate
+            // over a key the projection still shows, which is a different answer.
+            if exprs.len() != arity {
                 return Err(not_allowed(format!(
-                    "the signed-fold shape groups by `{key_ident}` alone (or by ordinal `1`)"
+                    "the fold groups by all {arity} projected key column(s); got {}",
+                    exprs.len()
                 )));
+            }
+            for (i, e) in exprs.iter().enumerate() {
+                let by_name = ident_name(e).as_deref() == Some(key_idents[i].as_str());
+                let by_ordinal =
+                    matches!(e, Expr::Value(v) if v.value.to_string() == (i + 1).to_string());
+                if !(by_name || by_ordinal) {
+                    return Err(not_allowed(format!(
+                        "the fold groups by its projected key columns in order; item {} is neither \
+                         `{}` nor ordinal `{}`",
+                        i + 1,
+                        key_idents[i],
+                        i + 1
+                    )));
+                }
             }
         }
         _ => return Err(not_allowed("GROUP BY ALL and grouping modifiers are not admitted")),
@@ -228,7 +297,7 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     // silently overruled.
     check_order_by_is_canonical(query, &key_alias)?;
 
-    Ok(SignedFold { branches, key_alias, sum_alias, drop_zero })
+    Ok(SignedFold { branches, key_alias, key_aliases: key_idents, sum_alias, drop_zero })
 }
 
 /// One arm of the union: `SELECT <col> AS addr, [-][TRY_]CAST(<value> AS <128-bit>) AS d FROM <t>`.
@@ -240,12 +309,15 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
 fn match_branch(
     select: &Select,
     named: bool,
+    arity: usize,
 ) -> Result<(FoldBranch, Option<String>, Option<String>)> {
     reject_unsupported_clauses(select)?;
-    if select.projection.len() != 2 {
-        return Err(not_allowed(
-            "each arm of the union projects exactly the party column and the signed value",
-        ));
+    if select.projection.len() != arity + 1 {
+        return Err(not_allowed(format!(
+            "each arm of the union projects the {arity} group key column(s) and the signed value; \
+             got {} items",
+            select.projection.len()
+        )));
     }
     let grouped = !matches!(&select.group_by, GroupByExpr::Expressions(e, m) if e.is_empty() && m.is_empty());
     if grouped || select.having.is_some() || select.selection.is_some() {
@@ -253,9 +325,17 @@ fn match_branch(
             "the arms of the union must be bare projections - no WHERE, GROUP BY or HAVING",
         ));
     }
-    let (key_alias, key_expr) = projection_item_opt(select, 0, named)?;
-    let (key_col, key_fn) = key_column(key_expr)?;
-    let (value_alias, value_expr) = projection_item_opt(select, 1, named)?;
+    // Every item but the last is a key column; the last is the signed value.
+    let mut key = Vec::with_capacity(arity);
+    let mut key_alias = None;
+    for i in 0..arity {
+        let (alias, expr) = projection_item_opt(select, i, named)?;
+        if i == 0 {
+            key_alias = alias;
+        }
+        key.push(key_column(expr)?);
+    }
+    let (value_alias, value_expr) = projection_item_opt(select, arity, named)?;
 
     let (negated, inner) = match value_expr {
         Expr::UnaryOp { op: UnaryOperator::Minus, expr } => (true, expr.as_ref()),
@@ -264,11 +344,7 @@ fn match_branch(
     let (value_col, strict_cast) = cast_to_i128(inner)?;
     let table = single_named_table(select)?;
 
-    Ok((
-        FoldBranch { table, key_col, key_fn, value_col, negated, strict_cast },
-        key_alias,
-        value_alias,
-    ))
+    Ok((FoldBranch { table, key, value_col, negated, strict_cast }, key_alias, value_alias))
 }
 
 /// `TRY_CAST(<col> AS HUGEINT | DECIMAL(38,0) | INT128)`.
@@ -450,10 +526,43 @@ fn projection_item(select: &Select, i: usize) -> Result<(String, &Expr)> {
     Ok((name.expect("named = true guarantees a name"), expr))
 }
 
-/// The group key: a bare column, or one wrapped in an admitted function.
-fn key_column(expr: &Expr) -> Result<(String, Option<KeyFn>)> {
+/// One group-key column: a bare column, a function over one, a string literal, or any `||`
+/// concatenation of those.
+fn key_column(expr: &Expr) -> Result<KeyCol> {
+    let mut parts = Vec::new();
+    key_parts(expr, &mut parts)?;
+    Ok(KeyCol { parts })
+}
+
+fn key_parts(expr: &Expr, out: &mut Vec<KeyPart>) -> Result<()> {
+    // `a || b` in any nesting. Concatenation is associative, so the tree flattens.
+    if let Expr::BinaryOp { left, op: BinaryOperator::StringConcat, right } = expr {
+        key_parts(left, out)?;
+        return key_parts(right, out);
+    }
+    // A cast to text around a key part is a no-op for grouping: the key is bytes either way, and
+    // `CAST(x AS VARCHAR)` is how a view spells "put this id in a string". Refusing it would be
+    // refusing punctuation.
+    if let Expr::Cast { expr: inner, data_type, .. } = expr {
+        if matches!(
+            data_type,
+            DataType::Varchar(_) | DataType::Text | DataType::String(_) | DataType::Char(_)
+        ) {
+            return key_parts(inner, out);
+        }
+    }
+    if let Expr::Nested(inner) = expr {
+        return key_parts(inner, out);
+    }
+    if let Expr::Value(v) = expr {
+        if let sqlparser::ast::Value::SingleQuotedString(lit) = &v.value {
+            out.push(KeyPart::Literal(lit.clone()));
+            return Ok(());
+        }
+    }
     if let Some(name) = ident_name(expr) {
-        return Ok((name, None));
+        out.push(KeyPart::Column { name, key_fn: None });
+        return Ok(());
     }
     if let Expr::Function(f) = expr {
         let key_fn = match f.name.to_string().to_ascii_lowercase().as_str() {
@@ -468,16 +577,17 @@ fn key_column(expr: &Expr) -> Result<(String, Option<KeyFn>)> {
                 ) = &l.args[0]
                 {
                     if let Some(col) = ident_name(inner) {
-                        return Ok((col, Some(kf)));
+                        out.push(KeyPart::Column { name: col, key_fn: Some(kf) });
+                        return Ok(());
                     }
                 }
             }
         }
     }
     Err(not_allowed(
-        "the party column must be a bare column reference, optionally wrapped in lower() or \
-         upper(). Anything else is an expression, and evaluating arbitrary expressions is a \
-         language rather than a shape",
+        "a group key column must be a bare column, a string literal, `lower()`/`upper()` of a \
+         column, a cast of one to text, or a `||` concatenation of those. Anything else is an \
+         expression, and evaluating arbitrary expressions is a language rather than a shape",
     ))
 }
 

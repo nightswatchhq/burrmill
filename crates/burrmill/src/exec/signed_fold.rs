@@ -233,7 +233,7 @@ impl<'a> SignedFoldExec<'a> {
         // There is no merge left to do. The workers wrote into the answer as they went, so this is
         // the output phase and nothing else: each partition's table becomes rows, in parallel,
         // because a partition's keys never meet another's.
-        let mut out = shared.into_rows(self.plan.drop_zero)?;
+        let mut out = shared.into_rows(self.plan.drop_zero, self.plan.key_aliases.len())?;
 
         let groups = out.len();
         if groups as u64 > self.limits.max_rows {
@@ -347,12 +347,37 @@ impl<'a> SignedFoldExec<'a> {
             for n in &value_names {
                 value_cols.push(utf8_column(&batch, n)?);
             }
-            let mut cols: Vec<(&crate::plan::FoldBranch, StringArray, usize)> =
-                Vec::with_capacity(arms.len());
+            // **Simple and composite arms are separated here, not per row.** An arm whose key is
+            // one bare column - which is every arm of the shape the gate measures - keeps a
+            // `StringArray` in hand and a loop with nothing in it but the push. Deciding per row
+            // instead, by reaching through a `Vec<Vec<Option<_>>>`, cost 20% of the fold; the
+            // composite machinery must be free when it is not used.
+            let mut simple: Vec<(&crate::plan::FoldBranch, StringArray, usize)> = Vec::new();
+            let mut composite: Vec<(&crate::plan::FoldBranch, Vec<Vec<Option<StringArray>>>, usize)> =
+                Vec::new();
             for i in arms {
                 let b = &self.plan.branches[*i];
                 let vi = value_names.iter().position(|n| *n == b.value_col).expect("collected above");
-                cols.push((b, utf8_column(&batch, &b.key_col)?, vi));
+                if let (1, [crate::plan::KeyPart::Column { name, key_fn: None }]) =
+                    (b.key.len(), b.key[0].parts.as_slice())
+                {
+                    simple.push((b, utf8_column(&batch, name)?, vi));
+                    continue;
+                }
+                let mut key_arrays = Vec::with_capacity(b.key.len());
+                for kc in &b.key {
+                    let mut parts = Vec::with_capacity(kc.parts.len());
+                    for p in &kc.parts {
+                        parts.push(match p {
+                            crate::plan::KeyPart::Literal(_) => None,
+                            crate::plan::KeyPart::Column { name, .. } => {
+                                Some(utf8_column(&batch, name)?)
+                            }
+                        });
+                    }
+                    key_arrays.push(parts);
+                }
+                composite.push((b, key_arrays, vi));
             }
             // **Cold is filtered to the pinned watermark.** A segment sealed after the snapshot was
             // taken holds rows above it, and those rows are also in the hot half - counting both is
@@ -363,7 +388,8 @@ impl<'a> SignedFoldExec<'a> {
             };
 
             let mut parsed: Vec<Option<i128>> = vec![None; value_cols.len()];
-            let mut keybuf = String::new();
+            let mut keybuf: Vec<u8> = Vec::new();
+            let mut casebuf = String::new();
             for i in 0..batch.num_rows() {
                 if let (Some(blocks), Some(seam)) = (&blocks, self.seam) {
                     // `None` means nothing has been sealed, so nothing in a segment can be cold.
@@ -390,7 +416,8 @@ impl<'a> SignedFoldExec<'a> {
                             // answer silently, which is the thing this engine does not do. A value
                             // carrying digits is refused either way rather than guessed at
                             // (roadmap 2.1a).
-                            let strict = cols.iter().any(|(b, _, x)| *x == vi && b.strict_cast);
+                            let strict = simple.iter().any(|(b, _, x)| *x == vi && b.strict_cast)
+                                || composite.iter().any(|(b, _, x)| *x == vi && b.strict_cast);
                             if strict || looks_numeric(text) {
                                 return Err(BurrmillError::NotAllowed(format!(
                                     "the value {text:?} will not cast to a 128-bit integer{}",
@@ -405,24 +432,68 @@ impl<'a> SignedFoldExec<'a> {
                         }
                     }
                 }
-                for (b, key, vi) in cols.iter() {
+                for (b, key, vi) in simple.iter() {
                     let Some(d) = parsed[*vi] else {
                         rows_skipped += 1;
                         continue;
                     };
                     let raw = key.value(i);
                     let signed = if b.negated { checked_neg(d, raw)? } else { d };
-                    // `lower(addr)` is what a real balance view is written with, because an address
-                    // differing only in case is the same address. Applied into a buffer that is
-                    // reused down the batch, so folding a million rows does not mean a million
-                    // little allocations - the sin this aggregation's arena exists to avoid.
-                    match b.key_fn {
-                        None => scatter.push(raw.as_bytes(), signed, shared)?,
-                        Some(kf) => {
-                            fold_case(raw, kf, &mut keybuf);
-                            scatter.push(keybuf.as_bytes(), signed, shared)?;
+                    scatter.push(raw.as_bytes(), signed, shared)?;
+                }
+                for (b, key_arrays, vi) in composite.iter() {
+                    let Some(d) = parsed[*vi] else {
+                        rows_skipped += 1;
+                        continue;
+                    };
+                    // **Length-prefixed only when the key is actually composite**, because that is
+                    // exactly when `Rows` un-prefixes it. `("ab","c")` and `("a","bc")` are
+                    // different keys and any separator byte can turn up in data somebody has not
+                    // shown me yet, so four bytes of length beats a delimiter and a hope.
+                    //
+                    // Deciding to prefix on "did we take the fast path" instead put a length in
+                    // front of every `lower(addr)` key and handed the caller `"*\0\0\00xabcd..."`.
+                    // Two halves of one decision must share one condition.
+                    let prefixed = b.key.len() > 1;
+                    keybuf.clear();
+                    for (kc, arrays) in b.key.iter().zip(key_arrays.iter()) {
+                        let start = keybuf.len();
+                        if prefixed {
+                            keybuf.extend_from_slice(&[0u8; 4]);
+                        }
+                        for (part, arr) in kc.parts.iter().zip(arrays.iter()) {
+                            match (part, arr) {
+                                (crate::plan::KeyPart::Literal(l), _) => {
+                                    keybuf.extend_from_slice(l.as_bytes())
+                                }
+                                (crate::plan::KeyPart::Column { key_fn, .. }, Some(a)) => {
+                                    let v = a.value(i);
+                                    match key_fn {
+                                        None => keybuf.extend_from_slice(v.as_bytes()),
+                                        Some(kf) => {
+                                            fold_case(v, *kf, &mut casebuf);
+                                            keybuf.extend_from_slice(casebuf.as_bytes());
+                                        }
+                                    }
+                                }
+                                (crate::plan::KeyPart::Column { name, .. }, None) => {
+                                    return Err(BurrmillError::Substrate(format!(
+                                        "the key column `{name}` decoded to nothing"
+                                    )))
+                                }
+                            }
+                        }
+                        if prefixed {
+                            let n = (keybuf.len() - start - 4) as u32;
+                            keybuf[start..start + 4].copy_from_slice(&n.to_le_bytes());
                         }
                     }
+                    let signed = if b.negated {
+                        checked_neg(d, &String::from_utf8_lossy(&keybuf))?
+                    } else {
+                        d
+                    };
+                    scatter.push(&keybuf, signed, shared)?;
                 }
             }
         }
@@ -522,10 +593,16 @@ fn projection_mask(
         return None;
     }
     let index_of = |name: &str| root.get_fields().iter().position(|f| f.name() == name);
-    let mut idx = Vec::with_capacity(2 * arms.len() + 1);
+    let mut idx = Vec::with_capacity(4 * arms.len() + 1);
     for i in arms {
         let b = &plan.branches[*i];
-        idx.push(index_of(&b.key_col)?);
+        for kc in &b.key {
+            for p in &kc.parts {
+                if let crate::plan::KeyPart::Column { name, .. } = p {
+                    idx.push(index_of(name)?);
+                }
+            }
+        }
         idx.push(index_of(&b.value_col)?);
     }
     // The seam needs the block column to filter cold rows to the pinned watermark, so it is part of

@@ -522,3 +522,81 @@ fn later_union_arms_are_positional_and_may_name_a_different_column() {
     let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
     assert_eq!(got, vec![("0xaa".into(), 97i128)], "100 - 10 + 7");
 }
+
+/// **A composite key with a literal tag, executed** (roadmap 4.1c).
+///
+/// The real curation view groups by `curator` and `'v:' || CAST("subgraphDeploymentID" AS VARCHAR)`,
+/// and the tag is arithmetic rather than presentation: without it a subgraph's *version* signal and
+/// its *name* signal, which are different ids in different namespaces, would be added together as
+/// though they were one position. The result would be a number, and it would be wrong.
+#[test]
+fn a_composite_key_with_a_literal_tag_keeps_two_namespaces_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    // Two tables whose ids collide across namespaces on purpose: id "7" means different things.
+    let mk = |name: &str, rows: &[(&str, &str, u64)]| {
+        let sub = dir.path().join(name);
+        std::fs::create_dir_all(&sub).unwrap();
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("curator", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("signal", arrow::datatypes::DataType::Utf8, false),
+        ]));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                std::sync::Arc::new(arrow::array::StringArray::from(
+                    rows.iter().map(|(c, _, _)| *c).collect::<Vec<_>>(),
+                )),
+                std::sync::Arc::new(arrow::array::StringArray::from(
+                    rows.iter().map(|(_, i, _)| *i).collect::<Vec<_>>(),
+                )),
+                std::sync::Arc::new(arrow::array::StringArray::from(
+                    rows.iter().map(|(_, _, v)| v.to_string()).collect::<Vec<_>>(),
+                )),
+            ],
+        )
+        .unwrap();
+        let f = std::fs::File::create(sub.join("seg.parquet")).unwrap();
+        let mut w = parquet::arrow::ArrowWriter::try_new(f, schema, None).unwrap();
+        w.write(&batch).unwrap();
+        w.close().unwrap();
+        burrmill::SealedSegments::discover(name, &sub).unwrap()
+    };
+    let mut catalog = burrmill::Catalog::new();
+    catalog.register(mk("version_signal", &[("0xaa", "7", 100)]));
+    catalog.register(mk("name_signal", &[("0xaa", "7", 5)]));
+    let db = burrmill::Burrmill::with_threads(catalog, 2).unwrap();
+
+    let sql = "SELECT curator, position, SUM(sig) AS net FROM (
+                 SELECT curator, 'v:' || CAST(id AS VARCHAR) AS position,
+                        CAST(signal AS HUGEINT) AS sig FROM version_signal
+                 UNION ALL
+                 SELECT curator, 'n:' || CAST(id AS VARCHAR), CAST(signal AS HUGEINT)
+                 FROM name_signal
+               ) GROUP BY 1, 2";
+    let plan = burrmill::plan::plan(sql).expect("a composite key with a tag must plan");
+    let burrmill::Plan::SignedFold(f) = &plan;
+    assert_eq!(f.key_aliases, vec!["curator".to_string(), "position".to_string()]);
+
+    let a = db.query(sql, Limits::default()).unwrap();
+    let rows = a.rows();
+    assert_eq!(rows.key_arity(), 2);
+    let mut got: Vec<(Vec<String>, i128)> = (0..rows.len())
+        .map(|i| (rows.key_parts(i).map(|s| s.to_string()).collect(), rows.sum(i)))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (vec!["0xaa".to_string(), "n:7".to_string()], 5i128),
+            (vec!["0xaa".to_string(), "v:7".to_string()], 100i128),
+        ],
+        "the same id in two namespaces must stay two positions"
+    );
+
+    // And without the tag, the two collapse into one - which is the wrong answer the tag prevents.
+    let untagged = sql.replace("'v:' || ", "").replace("'n:' || ", "");
+    let b = db.query(&untagged, Limits::default()).unwrap();
+    assert_eq!(b.rows().len(), 1, "without the tag, 100 and 5 become one position of 105");
+    assert_eq!(b.rows().sum(0), 105);
+}

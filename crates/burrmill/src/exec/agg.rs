@@ -256,6 +256,13 @@ struct Row {
 pub struct Rows {
     arenas: Vec<Vec<u8>>,
     idx: Vec<Row>,
+    /// How many group-key columns each key carries.
+    ///
+    /// One is the overwhelming case and its bytes are the key verbatim, so nothing about it changed.
+    /// Above one, the executor writes each column length-prefixed - `("ab","c")` and `("a","bc")`
+    /// are different keys and any separator byte can turn up in data - and [`Rows::key_parts`]
+    /// reads them back.
+    key_arity: usize,
 }
 
 impl std::fmt::Debug for Rows {
@@ -283,13 +290,48 @@ impl Rows {
         &bases[r.part as usize][r.off as usize..r.off as usize + r.len as usize]
     }
 
+    pub fn key_arity(&self) -> usize {
+        self.key_arity
+    }
+
+    #[inline]
+    fn raw(&self, i: usize) -> &[u8] {
+        let r = &self.idx[i];
+        &self.arenas[r.part as usize][r.off as usize..r.off as usize + r.len as usize]
+    }
+
+    /// The group key as text. For a composite key this is the **first** column; use
+    /// [`Rows::key_parts`] for the rest, and [`Rows::key_arity`] to know whether there are any.
     #[inline]
     pub fn key(&self, i: usize) -> &str {
-        let r = &self.idx[i];
-        let bytes = &self.arenas[r.part as usize][r.off as usize..r.off as usize + r.len as usize];
-        // Lossy would silently corrupt an address. The bytes came out of a Utf8 Arrow array, so this
-        // cannot fail; if it ever did, a mangled key is worse than a panic.
-        std::str::from_utf8(bytes).expect("keys are copied verbatim out of a Utf8 array")
+        if self.key_arity <= 1 {
+            // Lossy would silently corrupt an address. The bytes came out of a Utf8 Arrow array, so
+            // this cannot fail; if it ever did, a mangled key is worse than a panic.
+            return std::str::from_utf8(self.raw(i))
+                .expect("keys are copied verbatim out of a Utf8 array");
+        }
+        self.key_parts(i).next().unwrap_or("")
+    }
+
+    /// Every column of a composite group key, in order.
+    pub fn key_parts(&self, i: usize) -> impl Iterator<Item = &str> + '_ {
+        let mut rest = self.raw(i);
+        let single = self.key_arity <= 1;
+        std::iter::from_fn(move || {
+            if rest.is_empty() {
+                return None;
+            }
+            if single {
+                let all = rest;
+                rest = &[];
+                return std::str::from_utf8(all).ok();
+            }
+            let (len_bytes, tail) = rest.split_at(4);
+            let n = u32::from_le_bytes(len_bytes.try_into().expect("split_at(4)")) as usize;
+            let (head, tail) = tail.split_at(n);
+            rest = tail;
+            std::str::from_utf8(head).ok()
+        })
     }
 
     #[inline]
@@ -318,7 +360,7 @@ impl Rows {
     /// `par_sort_unstable_by` rather than the stable sort on purpose: it is an in-place parallel
     /// quicksort and allocates no scratch, and the keys are distinct so stability decides nothing.
     pub fn sort_canonical(&mut self) {
-        let Self { arenas, idx } = self;
+        let Self { arenas, idx, .. } = self;
         let bases: Vec<&[u8]> = arenas.iter().map(|a| a.as_slice()).collect();
         idx.par_sort_unstable_by(|a, b| Self::bytes_at(&bases, a).cmp(Self::bytes_at(&bases, b)));
     }
@@ -469,7 +511,7 @@ impl SharedAgg {
     /// Parallel because a partition's rows never meet another's: the radix split that bounds the
     /// memory also hands the output phase its parallelism for nothing. Each partition's hash table
     /// is freed as its index is built, so the buckets and the rows are never both fully live.
-    pub fn into_rows(self, drop_zero: bool) -> Result<Rows> {
+    pub fn into_rows(self, drop_zero: bool, key_arity: usize) -> Result<Rows> {
         let tables: Vec<PartTable> = self
             .parts
             .into_iter()
@@ -490,7 +532,7 @@ impl SharedAgg {
             }
             arenas.push(arena);
         }
-        Ok(Rows { arenas, idx })
+        Ok(Rows { arenas, idx, key_arity })
     }
 }
 
@@ -535,7 +577,7 @@ mod tests {
         }
         a.flush(&shared).unwrap();
         b.flush(&shared).unwrap();
-        let rows = collect(&shared.into_rows(true).unwrap());
+        let rows = collect(&shared.into_rows(true, 1).unwrap());
         assert_eq!(rows.len(), 999, "party zero nets to zero and HAVING drops it");
         for (k, v) in &rows {
             let i = i128::from_str_radix(k.trim_start_matches("0x"), 16).unwrap();
@@ -560,7 +602,7 @@ mod tests {
         b.push(b"0xdead", 1, &shared).unwrap();
         // The partial sum left the range and was carried, not refused.
         b.flush(&shared).unwrap();
-        let err = shared.into_rows(false).unwrap_err();
+        let err = shared.into_rows(false, 1).unwrap_err();
         assert!(matches!(err, crate::BurrmillError::Overflow(_)), "got {err:?}");
     }
 
@@ -573,7 +615,7 @@ mod tests {
         a.push(b"0xdead", 1, &shared).unwrap();
         a.push(b"0xdead", -1, &shared).unwrap();
         a.flush(&shared).unwrap();
-        let rows = collect(&shared.into_rows(false).unwrap());
+        let rows = collect(&shared.into_rows(false, 1).unwrap());
         assert_eq!(rows, vec![("0xdead".to_string(), i128::MAX)]);
     }
 
@@ -587,7 +629,7 @@ mod tests {
         a.push(b"0xdead", -1, &shared).unwrap();
         a.push(b"0xdead", 1, &shared).unwrap();
         a.flush(&shared).unwrap();
-        let rows = collect(&shared.into_rows(false).unwrap());
+        let rows = collect(&shared.into_rows(false, 1).unwrap());
         assert_eq!(rows, vec![("0xdead".to_string(), i128::MIN + 1)]);
     }
 
@@ -610,7 +652,7 @@ mod tests {
             }
         }
         one.flush(&serial).unwrap();
-        let expected = collect(&serial.into_rows(false).unwrap());
+        let expected = collect(&serial.into_rows(false, 1).unwrap());
 
         let shared = SharedAgg::default();
         std::thread::scope(|s| {
@@ -626,7 +668,7 @@ mod tests {
                 });
             }
         });
-        let got = collect(&shared.into_rows(false).unwrap());
+        let got = collect(&shared.into_rows(false, 1).unwrap());
 
         assert_eq!(got.len(), KEYS as usize, "every key must survive the exchange");
         assert_eq!(got, expected, "concurrent and serial aggregation must agree exactly");

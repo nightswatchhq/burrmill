@@ -306,7 +306,7 @@ impl Burrmill {
                 .branches
                 .iter()
                 .filter(|x| x.table == b.table)
-                .map(|x| format!("{}{}", if x.negated { "-" } else { "+" }, x.key_col))
+                .map(|x| format!("{}{} key cols", if x.negated { "-" } else { "+" }, x.key.len()))
                 .collect();
             scans.push_str(&format!(
                 "\n  SegmentScan table={} files={} morsels={} arms=[{}]",

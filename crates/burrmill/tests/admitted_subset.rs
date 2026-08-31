@@ -29,9 +29,9 @@ fn the_hot_path_shape_is_recognised() {
     assert_eq!(f.branches.len(), 2);
     assert_eq!(f.branches[0].table, "t");
     assert_eq!(f.branches[1].table, "t");
-    assert_eq!(f.branches[0].key_col, "to");
+    assert_eq!(f.branches[0].key.len(), 1, "one group key column");
     assert!(!f.branches[0].negated);
-    assert_eq!(f.branches[1].key_col, "from");
+    assert!(matches!(&f.branches[1].key[0].parts[0], plan::KeyPart::Column { name, .. } if name == "from"));
     assert!(f.branches[1].negated);
     assert_eq!(f.branches[0].value_col, "value");
     assert!(!f.branches[0].strict_cast, "the query used TRY_CAST");
