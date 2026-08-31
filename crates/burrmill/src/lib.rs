@@ -46,6 +46,7 @@
 //! ```
 
 pub mod error;
+pub mod gate;
 pub mod exec;
 pub mod limits;
 pub mod plan;
@@ -56,6 +57,7 @@ pub use error::{BurrmillError, Result};
 pub use exec::agg::Rows;
 pub use exec::{CancelToken, FoldMetrics};
 pub use limits::Limits;
+pub use gate::Gate;
 pub use plan::{Plan, SignedFold};
 pub use seam::{HotRow, HotSnapshot, HotTip, MemoryTip};
 pub use segment::{Catalog, SealedSegments};
@@ -128,6 +130,9 @@ pub struct Burrmill {
     hot: Option<std::sync::Arc<dyn seam::HotTip>>,
     /// The column carrying the block number, used only to apply the seam boundary to cold rows.
     block_col: std::sync::Arc<str>,
+    /// **First-come-first-served admission to the pool.** See [`gate`] for the twenty-second
+    /// starvation this exists to stop.
+    gate: std::sync::Arc<gate::Gate>,
 }
 
 impl std::fmt::Debug for Burrmill {
@@ -137,12 +142,24 @@ impl std::fmt::Debug for Burrmill {
             .field("catalog", &self.catalog)
             .field("threads", &self.pool.current_num_threads())
             .field("hot_tip", &self.hot.is_some())
+            .field("admission_width", &self.gate.width())
             .finish()
     }
 }
 
 /// Build the bounded pool, falling back to the ambient parallelism if the machine has fewer cores
 /// than the budget allows. Failing to build a pool is a substrate problem, not a query problem.
+/// How many queries may occupy the pool at once, given its size.
+///
+/// **Not one, and not unbounded.** Serialising queries would be fair and would throw the throughput
+/// away; letting them all in is what roadmap 5.2 measured as a client waiting twenty seconds for one
+/// query. Half the pool width is the middle: enough queries in flight that rayon spreads workers
+/// between them, few enough that each still gets real parallelism, and always at least two so the
+/// gate is a queue rather than a lock.
+pub fn default_width(pool_threads: usize) -> usize {
+    (pool_threads / 2).max(2)
+}
+
 fn build_pool(threads: usize) -> Result<std::sync::Arc<rayon::ThreadPool>> {
     let want = threads
         .max(1)
@@ -168,19 +185,28 @@ impl Burrmill {
     /// to build and cheap to share, and a per-query pool would put four hundred microseconds of
     /// thread spawning inside a fifteen-millisecond query.
     pub fn with_threads(catalog: Catalog, threads: usize) -> Result<Self> {
-        Ok(Self { catalog, pool: build_pool(threads)?, hot: None, block_col: "block_number".into() })
+        let pool = build_pool(threads)?;
+        let width = default_width(pool.current_num_threads());
+        Ok(Self {
+            catalog,
+            pool,
+            hot: None,
+            block_col: "block_number".into(),
+            gate: std::sync::Arc::new(gate::Gate::new(width)),
+        })
+    }
+
+    /// How many queries may be inside the pool at once. Defaults to [`default_width`].
+    pub fn with_admission_width(mut self, width: usize) -> Self {
+        self.gate = std::sync::Arc::new(gate::Gate::new(width));
+        self
     }
 
     /// Register every `*.parquet` under `dir` as one table.
     pub fn open_segments(name: &str, dir: &Path) -> Result<Self> {
         let mut catalog = Catalog::new();
         catalog.register(SealedSegments::discover(name, dir)?);
-        Ok(Self {
-            catalog,
-            pool: build_pool(Limits::default().max_threads)?,
-            hot: None,
-            block_col: "block_number".into(),
-        })
+        Self::with_threads(catalog, Limits::default().max_threads)
     }
 
     /// Register the segments of a nest table whose files share a `<contract>__<event>-` prefix.
@@ -215,12 +241,7 @@ impl Burrmill {
         }
         let mut catalog = Catalog::new();
         catalog.register(table);
-        Ok(Self {
-            catalog,
-            pool: build_pool(Limits::default().max_threads)?,
-            hot: None,
-            block_col: "block_number".into(),
-        })
+        Self::with_threads(catalog, Limits::default().max_threads)
     }
 
     /// Attach an unsealed tip, making every query a hot∪cold seam (RFC-0044 §3.4).
@@ -278,6 +299,11 @@ impl Burrmill {
         let seam = snapshot
             .as_ref()
             .map(|s| exec::signed_fold::Seam { snapshot: s, block_col: &self.block_col });
+
+        // **Through the gate, then into the pool.** The gate is taken before `install` and released
+        // when this scope ends, so a query waits in a queue whose order we control rather than in
+        // rayon's injector, which under load is a queue nobody is obliged to visit.
+        let _pass = self.gate.enter();
 
         // **Inside the bounded pool.** Peak RSS at a million groups is 147 MB on one thread and 349
         // on thirty-two, so an unbounded fold makes `mem_pool_bytes` a statement about the machine

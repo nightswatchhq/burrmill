@@ -50,3 +50,48 @@ threads=2   32       burrmill         31.9    473.8     2590.1    0.00  0..13  S
 threads=4   32       burrmill         55.4     46.1     2025.8    0.00  0..50  STARVED
 threads=8   32       burrmill         98.8     29.1     1776.6    0.00  0..76  STARVED
 threads=16  32       burrmill        129.0     36.1     1431.8    0.00  0..55  STARVED
+
+############################################################################
+## AFTER roadmap 5.3: a FIFO admission gate in front of the pool
+############################################################################
+#
+# The starvation above was a liveness bug, not a slow queue: at a TWENTY second window one
+# client still completed 220 queries while another completed none, having spent the whole
+# window inside its first query. Rayon's workers prefer their local deques and visit the
+# injector - where every queued query waits - only when those run dry, so under continuous
+# load the queue can go unvisited indefinitely.
+#
+# The gate is a ticket lock with a width: admission is first-come-first-served and at most
+(eval):15: command not found: width
+#  queries are inside the pool. The ordering is ours and therefore knowable.
+
+1        duck_shared      55.9     17.6       20.0    1.00  280..280
+1        duck_multi       54.4     17.9       24.4    1.00  272..272
+1        burrmill         79.9     12.4       14.7    1.00  400..400
+
+4        duck_shared      53.7     17.7       28.4    0.00  0..272  STARVED (slowest warm-up 5062 ms of a 5062 ms window)
+4        duck_multi      109.2     35.9       53.6    0.90  131..145
+4        burrmill         99.2     25.1      275.0    0.83  111..134
+
+16       duck_shared      53.1     17.6       19.1    0.00  0..282  STARVED (slowest warm-up 5311 ms of a 5312 ms window)
+16       duck_multi      154.6     91.5      212.2    0.43  29..68
+16       burrmill         99.1    143.5      369.7    0.85  29..34
+
+32       duck_shared      49.0     17.6       25.3    0.00  0..275  STARVED (slowest warm-up 5612 ms of a 5613 ms window)
+32       duck_multi      170.5    173.6      381.0    0.62  21..34
+32       burrmill         92.6    311.4      532.0    0.82  14..17
+
+peak_rss_mb=471
+
+## What the admission width buys, 32 clients, 8-thread pool
+#
+# Throughput rises 72 -> 98 qps across the entire range while fairness collapses and the tail
+# grows fourfold. Width is not the throughput lever; the default of half the pool sits at the
+# knee. The remaining gap to duck_multi is per-query parallelism, not admission - see 5.3a.
+
+width=1   32       burrmill         72.6    405.9      428.8    0.92  12..13
+width=2   32       burrmill         82.8    353.1      488.4    0.93  13..14
+width=4   32       burrmill         90.0    318.3      622.0    0.81  13..16
+width=8   32       burrmill         93.8    270.7     1153.0    0.53  10..19
+width=16  32       burrmill         99.5    187.0     3023.4    0.00  0..27  STARVED (slowest warm-up 5236 ms of a 5237 ms window)
+width=32  32       burrmill         95.8     29.6     2737.5    0.00  0..91  STARVED (slowest warm-up 5291 ms of a 5291 ms window)

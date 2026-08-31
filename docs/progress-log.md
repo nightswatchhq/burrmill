@@ -4,6 +4,63 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 5.3 — the starvation was a liveness bug, and it is gone — 2026-08-31
+
+5.2 reported clients being "starved". Before building anything I checked whether that was my harness
+rather than the engine, because each client makes an untimed warm-up call and one still inside it
+when the window closes reports zero queries and reads as starved.
+
+It was not the harness, and the check made the finding much sharper. **At a twenty-second window, one
+client completed 220 queries and another completed none** — it spent the entire twenty seconds inside
+its first query. That is not a slow queue. A query that never runs is worse than a query that is
+refused, because the caller has nothing to act on.
+
+### Why, given there is no lock
+
+Rayon's workers prefer their own local deques and look at the injector — where every queued query
+waits — only when those run dry. A query in flight keeps eight workers generating subtasks for each
+other, so under continuous load the injector can go unvisited indefinitely. **A bounded pool with no
+fairness starves the queue exactly as a mutex does**, and the absence of a mutex says nothing
+whatever about it. DuckDB behind its connection mutex fails the same way and for the same reason;
+we had simply assumed the mutex was the mechanism rather than one instance of it.
+
+### The gate
+
+A ticket lock with a width, in front of the pool. A query takes a ticket and proceeds when
+`ticket < released + width`, so admission is first-come-first-served and at most `width` queries are
+inside at once. Nothing clever — the point is that the ordering is **ours** and therefore knowable,
+rather than an emergent property of a work-stealing scheduler that was never asked to be fair.
+
+At 32 clients on the 32-core box:
+
+| | before | after |
+|---|---:|---:|
+| fairness | 0.00, some client served nothing | **0.81, everybody served** |
+| worst-client p99 | 2378 ms | **601 ms** |
+| throughput | 96 qps | 89 qps |
+
+**Liveness restored and the tail cut fourfold, for eight per cent of throughput.** A panicking query
+releases its turn on unwind, tested, because one bad query wedging the serving path would be a worse
+bug than the one being fixed.
+
+### What the width is not
+
+Sweeping admission width from 1 to 32 moves throughput only **72 to 98 qps** while the worst tail
+goes 428 ms to 3023 ms and fairness collapses to zero. So width is a fairness knob, not a throughput
+one, and the default of half the pool sits at the knee. Choosing it by measurement rather than by
+taste is the only reason to trust it.
+
+### What remains, stated precisely
+
+Burrmill is **89 qps at 32 clients against `duck_multi`'s 170**, and admission cannot close that: the
+whole width sweep tops out at 98. DuckDB stops parallelising a query when there are others waiting;
+we split every query across the whole pool regardless of how many are queued behind it. The fix is a
+degree on the fold — `coalesce` producing exactly `d` groups with `d = pool / in_flight` — which caps
+a query's *width* rather than merely limiting how many start. Filed as 5.3a rather than done, because
+it touches the hot path and the gate it would be built on has only just been measured.
+
+---
+
 ## 5.2 — the concurrency claim did not survive being measured — 2026-08-31
 
 RFC-0044 §7 calls this "the easiest headline in the project", on the grounds that DuckDB sits behind

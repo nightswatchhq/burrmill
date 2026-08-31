@@ -86,10 +86,16 @@ Said plainly, because a README that implies otherwise is the thing this project 
   reproduces exactly for DuckDB *embedded the way nuthatch embeds it*, but embedded its own way, one
   database with a connection per client, DuckDB reaches **171 qps at 32 clients where Burrmill
   manages 96**, with a worst-client p99 of **423 ms against 2378 ms**, and it serves every client
-  where Burrmill starves some outright. Burrmill is the faster engine at one client and the slower
-  one at sixteen. The absence of a lock was never the whole story: what replaced it is a bounded
-  shared pool, and a pool that hands every worker to one query at a time starves the queue just as a
-  mutex does. `docs/bench/serve-concurrency.txt` has the numbers;
+  where Burrmill *used to* starve some outright. The absence of a lock was never the whole story:
+  what replaced it is a bounded shared pool, and a pool that hands every worker to one query at a
+  time starves the queue just as a mutex does — at a twenty-second window one client completed 220
+  queries and another completed **none**.
+  
+  A FIFO admission gate (roadmap 5.3) fixed the liveness half: fairness 0.00 to **0.81**, worst-client
+  p99 **2378 ms to 601 ms**, every client served, for eight per cent of throughput. The throughput
+  half is open: Burrmill is 89 qps at 32 clients against DuckDB's 170, because DuckDB stops
+  parallelising a query when others are waiting and Burrmill does not yet.
+  `docs/bench/serve-concurrency.txt` has the numbers;
   `cargo run -p burrmill-bench --release -- serve <fixture>` re-runs them.
 - **No streaming.** A fold's result is materialised; it is one row per party, so this costs little
   today and will be revisited with the async cancellation contract.

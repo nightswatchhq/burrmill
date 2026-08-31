@@ -42,6 +42,8 @@ struct Sample {
     secs: f64,
     /// Queries completed by each client.
     per_client: Vec<usize>,
+    /// How long each client's untimed warm-up call took, in microseconds.
+    warmups: Vec<u64>,
 }
 
 impl Sample {
@@ -99,6 +101,7 @@ fn drive(secs: f64, runners: Vec<Runner>) -> Sample {
     let mut all: Vec<u64> = Vec::new();
     let mut per_client: Vec<usize> = Vec::new();
     let mut by_client: Vec<Vec<u64>> = Vec::new();
+    let mut warmups: Vec<u64> = Vec::new();
     std::thread::scope(|scope| {
         let mut handles = Vec::new();
         for mut run in runners {
@@ -107,30 +110,39 @@ fn drive(secs: f64, runners: Vec<Runner>) -> Sample {
                 let mut lat = Vec::new();
                 // One untimed call first: the first query on a fresh DuckDB connection binds the
                 // Parquet view, and charging that to the sweep would measure setup.
+                //
+                // **How long that took is recorded**, because a client still inside its warm-up when
+                // the window closes reports zero queries and reads as starved. Whether "served
+                // nothing" means "queued behind others" or "never got to start" is the difference
+                // between a real finding and a harness artefact, and the first version of this could
+                // not tell them apart.
+                let warm = Instant::now();
                 let _ = run();
+                let warm_us = warm.elapsed().as_micros() as u64;
                 while !stop.load(Ordering::Relaxed) {
                     let t = Instant::now();
                     let n = run().expect("a client query must not fail mid-sweep");
                     std::hint::black_box(n);
                     lat.push(t.elapsed().as_micros() as u64);
                 }
-                lat
+                (lat, warm_us)
             }));
         }
         // The driver sleeps rather than the clients, so every client is loaded for the same window.
         std::thread::sleep(Duration::from_secs_f64(secs));
         stop.store(true, Ordering::Relaxed);
         for h in handles {
-            let mut lat = h.join().expect("client thread panicked");
+            let (mut lat, warm_us) = h.join().expect("client thread panicked");
             lat.sort_unstable();
             per_client.push(lat.len());
+            warmups.push(warm_us);
             all.extend(lat.iter().copied());
             by_client.push(lat);
         }
     });
     let elapsed = started.elapsed().as_secs_f64();
     all.sort_unstable();
-    Sample { by_client, lat: all, secs: elapsed, per_client }
+    Sample { by_client, lat: all, secs: elapsed, per_client, warmups }
 }
 
 fn duck_conn(dir: &str) -> anyhow::Result<duckdb::Connection> {
@@ -166,7 +178,11 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
     let db = {
         let mut cat = burrmill::Catalog::new();
         cat.register(burrmill::SealedSegments::discover("t", std::path::Path::new(dir))?);
-        burrmill::Burrmill::with_threads(cat, crate::oracles::thread_budget())?
+        let db = burrmill::Burrmill::with_threads(cat, crate::oracles::thread_budget())?;
+        match std::env::var("WIDTH").ok().and_then(|w| w.parse().ok()) {
+            Some(w) => db.with_admission_width(w),
+            None => db,
+        }
     };
     let ours = db.query(SQL, burrmill::Limits::default())?.rows().len();
     let theirs = duck_query(&duck_conn(dir)?)?;
@@ -224,6 +240,14 @@ fn report(clients: usize, engine: &str, s: &Sample) {
         s.pct(0.50),
         s.worst_client_p99(),
         s.fairness(),
-        if lo == 0 { "  STARVED" } else { "" }
+        if lo == 0 {
+            format!(
+                "  STARVED (slowest warm-up {:.0} ms of a {:.0} ms window)",
+                s.warmups.iter().max().copied().unwrap_or(0) as f64 / 1000.0,
+                s.secs * 1000.0
+            )
+        } else {
+            String::new()
+        }
     );
 }
