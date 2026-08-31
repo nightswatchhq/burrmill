@@ -1,0 +1,105 @@
+# Experiment A4: how many plan shapes does a real workload produce? (roadmap 4.1)
+#
+# Sample: every views/*.sql across every nest on this machine. 126 files, 65 statements.
+# Classified two ways, because A4's question gets a different answer depending on what you
+# mean by 'shape', and reporting only the flattering one would be the day's fifth measurement
+# fault:
+#
+#   DISTINCT SHAPES - the exact feature set, including which aggregates and whether there is
+#     a cast. The pessimistic bound.
+#   PLAN FAMILIES - the same statements with the aggregate mix collapsed to 'agg' and
+#     expression-level features dropped, because a grouped aggregate with k accumulators is
+#     one operator parameterised by k, not k operators. The optimistic bound.
+#
+# The coverage ratio is computed by handing every statement to burrmill::plan::plan - the real
+# planner, not a model of it, which could drift.
+#
+# Reproduce: cargo run -p burrmill-bench --release -- shapes ~/Projects
+# 2026-08-31T13:55:24Z
+
+A4: plan shapes in a real workload
+  files          126
+  statements     65
+  unparsed files 0
+  DISTINCT SHAPES  32  (expression granularity: which aggregates, casts, arithmetic)
+  PLAN FAMILIES    22  (what an operator actually has to be)
+  admitted today  0/65  (0.0% coverage ratio, §4.6)
+  top 10 shapes cover 35/65 (54%)
+  top 5 families cover 31/65 (48%)
+
+  n-table signed folds: 8/65 statements, branch counts ["2x5", "4x2", "5x1"]
+  Burrmill admits only the one-table-read-twice case. Every fold above reads n DIFFERENT
+           tables, because a credit and a debit are different events - so the admitted shape occurs
+           ZERO times in the workload it was built for.
+
+  count  plan family
+     11  group-by+agg
+      7  scan-only
+      5  set-op
+      4  cte+set-op+join+distinct+group-by+agg
+      4  join
+      4  set-op+group-by+agg
+      3  cte+set-op+join+window
+      3  join+group-by+agg
+      3  join+subquery+group-by+agg
+      3  set-op+join+group-by+agg
+      3  subquery+agg
+      3  subquery+group-by+agg
+      2  group-by+having+agg
+      2  window
+      1  cte+join+group-by+agg
+      1  cte+set-op+join
+      1  cte+set-op+join+group-by+agg
+      1  cte+set-op+join+window+group-by+agg
+      1  cte+set-op+subquery+group-by+agg
+      1  cte+set-op+window+group-by+agg
+      1  cte+subquery+window
+      1  cte+window+group-by+agg
+
+  count  shape
+      5  cast
+      4  set-op+cast
+      4  set-op+join+sum+count+min/max+group-by+distinct+cte+cast
+      4  set-op+sum+group-by+cast
+      3  join+arith+cast
+      3  join+subquery+count+min/max+group-by+arith+cast
+      3  set-op+join+count+group-by+order-by
+      3  set-op+join+window+cte+case
+      3  subquery+count
+      3  sum+count+group-by
+      2  count+count-distinct+min/max+group-by
+      2  count+min/max+group-by
+      2  count+min/max+group-by+having+order-by
+      2  join+sum+count+count-distinct+min/max+group-by
+      2  scan-only
+      2  subquery+count+group-by+arith
+      2  sum+count+count-distinct+min/max+group-by
+      2  window+cast
+      1  join+min/max+group-by
+      1  join+order-by+arith+cast
+      1  join+sum+count-distinct+group-by+cte+arith+cast
+      1  set-op
+      1  set-op+join+cte+cast
+      1  set-op+join+sum+group-by+order-by+cte+cast
+      1  set-op+join+sum+group-by+window+cte+case+cast
+      1  set-op+min/max+group-by+window+cte+arith+cast
+      1  set-op+subquery+sum+count+count-distinct+min/max+group-by+order-by+limit+cte+cast
+      1  subquery+count+count-distinct+group-by
+      1  subquery+window+cte+cast
+      1  sum+count+group-by+cast
+      1  sum+count+min/max+group-by+cast
+      1  sum+count+min/max+group-by+order-by+window+cte
+
+  count  why the planner refuses
+     15  common table expressions are not in the admitted subset
+      8  the signed-fold shape projects exactly the key and the sum; got 4 items
+      8  the signed-fold shape projects exactly the key and the sum; got 5 items
+      6  the signed-fold shape projects exactly the key and the sum; got 11 items
+      5  the outer query must be a SELECT
+      5  the signed-fold shape projects exactly the key and the sum; got 6 items
+      4  the second projected column must be SUM(<value>)
+      4  the signed-fold shape projects exactly the key and the sum; got 3 items
+      4  the signed-fold shape projects exactly the key and the sum; got 7 items
+      2  the signed-fold shape projects exactly the key and the sum; got 12 items
+      2  the signed-fold shape projects exactly the key and the sum; got 13 items
+      2  the signed-fold shape projects exactly the key and the sum; got 8 items

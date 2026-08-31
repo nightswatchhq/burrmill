@@ -744,8 +744,10 @@ dependencies = [
  "parquet",
  "rayon",
  "sqllogictest",
+ "sqlparser",
  "tempfile",
  "tokio",
+ "walkdir",
 ]
 
 [[package]]

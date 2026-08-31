@@ -4,6 +4,70 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Experiment A4 — the operator is built for a shape the workload does not contain — 2026-08-31
+
+§4.6's coverage ratio is `owned shapes / n`, and the whole "hybrid now, own more later" argument
+turns on whether `n` is a dozen or unbounded. It has been open since the RFC was written. It is
+answerable, and the answer was sitting in the authored views of every nest on this machine.
+
+126 view files, 65 statements, every one parsed and handed to **the real planner** rather than to a
+model of the admitted subset that could drift from it.
+
+### The count
+
+**32 distinct shapes. 22 plan families.** Two numbers because the question means two things, and
+publishing only the flattering one would have been the day's fifth measurement fault. A shape is the
+exact feature set; a family collapses the aggregate mix, because a grouped aggregate carrying k
+accumulators is one operator parameterised by k rather than k operators.
+
+Neither is a dozen. The top five families cover 48% and the tail is long. But the 22 families are
+compositions of just **nine primitives** — cte, set-op, join, subquery, window, distinct, group-by,
+having, agg — which argues for owning operators that compose rather than enumerating plan patterns.
+That is what §4.3 already says; what A4 adds is that the planner cannot be a lookup table of shapes.
+
+### The finding that matters more than the count
+
+**Coverage ratio: 0 of 65.**
+
+Burrmill's admitted shape is "one table read twice, one column crediting and one debiting the same
+signed value". Every single `UNION ALL` in the entire workload reads **different** tables:
+
+```sql
+SELECT dep, SUM(tok) FROM (
+  SELECT "subgraphDeploymentID" AS dep,  CAST(tokens AS HUGEINT) AS tok FROM curation__signalled
+  UNION ALL
+  SELECT "subgraphDeploymentID" AS dep, -CAST(tokens AS HUGEINT) AS tok FROM curation__burned
+) GROUP BY 1
+```
+
+Which is obvious in hindsight and was not obvious in advance: **a credit and a debit are different
+events, so they are different tables.** A single table carrying both a payer and a payee column is
+the ERC-20 `Transfer` shape, and the authored views do not fold one.
+
+**8 of 65 statements are n-table signed folds** — five with two branches, two with four, one with
+five. The one-table case Burrmill owns occurs **zero** times. The benchmark query came from the #987
+spike rather than from the workload, and nobody checked.
+
+Generalising `SignedFold` from one table to n branches takes coverage from 0% to about 12% and throws
+nothing away: the current shape is the degenerate case of the general one, and the machinery for two
+pipelines into one aggregate was built last item for the seam.
+
+After that, **projection width is the next lever**: 41 of 65 refusals are "projects exactly the key
+and the sum; got N items", with N from 3 to 13.
+
+### The measurement nearly lied, again
+
+The first version of the fold detector reported **0 of 65** n-table folds. It looked only at the
+top-level query body, and the fold above lives inside a `WITH` binding. Publishing 0 would have been
+wrong and rather damaging.
+
+It was caught by having read one of the files first and disbelieving the tool when it disagreed. That
+is the fifth measurement fault in a day and the first one caught *before* anything was published,
+which is at least the right direction. **A measurement that finds nothing is the one to distrust
+hardest.**
+
+---
+
 ## Stage 3 — the seam, and the three bugs COR-1 found — 2026-08-31
 
 The highest-risk invariant in the design, M/Critical in the risks table. It holds, and getting there

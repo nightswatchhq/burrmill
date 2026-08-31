@@ -93,7 +93,9 @@ publishing that honestly from the start is what stops "hybrid now, own more late
 
 | # | Work | Done when |
 |---|---|---|
-| 4.1 | Count the plan shapes a real workload produces (experiment A4) | The number decides whether the owned planner is a dozen patterns or an open set |
+| ~~4.1~~ | ~~Count the plan shapes (experiment A4)~~ | **DONE 2026-08-31, and the answer is not the one the RFC hoped for.** 126 view files, 65 statements: **32 distinct shapes, 22 plan families**, top five families covering 48%. Not a dozen patterns; a long tail composed from nine primitives. **Coverage ratio 0/65.** Full result in `docs/bench/a4-plan-shapes.txt` |
+| 4.1a | **The admitted shape does not occur in the workload** | Burrmill folds *one table read twice*. Every `UNION ALL` in 65 real statements reads **different** tables, because a credit and a debit are different events. **8 of 65 are n-table signed folds** (five 2-branch, two 4-branch, one 5-branch) and the admitted one-table case occurs **zero** times. Generalising `SignedFold` from one table to n takes coverage from 0% to ~12% and throws nothing away - the current shape is the degenerate case |
+| 4.1b | Projection width is the next-biggest lever | 41 of 65 refusals are "projects exactly the key and the sum; got N items", N from 3 to 13. Real views carry several aggregates and passthrough columns. After 4.1a this is the largest single constraint |
 | 4.2 | The remaining heavy folds — exposure, velocity | Each ≤1.0x DuckDB at parity under the RSS gate |
 | 4.3 | Publish the coverage ratio per release, monotonic | It may not go down |
 

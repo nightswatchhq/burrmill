@@ -22,6 +22,7 @@
 mod fixture;
 mod generate;
 mod oracles;
+mod shapes;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -77,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
         Some("nest") => nest(),
         Some("gen") => generated(),
         Some("cast") => cast_table(),
+        Some("shapes") => shapes::run(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some("slt") => slt_against_duckdb(),
         Some("duckdb-gaps") => duckdb_gaps(),
         _ => bench().await,

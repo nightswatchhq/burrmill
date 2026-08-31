@@ -27,3 +27,6 @@ rayon.workspace = true
 # The same corpus, pointed at the other engine. This is the reason 2.3 uses a standard format
 # instead of a bespoke one.
 sqllogictest = "0.28"
+# Experiment A4: parsing a real workload to count the plan shapes it produces.
+sqlparser.workspace = true
+walkdir = "2"
