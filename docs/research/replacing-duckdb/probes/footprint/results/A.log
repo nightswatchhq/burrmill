@@ -1,0 +1,2225 @@
+### default_build_clean_j8: cargo build -j8
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.2
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.3
+   Compiling zerocopy v0.8.57
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-core v0.3.34
+   Compiling find-msvc-tools v0.1.12
+   Compiling num-traits v0.2.19
+   Compiling itoa v1.0.18
+   Compiling shlex v2.0.1
+   Compiling hashbrown v0.17.1
+   Compiling smallvec v1.16.1
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling getrandom v0.3.4
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling icu_normalizer_data v2.3.0
+   Compiling jobserver v0.1.35
+   Compiling mio v1.2.3
+   Compiling socket2 v0.6.5
+   Compiling icu_properties_data v2.3.0
+   Compiling cc v1.4.6
+   Compiling utf8_iter v1.0.4
+   Compiling serde_core v1.0.229
+   Compiling futures-sink v0.3.34
+   Compiling version_check v0.9.5
+   Compiling tokio v1.53.1
+   Compiling num-integer v0.1.47
+   Compiling http v1.5.0
+   Compiling once_cell v1.21.4
+   Compiling ahash v0.8.12
+   Compiling zeroize v1.9.0
+   Compiling percent-encoding v2.3.2
+   Compiling num-bigint v0.4.8
+   Compiling rustls-pki-types v1.15.1
+   Compiling http-body v1.1.0
+   Compiling getrandom v0.2.17
+   Compiling arrow-schema v58.4.0
+   Compiling synstructure v0.14.0
+   Compiling ring v0.17.14
+   Compiling untrusted v0.9.0
+   Compiling httparse v1.10.1
+   Compiling futures-io v0.3.34
+   Compiling slab v0.4.12
+   Compiling futures-task v0.3.34
+   Compiling iana-time-zone v0.1.65
+   Compiling futures-util v0.3.34
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling zerofrom v0.1.8
+   Compiling chrono v0.4.45
+   Compiling zerocopy-derive v0.8.57
+   Compiling yoke v0.8.3
+   Compiling num-complex v0.4.6
+   Compiling zerotrie v0.2.5
+   Compiling tower-service v0.3.3
+   Compiling base64 v0.22.1
+   Compiling rustls v0.23.45
+   Compiling zerovec v0.11.8
+   Compiling try-lock v0.2.5
+   Compiling crc32fast v1.5.2
+   Compiling want v0.3.1
+   Compiling form_urlencoded v1.2.2
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling tracing-core v0.1.36
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling futures-channel v0.3.34
+   Compiling simd-adler32 v0.3.10
+   Compiling lexical-util v1.0.7
+   Compiling ryu v1.0.23
+   Compiling atomic-waker v1.1.2
+   Compiling parking_lot_core v0.9.12
+   Compiling subtle v2.6.1
+   Compiling serde v1.0.229
+   Compiling rustix v1.1.4
+   Compiling hyper v1.11.1
+   Compiling tracing v0.1.44
+   Compiling serde_derive v1.0.229
+   Compiling sync_wrapper v1.0.2
+   Compiling scopeguard v1.2.0
+   Compiling adler2 v2.0.1
+   Compiling tower-layer v0.3.3
+   Compiling rustix v0.38.44
+   Compiling linux-raw-sys v0.12.1
+   Compiling zmij v1.0.23
+   Compiling ipnet v2.12.2
+   Compiling log v0.4.34
+   Compiling icu_provider v2.3.1
+   Compiling hyper-util v0.1.20
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling tower v0.5.3
+   Compiling miniz_oxide v0.9.1
+   Compiling lock_api v0.4.14
+   Compiling webpki-roots v1.0.9
+   Compiling linux-raw-sys v0.4.15
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling serde_json v1.0.151
+   Compiling equivalent v1.0.2
+   Compiling bumpalo v3.20.3
+   Compiling zlib-rs v0.6.8
+   Compiling xattr v1.6.1
+   Compiling url v2.5.8
+   Compiling zopfli v0.8.3
+   Compiling indexmap v2.14.2
+   Compiling half v2.7.1
+   Compiling tower-http v0.6.11
+   Compiling arrow-buffer v58.4.0
+   Compiling parking_lot v0.12.5
+   Compiling lexical-parse-integer v1.0.6
+   Compiling lexical-write-integer v1.0.6
+   Compiling serde_urlencoded v0.7.1
+   Compiling http-body-util v0.1.5
+   Compiling filetime v0.2.29
+   Compiling aho-corasick v1.1.5
+   Compiling regex-syntax v0.8.11
+   Compiling tar v0.4.46
+   Compiling lexical-write-float v1.0.6
+   Compiling arrow-data v58.4.0
+   Compiling lexical-parse-float v1.0.6
+   Compiling arrow-array v58.4.0
+   Compiling crossterm v0.28.1
+   Compiling rustls-webpki v0.103.15
+   Compiling flate2 v1.1.10
+   Compiling regex-automata v0.4.18
+   Compiling unicode-segmentation v1.13.3
+   Compiling zip v6.0.0
+   Compiling pkg-config v0.3.34
+   Compiling vcpkg v0.2.15
+   Compiling unicode-width v0.2.2
+   Compiling comfy-table v7.1.4
+   Compiling lexical-core v1.0.6
+   Compiling arrow-select v58.4.0
+   Compiling atoi v2.0.0
+   Compiling heck v0.5.0
+   Compiling rust_decimal v1.43.0
+   Compiling foldhash v0.1.5
+   Compiling strum_macros v0.27.2
+   Compiling hashbrown v0.15.5
+   Compiling arrow-row v58.4.0
+   Compiling regex v1.13.1
+   Compiling arrow-arith v58.4.0
+   Compiling arrow-ord v58.4.0
+   Compiling arrow-string v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling arrayvec v0.7.8
+   Compiling arrow-cast v58.4.0
+   Compiling strum v0.27.2
+   Compiling hashlink v0.10.0
+   Compiling fallible-iterator v0.3.0
+   Compiling cast v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling arrow v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 53s
+### default_test_clean_j8: cargo test --no-run -j8
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.2
+   Compiling libm v0.2.16
+   Compiling autocfg v1.5.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.3
+   Compiling pin-project-lite v0.2.17
+   Compiling zerocopy v0.8.57
+   Compiling futures-core v0.3.34
+   Compiling find-msvc-tools v0.1.12
+   Compiling num-traits v0.2.19
+   Compiling shlex v2.0.1
+   Compiling itoa v1.0.18
+   Compiling hashbrown v0.17.1
+   Compiling smallvec v1.16.1
+   Compiling writeable v0.6.4
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling litemap v0.8.3
+   Compiling utf8_iter v1.0.4
+   Compiling jobserver v0.1.35
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.3
+   Compiling version_check v0.9.5
+   Compiling cc v1.4.6
+   Compiling getrandom v0.3.4
+   Compiling futures-sink v0.3.34
+   Compiling icu_properties_data v2.3.0
+   Compiling serde_core v1.0.229
+   Compiling num-integer v0.1.47
+   Compiling icu_normalizer_data v2.3.0
+   Compiling tokio v1.53.1
+   Compiling ahash v0.8.12
+   Compiling http v1.5.0
+   Compiling zeroize v1.9.0
+   Compiling num-bigint v0.4.8
+   Compiling once_cell v1.21.4
+   Compiling percent-encoding v2.3.2
+   Compiling rustls-pki-types v1.15.1
+   Compiling http-body v1.1.0
+   Compiling synstructure v0.14.0
+   Compiling getrandom v0.2.17
+   Compiling arrow-schema v58.4.0
+   Compiling ring v0.17.14
+   Compiling futures-task v0.3.34
+   Compiling futures-io v0.3.34
+   Compiling httparse v1.10.1
+   Compiling slab v0.4.12
+   Compiling iana-time-zone v0.1.65
+   Compiling untrusted v0.9.0
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling chrono v0.4.45
+   Compiling zerocopy-derive v0.8.57
+   Compiling futures-util v0.3.34
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerotrie v0.2.5
+   Compiling zerovec v0.11.8
+   Compiling num-complex v0.4.6
+   Compiling rustls v0.23.45
+   Compiling base64 v0.22.1
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling tower-service v0.3.3
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling try-lock v0.2.5
+   Compiling crc32fast v1.5.2
+   Compiling want v0.3.1
+   Compiling tracing-core v0.1.36
+   Compiling form_urlencoded v1.2.2
+   Compiling futures-channel v0.3.34
+   Compiling simd-adler32 v0.3.10
+   Compiling rustix v1.1.4
+   Compiling ryu v1.0.23
+   Compiling serde v1.0.229
+   Compiling icu_provider v2.3.1
+   Compiling atomic-waker v1.1.2
+   Compiling lexical-util v1.0.7
+   Compiling parking_lot_core v0.9.12
+   Compiling subtle v2.6.1
+   Compiling hyper v1.11.1
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling tracing v0.1.44
+   Compiling serde_derive v1.0.229
+   Compiling sync_wrapper v1.0.2
+   Compiling scopeguard v1.2.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling rustix v0.38.44
+   Compiling ipnet v2.12.2
+   Compiling adler2 v2.0.1
+   Compiling log v0.4.34
+   Compiling idna_adapter v1.2.2
+   Compiling zmij v1.0.23
+   Compiling idna v1.1.0
+   Compiling tower-layer v0.3.3
+   Compiling miniz_oxide v0.9.1
+   Compiling tower v0.5.3
+   Compiling url v2.5.8
+   Compiling hyper-util v0.1.20
+   Compiling lock_api v0.4.14
+   Compiling webpki-roots v1.0.9
+   Compiling equivalent v1.0.2
+   Compiling bumpalo v3.20.3
+   Compiling linux-raw-sys v0.4.15
+   Compiling zlib-rs v0.6.8
+   Compiling serde_json v1.0.151
+   Compiling zopfli v0.8.3
+   Compiling half v2.7.1
+   Compiling arrow-buffer v58.4.0
+   Compiling xattr v1.6.1
+   Compiling indexmap v2.14.2
+   Compiling parking_lot v0.12.5
+   Compiling tower-http v0.6.11
+   Compiling lexical-write-integer v1.0.6
+   Compiling lexical-parse-integer v1.0.6
+   Compiling arrow-data v58.4.0
+   Compiling http-body-util v0.1.5
+   Compiling filetime v0.2.29
+   Compiling aho-corasick v1.1.5
+   Compiling regex-syntax v0.8.11
+   Compiling tar v0.4.46
+   Compiling serde_urlencoded v0.7.1
+   Compiling lexical-write-float v1.0.6
+   Compiling arrow-array v58.4.0
+   Compiling lexical-parse-float v1.0.6
+   Compiling crossterm v0.28.1
+   Compiling regex-automata v0.4.18
+   Compiling rustls-webpki v0.103.15
+   Compiling flate2 v1.1.10
+   Compiling vcpkg v0.2.15
+   Compiling zip v6.0.0
+   Compiling unicode-width v0.2.2
+   Compiling pkg-config v0.3.34
+   Compiling unicode-segmentation v1.13.3
+   Compiling arrow-select v58.4.0
+   Compiling comfy-table v7.1.4
+   Compiling lexical-core v1.0.6
+   Compiling atoi v2.0.0
+   Compiling heck v0.5.0
+   Compiling foldhash v0.1.5
+   Compiling rust_decimal v1.43.0
+   Compiling strum_macros v0.27.2
+   Compiling hashbrown v0.15.5
+   Compiling regex v1.13.1
+   Compiling arrow-arith v58.4.0
+   Compiling arrow-row v58.4.0
+   Compiling arrayvec v0.7.8
+   Compiling arrow-ord v58.4.0
+   Compiling arrow-string v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling arrow-cast v58.4.0
+   Compiling reqwest v0.12.28
+   Compiling strum v0.27.2
+   Compiling hashlink v0.10.0
+   Compiling fallible-iterator v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling cast v0.3.0
+   Compiling arrow v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 01s
+  Executable unittests src/lib.rs (target-default/debug/deps/consumer-896870bb463ee5b5)
+  Executable unittests src/main.rs (target-default/debug/deps/consumer_bin-d0311036705946e4)
+  Executable tests/t01.rs (target-default/debug/deps/t01-d8a759a023c0f014)
+  Executable tests/t02.rs (target-default/debug/deps/t02-4d4dbc0f58b1cb5b)
+  Executable tests/t03.rs (target-default/debug/deps/t03-17e776fbd526b434)
+  Executable tests/t04.rs (target-default/debug/deps/t04-69850229d3de1775)
+  Executable tests/t05.rs (target-default/debug/deps/t05-4768baf141ebeb47)
+  Executable tests/t06.rs (target-default/debug/deps/t06-b1b45dfe40bc15c0)
+  Executable tests/t07.rs (target-default/debug/deps/t07-d9df3fedc43277a8)
+  Executable tests/t08.rs (target-default/debug/deps/t08-215d0fa76c2a74dd)
+  Executable tests/t09.rs (target-default/debug/deps/t09-6edcc2f2b25c762e)
+  Executable tests/t10.rs (target-default/debug/deps/t10-4beb319914817002)
+  Executable tests/t11.rs (target-default/debug/deps/t11-8c2927c243d8775a)
+  Executable tests/t12.rs (target-default/debug/deps/t12-30f03852d5594308)
+  Executable tests/t13.rs (target-default/debug/deps/t13-017d9faedc9ea752)
+  Executable tests/t14.rs (target-default/debug/deps/t14-4b9590b5eaf05c60)
+  Executable tests/t15.rs (target-default/debug/deps/t15-25cdfe0b6a848ac0)
+  Executable tests/t16.rs (target-default/debug/deps/t16-b31386b52fbc3617)
+  Executable tests/t17.rs (target-default/debug/deps/t17-b97b9c98279e95e2)
+  Executable tests/t18.rs (target-default/debug/deps/t18-66ba0db923199c8a)
+  Executable tests/t19.rs (target-default/debug/deps/t19-7a501e0d48b36382)
+  Executable tests/t20.rs (target-default/debug/deps/t20-c34effd6e9289bfe)
+### default_build_clean_j32: cargo build -j32
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.2
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.3
+   Compiling zerocopy v0.8.57
+   Compiling pin-project-lite v0.2.17
+   Compiling hashbrown v0.17.1
+   Compiling find-msvc-tools v0.1.12
+   Compiling itoa v1.0.18
+   Compiling futures-core v0.3.34
+   Compiling shlex v2.0.1
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling smallvec v1.16.1
+   Compiling version_check v0.9.5
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_normalizer_data v2.3.0
+   Compiling getrandom v0.3.4
+   Compiling utf8_iter v1.0.4
+   Compiling futures-sink v0.3.34
+   Compiling serde_core v1.0.229
+   Compiling once_cell v1.21.4
+   Compiling zeroize v1.9.0
+   Compiling percent-encoding v2.3.2
+   Compiling httparse v1.10.1
+   Compiling untrusted v0.9.0
+   Compiling futures-io v0.3.34
+   Compiling slab v0.4.12
+   Compiling iana-time-zone v0.1.65
+   Compiling futures-task v0.3.34
+   Compiling rustls v0.23.45
+   Compiling base64 v0.22.1
+   Compiling rustls-pki-types v1.15.1
+   Compiling arrow-schema v58.4.0
+   Compiling tower-service v0.3.3
+   Compiling try-lock v0.2.5
+   Compiling crc32fast v1.5.2
+   Compiling tracing-core v0.1.36
+   Compiling form_urlencoded v1.2.2
+   Compiling futures-channel v0.3.34
+   Compiling lexical-util v1.0.7
+   Compiling rustix v1.1.4
+   Compiling ryu v1.0.23
+   Compiling atomic-waker v1.1.2
+   Compiling want v0.3.1
+   Compiling serde v1.0.229
+   Compiling subtle v2.6.1
+   Compiling parking_lot_core v0.9.12
+   Compiling simd-adler32 v0.3.10
+   Compiling sync_wrapper v1.0.2
+   Compiling log v0.4.34
+   Compiling linux-raw-sys v0.12.1
+   Compiling zmij v1.0.23
+   Compiling ahash v0.8.12
+   Compiling ipnet v2.12.2
+   Compiling adler2 v2.0.1
+   Compiling scopeguard v1.2.0
+   Compiling tower-layer v0.3.3
+   Compiling rustix v0.38.44
+   Compiling equivalent v1.0.2
+   Compiling lock_api v0.4.14
+   Compiling num-traits v0.2.19
+   Compiling bumpalo v3.20.3
+   Compiling serde_json v1.0.151
+   Compiling zlib-rs v0.6.8
+   Compiling miniz_oxide v0.9.1
+   Compiling linux-raw-sys v0.4.15
+   Compiling regex-syntax v0.8.11
+   Compiling unicode-width v0.2.2
+   Compiling pkg-config v0.3.34
+   Compiling unicode-segmentation v1.13.3
+   Compiling webpki-roots v1.0.9
+   Compiling vcpkg v0.2.15
+   Compiling futures-util v0.3.34
+   Compiling aho-corasick v1.1.5
+   Compiling tracing v0.1.44
+   Compiling heck v0.5.0
+   Compiling foldhash v0.1.5
+   Compiling lexical-write-integer v1.0.6
+   Compiling lexical-parse-integer v1.0.6
+   Compiling zopfli v0.8.3
+   Compiling rust_decimal v1.43.0
+   Compiling http v1.5.0
+   Compiling arrayvec v0.7.8
+   Compiling cast v0.3.0
+   Compiling indexmap v2.14.2
+   Compiling hashbrown v0.15.5
+   Compiling fallible-iterator v0.3.0
+   Compiling lexical-parse-float v1.0.6
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling lexical-write-float v1.0.6
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling lexical-core v1.0.6
+   Compiling hashlink v0.10.0
+   Compiling jobserver v0.1.35
+   Compiling mio v1.2.3
+   Compiling socket2 v0.6.5
+   Compiling getrandom v0.2.17
+   Compiling filetime v0.2.29
+   Compiling http-body v1.1.0
+   Compiling http-body-util v0.1.5
+   Compiling cc v1.4.6
+   Compiling parking_lot v0.12.5
+   Compiling tokio v1.53.1
+   Compiling crossterm v0.28.1
+   Compiling comfy-table v7.1.4
+   Compiling num-integer v0.1.47
+   Compiling chrono v0.4.45
+   Compiling num-complex v0.4.6
+   Compiling atoi v2.0.0
+   Compiling xattr v1.6.1
+   Compiling regex-automata v0.4.18
+   Compiling tar v0.4.46
+   Compiling num-bigint v0.4.8
+   Compiling synstructure v0.14.0
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling ring v0.17.14
+   Compiling zerofrom v0.1.8
+   Compiling flate2 v1.1.10
+   Compiling yoke v0.8.3
+   Compiling zerotrie v0.2.5
+   Compiling zerovec v0.11.8
+   Compiling zip v6.0.0
+   Compiling zerocopy-derive v0.8.57
+   Compiling strum_macros v0.27.2
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling regex v1.13.1
+   Compiling strum v0.27.2
+   Compiling icu_provider v2.3.1
+   Compiling rustls-webpki v0.103.15
+   Compiling serde_urlencoded v0.7.1
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling hyper v1.11.1
+   Compiling tower v0.5.3
+   Compiling idna_adapter v1.2.2
+   Compiling hyper-util v0.1.20
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling tower-http v0.6.11
+   Compiling half v2.7.1
+   Compiling arrow-buffer v58.4.0
+   Compiling arrow-data v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling arrow-array v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+   Compiling arrow-select v58.4.0
+   Compiling arrow-row v58.4.0
+   Compiling arrow-arith v58.4.0
+   Compiling arrow-ord v58.4.0
+   Compiling arrow-string v58.4.0
+   Compiling arrow-cast v58.4.0
+   Compiling arrow v58.4.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 55s
+### default_test_clean_j32: cargo test --no-run -j32
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.2
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.3
+   Compiling pin-project-lite v0.2.17
+   Compiling zerocopy v0.8.57
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.12
+   Compiling futures-core v0.3.34
+   Compiling hashbrown v0.17.1
+   Compiling itoa v1.0.18
+   Compiling litemap v0.8.3
+   Compiling smallvec v1.16.1
+   Compiling writeable v0.6.4
+   Compiling icu_normalizer_data v2.3.0
+   Compiling utf8_iter v1.0.4
+   Compiling getrandom v0.3.4
+   Compiling futures-sink v0.3.34
+   Compiling serde_core v1.0.229
+   Compiling version_check v0.9.5
+   Compiling icu_properties_data v2.3.0
+   Compiling once_cell v1.21.4
+   Compiling zeroize v1.9.0
+   Compiling percent-encoding v2.3.2
+   Compiling untrusted v0.9.0
+   Compiling iana-time-zone v0.1.65
+   Compiling futures-io v0.3.34
+   Compiling futures-task v0.3.34
+   Compiling httparse v1.10.1
+   Compiling slab v0.4.12
+   Compiling base64 v0.22.1
+   Compiling rustls v0.23.45
+   Compiling rustls-pki-types v1.15.1
+   Compiling arrow-schema v58.4.0
+   Compiling tower-service v0.3.3
+   Compiling crc32fast v1.5.2
+   Compiling try-lock v0.2.5
+   Compiling form_urlencoded v1.2.2
+   Compiling futures-channel v0.3.34
+   Compiling tracing-core v0.1.36
+   Compiling lexical-util v1.0.7
+   Compiling parking_lot_core v0.9.12
+   Compiling rustix v1.1.4
+   Compiling simd-adler32 v0.3.10
+   Compiling ryu v1.0.23
+   Compiling want v0.3.1
+   Compiling atomic-waker v1.1.2
+   Compiling subtle v2.6.1
+   Compiling serde v1.0.229
+   Compiling sync_wrapper v1.0.2
+   Compiling zmij v1.0.23
+   Compiling log v0.4.34
+   Compiling ipnet v2.12.2
+   Compiling adler2 v2.0.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling ahash v0.8.12
+   Compiling tower-layer v0.3.3
+   Compiling rustix v0.38.44
+   Compiling scopeguard v1.2.0
+   Compiling equivalent v1.0.2
+   Compiling num-traits v0.2.19
+   Compiling bumpalo v3.20.3
+   Compiling linux-raw-sys v0.4.15
+   Compiling serde_json v1.0.151
+   Compiling lock_api v0.4.14
+   Compiling miniz_oxide v0.9.1
+   Compiling zlib-rs v0.6.8
+   Compiling regex-syntax v0.8.11
+   Compiling pkg-config v0.3.34
+   Compiling unicode-segmentation v1.13.3
+   Compiling unicode-width v0.2.2
+   Compiling vcpkg v0.2.15
+   Compiling heck v0.5.0
+   Compiling webpki-roots v1.0.9
+   Compiling futures-util v0.3.34
+   Compiling lexical-write-integer v1.0.6
+   Compiling zopfli v0.8.3
+   Compiling lexical-parse-integer v1.0.6
+   Compiling aho-corasick v1.1.5
+   Compiling rust_decimal v1.43.0
+   Compiling indexmap v2.14.2
+   Compiling http v1.5.0
+   Compiling tracing v0.1.44
+   Compiling foldhash v0.1.5
+   Compiling arrayvec v0.7.8
+   Compiling cast v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling hashbrown v0.15.5
+   Compiling lexical-parse-float v1.0.6
+   Compiling fallible-iterator v0.3.0
+   Compiling lexical-write-float v1.0.6
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling lexical-core v1.0.6
+   Compiling jobserver v0.1.35
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.3
+   Compiling getrandom v0.2.17
+   Compiling filetime v0.2.29
+   Compiling hashlink v0.10.0
+   Compiling parking_lot v0.12.5
+   Compiling http-body v1.1.0
+   Compiling cc v1.4.6
+   Compiling tokio v1.53.1
+   Compiling crossterm v0.28.1
+   Compiling http-body-util v0.1.5
+   Compiling num-integer v0.1.47
+   Compiling chrono v0.4.45
+   Compiling num-complex v0.4.6
+   Compiling atoi v2.0.0
+   Compiling comfy-table v7.1.4
+   Compiling xattr v1.6.1
+   Compiling num-bigint v0.4.8
+   Compiling tar v0.4.46
+   Compiling regex-automata v0.4.18
+   Compiling ring v0.17.14
+   Compiling synstructure v0.14.0
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling regex v1.13.1
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerocopy-derive v0.8.57
+   Compiling strum_macros v0.27.2
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling flate2 v1.1.10
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling zip v6.0.0
+   Compiling hyper v1.11.1
+   Compiling tower v0.5.3
+   Compiling icu_locale_core v2.3.0
+   Compiling rustls-webpki v0.103.15
+   Compiling strum v0.27.2
+   Compiling hyper-util v0.1.20
+   Compiling icu_provider v2.3.1
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling serde_urlencoded v0.7.1
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling tower-http v0.6.11
+   Compiling half v2.7.1
+   Compiling arrow-buffer v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling arrow-data v58.4.0
+   Compiling arrow-array v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+   Compiling arrow-select v58.4.0
+   Compiling arrow-arith v58.4.0
+   Compiling arrow-row v58.4.0
+   Compiling arrow-ord v58.4.0
+   Compiling arrow-string v58.4.0
+   Compiling arrow-cast v58.4.0
+   Compiling arrow v58.4.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 04s
+  Executable unittests src/lib.rs (target-default/debug/deps/consumer-896870bb463ee5b5)
+  Executable unittests src/main.rs (target-default/debug/deps/consumer_bin-d0311036705946e4)
+  Executable tests/t01.rs (target-default/debug/deps/t01-d8a759a023c0f014)
+  Executable tests/t02.rs (target-default/debug/deps/t02-4d4dbc0f58b1cb5b)
+  Executable tests/t03.rs (target-default/debug/deps/t03-17e776fbd526b434)
+  Executable tests/t04.rs (target-default/debug/deps/t04-69850229d3de1775)
+  Executable tests/t05.rs (target-default/debug/deps/t05-4768baf141ebeb47)
+  Executable tests/t06.rs (target-default/debug/deps/t06-b1b45dfe40bc15c0)
+  Executable tests/t07.rs (target-default/debug/deps/t07-d9df3fedc43277a8)
+  Executable tests/t08.rs (target-default/debug/deps/t08-215d0fa76c2a74dd)
+  Executable tests/t09.rs (target-default/debug/deps/t09-6edcc2f2b25c762e)
+  Executable tests/t10.rs (target-default/debug/deps/t10-4beb319914817002)
+  Executable tests/t11.rs (target-default/debug/deps/t11-8c2927c243d8775a)
+  Executable tests/t12.rs (target-default/debug/deps/t12-30f03852d5594308)
+  Executable tests/t13.rs (target-default/debug/deps/t13-017d9faedc9ea752)
+  Executable tests/t14.rs (target-default/debug/deps/t14-4b9590b5eaf05c60)
+  Executable tests/t15.rs (target-default/debug/deps/t15-25cdfe0b6a848ac0)
+  Executable tests/t16.rs (target-default/debug/deps/t16-b31386b52fbc3617)
+  Executable tests/t17.rs (target-default/debug/deps/t17-b97b9c98279e95e2)
+  Executable tests/t18.rs (target-default/debug/deps/t18-66ba0db923199c8a)
+  Executable tests/t19.rs (target-default/debug/deps/t19-7a501e0d48b36382)
+  Executable tests/t20.rs (target-default/debug/deps/t20-c34effd6e9289bfe)
+### default_incr_lib_test: cargo test --no-run -j32
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.33s
+  Executable unittests src/lib.rs (target-default/debug/deps/consumer-896870bb463ee5b5)
+  Executable unittests src/main.rs (target-default/debug/deps/consumer_bin-d0311036705946e4)
+  Executable tests/t01.rs (target-default/debug/deps/t01-d8a759a023c0f014)
+  Executable tests/t02.rs (target-default/debug/deps/t02-4d4dbc0f58b1cb5b)
+  Executable tests/t03.rs (target-default/debug/deps/t03-17e776fbd526b434)
+  Executable tests/t04.rs (target-default/debug/deps/t04-69850229d3de1775)
+  Executable tests/t05.rs (target-default/debug/deps/t05-4768baf141ebeb47)
+  Executable tests/t06.rs (target-default/debug/deps/t06-b1b45dfe40bc15c0)
+  Executable tests/t07.rs (target-default/debug/deps/t07-d9df3fedc43277a8)
+  Executable tests/t08.rs (target-default/debug/deps/t08-215d0fa76c2a74dd)
+  Executable tests/t09.rs (target-default/debug/deps/t09-6edcc2f2b25c762e)
+  Executable tests/t10.rs (target-default/debug/deps/t10-4beb319914817002)
+  Executable tests/t11.rs (target-default/debug/deps/t11-8c2927c243d8775a)
+  Executable tests/t12.rs (target-default/debug/deps/t12-30f03852d5594308)
+  Executable tests/t13.rs (target-default/debug/deps/t13-017d9faedc9ea752)
+  Executable tests/t14.rs (target-default/debug/deps/t14-4b9590b5eaf05c60)
+  Executable tests/t15.rs (target-default/debug/deps/t15-25cdfe0b6a848ac0)
+  Executable tests/t16.rs (target-default/debug/deps/t16-b31386b52fbc3617)
+  Executable tests/t17.rs (target-default/debug/deps/t17-b97b9c98279e95e2)
+  Executable tests/t18.rs (target-default/debug/deps/t18-66ba0db923199c8a)
+  Executable tests/t19.rs (target-default/debug/deps/t19-7a501e0d48b36382)
+  Executable tests/t20.rs (target-default/debug/deps/t20-c34effd6e9289bfe)
+### default_incr_lib_build: cargo build -j32
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.47s
+### default_incr_test_test: cargo test --no-run -j32
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.16s
+  Executable unittests src/lib.rs (target-default/debug/deps/consumer-896870bb463ee5b5)
+  Executable unittests src/main.rs (target-default/debug/deps/consumer_bin-d0311036705946e4)
+  Executable tests/t01.rs (target-default/debug/deps/t01-d8a759a023c0f014)
+  Executable tests/t02.rs (target-default/debug/deps/t02-4d4dbc0f58b1cb5b)
+  Executable tests/t03.rs (target-default/debug/deps/t03-17e776fbd526b434)
+  Executable tests/t04.rs (target-default/debug/deps/t04-69850229d3de1775)
+  Executable tests/t05.rs (target-default/debug/deps/t05-4768baf141ebeb47)
+  Executable tests/t06.rs (target-default/debug/deps/t06-b1b45dfe40bc15c0)
+  Executable tests/t07.rs (target-default/debug/deps/t07-d9df3fedc43277a8)
+  Executable tests/t08.rs (target-default/debug/deps/t08-215d0fa76c2a74dd)
+  Executable tests/t09.rs (target-default/debug/deps/t09-6edcc2f2b25c762e)
+  Executable tests/t10.rs (target-default/debug/deps/t10-4beb319914817002)
+  Executable tests/t11.rs (target-default/debug/deps/t11-8c2927c243d8775a)
+  Executable tests/t12.rs (target-default/debug/deps/t12-30f03852d5594308)
+  Executable tests/t13.rs (target-default/debug/deps/t13-017d9faedc9ea752)
+  Executable tests/t14.rs (target-default/debug/deps/t14-4b9590b5eaf05c60)
+  Executable tests/t15.rs (target-default/debug/deps/t15-25cdfe0b6a848ac0)
+  Executable tests/t16.rs (target-default/debug/deps/t16-b31386b52fbc3617)
+  Executable tests/t17.rs (target-default/debug/deps/t17-b97b9c98279e95e2)
+  Executable tests/t18.rs (target-default/debug/deps/t18-66ba0db923199c8a)
+  Executable tests/t19.rs (target-default/debug/deps/t19-7a501e0d48b36382)
+  Executable tests/t20.rs (target-default/debug/deps/t20-c34effd6e9289bfe)
+### nodebug_build_clean_j8: cargo build -j8
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.2
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.3
+   Compiling zerocopy v0.8.57
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-core v0.3.34
+   Compiling itoa v1.0.18
+   Compiling num-traits v0.2.19
+   Compiling find-msvc-tools v0.1.12
+   Compiling shlex v2.0.1
+   Compiling hashbrown v0.17.1
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling smallvec v1.16.1
+   Compiling getrandom v0.3.4
+   Compiling serde_core v1.0.229
+   Compiling futures-sink v0.3.34
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling version_check v0.9.5
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_normalizer_data v2.3.0
+   Compiling utf8_iter v1.0.4
+   Compiling jobserver v0.1.35
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.3
+   Compiling ahash v0.8.12
+   Compiling cc v1.4.6
+   Compiling http v1.5.0
+   Compiling once_cell v1.21.4
+   Compiling num-integer v0.1.47
+   Compiling tokio v1.53.1
+   Compiling percent-encoding v2.3.2
+   Compiling zeroize v1.9.0
+   Compiling num-bigint v0.4.8
+   Compiling rustls-pki-types v1.15.1
+   Compiling http-body v1.1.0
+   Compiling getrandom v0.2.17
+   Compiling arrow-schema v58.4.0
+   Compiling futures-io v0.3.34
+   Compiling untrusted v0.9.0
+   Compiling iana-time-zone v0.1.65
+   Compiling synstructure v0.14.0
+   Compiling httparse v1.10.1
+   Compiling ring v0.17.14
+   Compiling futures-task v0.3.34
+   Compiling slab v0.4.12
+   Compiling chrono v0.4.45
+   Compiling futures-util v0.3.34
+   Compiling num-complex v0.4.6
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling zerovec-derive v0.11.6
+   Compiling zerofrom v0.1.8
+   Compiling displaydoc v0.2.7
+   Compiling rustls v0.23.45
+   Compiling yoke v0.8.3
+   Compiling try-lock v0.2.5
+   Compiling tower-service v0.3.3
+   Compiling crc32fast v1.5.2
+   Compiling base64 v0.22.1
+   Compiling zerovec v0.11.8
+   Compiling want v0.3.1
+   Compiling form_urlencoded v1.2.2
+   Compiling tracing-core v0.1.36
+   Compiling zerotrie v0.2.5
+   Compiling zerocopy-derive v0.8.57
+   Compiling futures-channel v0.3.34
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling subtle v2.6.1
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling lexical-util v1.0.7
+   Compiling parking_lot_core v0.9.12
+   Compiling simd-adler32 v0.3.10
+   Compiling ryu v1.0.23
+   Compiling rustix v1.1.4
+   Compiling serde v1.0.229
+   Compiling atomic-waker v1.1.2
+   Compiling hyper v1.11.1
+   Compiling tracing v0.1.44
+   Compiling serde_derive v1.0.229
+   Compiling sync_wrapper v1.0.2
+   Compiling tower-layer v0.3.3
+   Compiling zmij v1.0.23
+   Compiling ipnet v2.12.2
+   Compiling rustix v0.38.44
+   Compiling linux-raw-sys v0.12.1
+   Compiling icu_provider v2.3.1
+   Compiling adler2 v2.0.1
+   Compiling log v0.4.34
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling miniz_oxide v0.9.1
+   Compiling hyper-util v0.1.20
+   Compiling tower v0.5.3
+   Compiling webpki-roots v1.0.9
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling bumpalo v3.20.3
+   Compiling serde_json v1.0.151
+   Compiling equivalent v1.0.2
+   Compiling url v2.5.8
+   Compiling zlib-rs v0.6.8
+   Compiling linux-raw-sys v0.4.15
+   Compiling xattr v1.6.1
+   Compiling tower-http v0.6.11
+   Compiling indexmap v2.14.2
+   Compiling zopfli v0.8.3
+   Compiling parking_lot v0.12.5
+   Compiling lexical-parse-integer v1.0.6
+   Compiling serde_urlencoded v0.7.1
+   Compiling lexical-write-integer v1.0.6
+   Compiling http-body-util v0.1.5
+   Compiling filetime v0.2.29
+   Compiling aho-corasick v1.1.5
+   Compiling regex-syntax v0.8.11
+   Compiling lexical-write-float v1.0.6
+   Compiling tar v0.4.46
+   Compiling crossterm v0.28.1
+   Compiling lexical-parse-float v1.0.6
+   Compiling half v2.7.1
+   Compiling pkg-config v0.3.34
+   Compiling arrow-buffer v58.4.0
+   Compiling vcpkg v0.2.15
+   Compiling unicode-width v0.2.2
+   Compiling arrow-data v58.4.0
+   Compiling rustls-webpki v0.103.15
+   Compiling flate2 v1.1.10
+   Compiling regex-automata v0.4.18
+   Compiling unicode-segmentation v1.13.3
+   Compiling zip v6.0.0
+   Compiling arrow-array v58.4.0
+   Compiling comfy-table v7.1.4
+   Compiling lexical-core v1.0.6
+   Compiling atoi v2.0.0
+   Compiling heck v0.5.0
+   Compiling foldhash v0.1.5
+   Compiling rust_decimal v1.43.0
+   Compiling strum_macros v0.27.2
+   Compiling hashbrown v0.15.5
+   Compiling arrayvec v0.7.8
+   Compiling cast v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling fallible-iterator v0.3.0
+   Compiling hashlink v0.10.0
+   Compiling regex v1.13.1
+   Compiling strum v0.27.2
+   Compiling arrow-select v58.4.0
+   Compiling arrow-row v58.4.0
+   Compiling arrow-arith v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling arrow-ord v58.4.0
+   Compiling arrow-string v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+   Compiling arrow-cast v58.4.0
+   Compiling arrow v58.4.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `dev` profile [unoptimized] target(s) in 2m 07s
+### nodebug_test_clean_j8: cargo test --no-run -j8
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.2
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.3
+   Compiling pin-project-lite v0.2.17
+   Compiling zerocopy v0.8.57
+   Compiling itoa v1.0.18
+   Compiling hashbrown v0.17.1
+   Compiling num-traits v0.2.19
+   Compiling futures-core v0.3.34
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.12
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling smallvec v1.16.1
+   Compiling getrandom v0.3.4
+   Compiling icu_properties_data v2.3.0
+   Compiling futures-sink v0.3.34
+   Compiling icu_normalizer_data v2.3.0
+   Compiling utf8_iter v1.0.4
+   Compiling serde_core v1.0.229
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling jobserver v0.1.35
+   Compiling mio v1.2.3
+   Compiling socket2 v0.6.5
+   Compiling version_check v0.9.5
+   Compiling cc v1.4.6
+   Compiling ahash v0.8.12
+   Compiling tokio v1.53.1
+   Compiling http v1.5.0
+   Compiling percent-encoding v2.3.2
+   Compiling zeroize v1.9.0
+   Compiling num-integer v0.1.47
+   Compiling once_cell v1.21.4
+   Compiling rustls-pki-types v1.15.1
+   Compiling num-bigint v0.4.8
+   Compiling http-body v1.1.0
+   Compiling getrandom v0.2.17
+   Compiling arrow-schema v58.4.0
+   Compiling slab v0.4.12
+   Compiling iana-time-zone v0.1.65
+   Compiling httparse v1.10.1
+   Compiling synstructure v0.14.0
+   Compiling ring v0.17.14
+   Compiling futures-io v0.3.34
+   Compiling futures-task v0.3.34
+   Compiling untrusted v0.9.0
+   Compiling futures-util v0.3.34
+   Compiling chrono v0.4.45
+   Compiling num-complex v0.4.6
+   Compiling tower-service v0.3.3
+   Compiling rustls v0.23.45
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling zerofrom v0.1.8
+   Compiling zerocopy-derive v0.8.57
+   Compiling yoke v0.8.3
+   Compiling crc32fast v1.5.2
+   Compiling base64 v0.22.1
+   Compiling try-lock v0.2.5
+   Compiling zerotrie v0.2.5
+   Compiling zerovec v0.11.8
+   Compiling want v0.3.1
+   Compiling tracing-core v0.1.36
+   Compiling form_urlencoded v1.2.2
+   Compiling futures-channel v0.3.34
+   Compiling lexical-util v1.0.7
+   Compiling serde v1.0.229
+   Compiling ryu v1.0.23
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling parking_lot_core v0.9.12
+   Compiling subtle v2.6.1
+   Compiling simd-adler32 v0.3.10
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling atomic-waker v1.1.2
+   Compiling rustix v1.1.4
+   Compiling hyper v1.11.1
+   Compiling tracing v0.1.44
+   Compiling serde_derive v1.0.229
+   Compiling sync_wrapper v1.0.2
+   Compiling tower-layer v0.3.3
+   Compiling adler2 v2.0.1
+   Compiling scopeguard v1.2.0
+   Compiling zmij v1.0.23
+   Compiling linux-raw-sys v0.12.1
+   Compiling rustix v0.38.44
+   Compiling log v0.4.34
+   Compiling icu_provider v2.3.1
+   Compiling ipnet v2.12.2
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling hyper-util v0.1.20
+   Compiling tower v0.5.3
+   Compiling lock_api v0.4.14
+   Compiling miniz_oxide v0.9.1
+   Compiling webpki-roots v1.0.9
+   Compiling linux-raw-sys v0.4.15
+   Compiling idna_adapter v1.2.2
+   Compiling zlib-rs v0.6.8
+   Compiling idna v1.1.0
+   Compiling equivalent v1.0.2
+   Compiling serde_json v1.0.151
+   Compiling bumpalo v3.20.3
+   Compiling indexmap v2.14.2
+   Compiling url v2.5.8
+   Compiling zopfli v0.8.3
+   Compiling xattr v1.6.1
+   Compiling tower-http v0.6.11
+   Compiling half v2.7.1
+   Compiling parking_lot v0.12.5
+   Compiling lexical-parse-integer v1.0.6
+   Compiling arrow-buffer v58.4.0
+   Compiling serde_urlencoded v0.7.1
+   Compiling lexical-write-integer v1.0.6
+   Compiling http-body-util v0.1.5
+   Compiling filetime v0.2.29
+   Compiling aho-corasick v1.1.5
+   Compiling regex-syntax v0.8.11
+   Compiling tar v0.4.46
+   Compiling lexical-write-float v1.0.6
+   Compiling crossterm v0.28.1
+   Compiling arrow-data v58.4.0
+   Compiling lexical-parse-float v1.0.6
+   Compiling unicode-width v0.2.2
+   Compiling arrow-array v58.4.0
+   Compiling vcpkg v0.2.15
+   Compiling pkg-config v0.3.34
+   Compiling rustls-webpki v0.103.15
+   Compiling flate2 v1.1.10
+   Compiling regex-automata v0.4.18
+   Compiling unicode-segmentation v1.13.3
+   Compiling zip v6.0.0
+   Compiling comfy-table v7.1.4
+   Compiling lexical-core v1.0.6
+   Compiling atoi v2.0.0
+   Compiling rust_decimal v1.43.0
+   Compiling heck v0.5.0
+   Compiling foldhash v0.1.5
+   Compiling hashbrown v0.15.5
+   Compiling strum_macros v0.27.2
+   Compiling arrayvec v0.7.8
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling cast v0.3.0
+   Compiling hashlink v0.10.0
+   Compiling fallible-iterator v0.3.0
+   Compiling arrow-select v58.4.0
+   Compiling arrow-arith v58.4.0
+   Compiling arrow-row v58.4.0
+   Compiling regex v1.13.1
+   Compiling strum v0.27.2
+   Compiling tokio-rustls v0.26.5
+   Compiling arrow-ord v58.4.0
+   Compiling arrow-string v58.4.0
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling arrow-cast v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+   Compiling arrow v58.4.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `test` profile [unoptimized] target(s) in 2m 11s
+  Executable unittests src/lib.rs (target-nodebug/debug/deps/consumer-20f465dec97650ac)
+  Executable unittests src/main.rs (target-nodebug/debug/deps/consumer_bin-00890c4e3640c5a3)
+  Executable tests/t01.rs (target-nodebug/debug/deps/t01-5fc01343193a92fb)
+  Executable tests/t02.rs (target-nodebug/debug/deps/t02-96d58699f5216d0f)
+  Executable tests/t03.rs (target-nodebug/debug/deps/t03-eb38242a6efd5551)
+  Executable tests/t04.rs (target-nodebug/debug/deps/t04-0dad823c37e94f6f)
+  Executable tests/t05.rs (target-nodebug/debug/deps/t05-2d1c426fa6c81b4e)
+  Executable tests/t06.rs (target-nodebug/debug/deps/t06-97cbe2ec2f6d1f92)
+  Executable tests/t07.rs (target-nodebug/debug/deps/t07-d9560e9f243c6c8c)
+  Executable tests/t08.rs (target-nodebug/debug/deps/t08-af4fb9cbc02ee2a7)
+  Executable tests/t09.rs (target-nodebug/debug/deps/t09-7ba2862920d19163)
+  Executable tests/t10.rs (target-nodebug/debug/deps/t10-1aa37e5702393029)
+  Executable tests/t11.rs (target-nodebug/debug/deps/t11-499cf0b90edeea87)
+  Executable tests/t12.rs (target-nodebug/debug/deps/t12-55116c30d302887e)
+  Executable tests/t13.rs (target-nodebug/debug/deps/t13-5632eb63f7c8f5b1)
+  Executable tests/t14.rs (target-nodebug/debug/deps/t14-472a661aed9d28f6)
+  Executable tests/t15.rs (target-nodebug/debug/deps/t15-9f3b29fec0a6ae6b)
+  Executable tests/t16.rs (target-nodebug/debug/deps/t16-162a5337d1667503)
+  Executable tests/t17.rs (target-nodebug/debug/deps/t17-c5d7d9e780f6cb3d)
+  Executable tests/t18.rs (target-nodebug/debug/deps/t18-b29f29b4b3a88ea4)
+  Executable tests/t19.rs (target-nodebug/debug/deps/t19-3bb06032a84ee7d2)
+  Executable tests/t20.rs (target-nodebug/debug/deps/t20-37bb3e2c27ce438c)
+### nodebug_build_clean_j32: cargo build -j32
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.2
+   Compiling libm v0.2.16
+   Compiling autocfg v1.5.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.3
+   Compiling zerocopy v0.8.57
+   Compiling pin-project-lite v0.2.17
+   Compiling itoa v1.0.18
+   Compiling hashbrown v0.17.1
+   Compiling find-msvc-tools v0.1.12
+   Compiling futures-core v0.3.34
+   Compiling shlex v2.0.1
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling smallvec v1.16.1
+   Compiling icu_properties_data v2.3.0
+   Compiling version_check v0.9.5
+   Compiling utf8_iter v1.0.4
+   Compiling icu_normalizer_data v2.3.0
+   Compiling futures-sink v0.3.34
+   Compiling getrandom v0.3.4
+   Compiling serde_core v1.0.229
+   Compiling once_cell v1.21.4
+   Compiling percent-encoding v2.3.2
+   Compiling zeroize v1.9.0
+   Compiling slab v0.4.12
+   Compiling iana-time-zone v0.1.65
+   Compiling untrusted v0.9.0
+   Compiling futures-task v0.3.34
+   Compiling httparse v1.10.1
+   Compiling futures-io v0.3.34
+   Compiling try-lock v0.2.5
+   Compiling tower-service v0.3.3
+   Compiling rustls v0.23.45
+   Compiling base64 v0.22.1
+   Compiling arrow-schema v58.4.0
+   Compiling rustls-pki-types v1.15.1
+   Compiling crc32fast v1.5.2
+   Compiling tracing-core v0.1.36
+   Compiling want v0.3.1
+   Compiling form_urlencoded v1.2.2
+   Compiling futures-channel v0.3.34
+   Compiling atomic-waker v1.1.2
+   Compiling ryu v1.0.23
+   Compiling subtle v2.6.1
+   Compiling parking_lot_core v0.9.12
+   Compiling lexical-util v1.0.7
+   Compiling simd-adler32 v0.3.10
+   Compiling rustix v1.1.4
+   Compiling serde v1.0.229
+   Compiling sync_wrapper v1.0.2
+   Compiling log v0.4.34
+   Compiling tower-layer v0.3.3
+   Compiling rustix v0.38.44
+   Compiling adler2 v2.0.1
+   Compiling scopeguard v1.2.0
+   Compiling ahash v0.8.12
+   Compiling zmij v1.0.23
+   Compiling linux-raw-sys v0.12.1
+   Compiling ipnet v2.12.2
+   Compiling lock_api v0.4.14
+   Compiling zlib-rs v0.6.8
+   Compiling serde_json v1.0.151
+   Compiling bumpalo v3.20.3
+   Compiling equivalent v1.0.2
+   Compiling linux-raw-sys v0.4.15
+   Compiling regex-syntax v0.8.11
+   Compiling pkg-config v0.3.34
+   Compiling num-traits v0.2.19
+   Compiling miniz_oxide v0.9.1
+   Compiling unicode-segmentation v1.13.3
+   Compiling vcpkg v0.2.15
+   Compiling futures-util v0.3.34
+   Compiling aho-corasick v1.1.5
+   Compiling unicode-width v0.2.2
+   Compiling http v1.5.0
+   Compiling webpki-roots v1.0.9
+   Compiling foldhash v0.1.5
+   Compiling heck v0.5.0
+   Compiling lexical-write-integer v1.0.6
+   Compiling tracing v0.1.44
+   Compiling lexical-parse-integer v1.0.6
+   Compiling zopfli v0.8.3
+   Compiling rust_decimal v1.43.0
+   Compiling arrayvec v0.7.8
+   Compiling cast v0.3.0
+   Compiling indexmap v2.14.2
+   Compiling hashbrown v0.15.5
+   Compiling fallible-iterator v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling lexical-parse-float v1.0.6
+   Compiling lexical-write-float v1.0.6
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling lexical-core v1.0.6
+   Compiling hashlink v0.10.0
+   Compiling jobserver v0.1.35
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.3
+   Compiling getrandom v0.2.17
+   Compiling filetime v0.2.29
+   Compiling http-body v1.1.0
+   Compiling parking_lot v0.12.5
+   Compiling http-body-util v0.1.5
+   Compiling num-integer v0.1.47
+   Compiling chrono v0.4.45
+   Compiling num-complex v0.4.6
+   Compiling atoi v2.0.0
+   Compiling cc v1.4.6
+   Compiling crossterm v0.28.1
+   Compiling tokio v1.53.1
+   Compiling num-bigint v0.4.8
+   Compiling regex-automata v0.4.18
+   Compiling xattr v1.6.1
+   Compiling comfy-table v7.1.4
+   Compiling tar v0.4.46
+   Compiling ring v0.17.14
+   Compiling synstructure v0.14.0
+   Compiling flate2 v1.1.10
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling regex v1.13.1
+   Compiling zip v6.0.0
+   Compiling zerocopy-derive v0.8.57
+   Compiling strum_macros v0.27.2
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerotrie v0.2.5
+   Compiling zerovec v0.11.8
+   Compiling hyper v1.11.1
+   Compiling tower v0.5.3
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling strum v0.27.2
+   Compiling rustls-webpki v0.103.15
+   Compiling hyper-util v0.1.20
+   Compiling icu_provider v2.3.1
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling serde_urlencoded v0.7.1
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling tower-http v0.6.11
+   Compiling half v2.7.1
+   Compiling arrow-buffer v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling arrow-data v58.4.0
+   Compiling reqwest v0.12.28
+   Compiling arrow-array v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+   Compiling arrow-select v58.4.0
+   Compiling arrow-arith v58.4.0
+   Compiling arrow-row v58.4.0
+   Compiling arrow-ord v58.4.0
+   Compiling arrow-string v58.4.0
+   Compiling arrow-cast v58.4.0
+   Compiling arrow v58.4.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `dev` profile [unoptimized] target(s) in 1m 20s
+### nodebug_test_clean_j32: cargo test --no-run -j32
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.2
+   Compiling libm v0.2.16
+   Compiling autocfg v1.5.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.3
+   Compiling pin-project-lite v0.2.17
+   Compiling zerocopy v0.8.57
+   Compiling hashbrown v0.17.1
+   Compiling find-msvc-tools v0.1.12
+   Compiling shlex v2.0.1
+   Compiling futures-core v0.3.34
+   Compiling itoa v1.0.18
+   Compiling smallvec v1.16.1
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling version_check v0.9.5
+   Compiling serde_core v1.0.229
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_normalizer_data v2.3.0
+   Compiling utf8_iter v1.0.4
+   Compiling getrandom v0.3.4
+   Compiling futures-sink v0.3.34
+   Compiling percent-encoding v2.3.2
+   Compiling zeroize v1.9.0
+   Compiling once_cell v1.21.4
+   Compiling httparse v1.10.1
+   Compiling slab v0.4.12
+   Compiling iana-time-zone v0.1.65
+   Compiling untrusted v0.9.0
+   Compiling futures-task v0.3.34
+   Compiling futures-io v0.3.34
+   Compiling arrow-schema v58.4.0
+   Compiling tower-service v0.3.3
+   Compiling rustls-pki-types v1.15.1
+   Compiling base64 v0.22.1
+   Compiling rustls v0.23.45
+   Compiling crc32fast v1.5.2
+   Compiling try-lock v0.2.5
+   Compiling form_urlencoded v1.2.2
+   Compiling futures-channel v0.3.34
+   Compiling tracing-core v0.1.36
+   Compiling parking_lot_core v0.9.12
+   Compiling serde v1.0.229
+   Compiling lexical-util v1.0.7
+   Compiling simd-adler32 v0.3.10
+   Compiling subtle v2.6.1
+   Compiling ryu v1.0.23
+   Compiling rustix v1.1.4
+   Compiling atomic-waker v1.1.2
+   Compiling sync_wrapper v1.0.2
+   Compiling want v0.3.1
+   Compiling ahash v0.8.12
+   Compiling adler2 v2.0.1
+   Compiling tower-layer v0.3.3
+   Compiling log v0.4.34
+   Compiling ipnet v2.12.2
+   Compiling zmij v1.0.23
+   Compiling rustix v0.38.44
+   Compiling scopeguard v1.2.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling serde_json v1.0.151
+   Compiling linux-raw-sys v0.4.15
+   Compiling bumpalo v3.20.3
+   Compiling equivalent v1.0.2
+   Compiling num-traits v0.2.19
+   Compiling lock_api v0.4.14
+   Compiling miniz_oxide v0.9.1
+   Compiling zlib-rs v0.6.8
+   Compiling regex-syntax v0.8.11
+   Compiling unicode-segmentation v1.13.3
+   Compiling vcpkg v0.2.15
+   Compiling unicode-width v0.2.2
+   Compiling pkg-config v0.3.34
+   Compiling rust_decimal v1.43.0
+   Compiling foldhash v0.1.5
+   Compiling webpki-roots v1.0.9
+   Compiling http v1.5.0
+   Compiling zopfli v0.8.3
+   Compiling futures-util v0.3.34
+   Compiling tracing v0.1.44
+   Compiling aho-corasick v1.1.5
+   Compiling heck v0.5.0
+   Compiling hashbrown v0.15.5
+   Compiling arrayvec v0.7.8
+   Compiling cast v0.3.0
+   Compiling fallible-iterator v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling lexical-write-integer v1.0.6
+   Compiling indexmap v2.14.2
+   Compiling lexical-parse-integer v1.0.6
+   Compiling lexical-parse-float v1.0.6
+   Compiling lexical-write-float v1.0.6
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling hashlink v0.10.0
+   Compiling http-body v1.1.0
+   Compiling lexical-core v1.0.6
+   Compiling http-body-util v0.1.5
+   Compiling jobserver v0.1.35
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.3
+   Compiling getrandom v0.2.17
+   Compiling filetime v0.2.29
+   Compiling parking_lot v0.12.5
+   Compiling cc v1.4.6
+   Compiling tokio v1.53.1
+   Compiling crossterm v0.28.1
+   Compiling comfy-table v7.1.4
+   Compiling xattr v1.6.1
+   Compiling tar v0.4.46
+   Compiling num-integer v0.1.47
+   Compiling chrono v0.4.45
+   Compiling num-complex v0.4.6
+   Compiling atoi v2.0.0
+   Compiling num-bigint v0.4.8
+   Compiling regex-automata v0.4.18
+   Compiling ring v0.17.14
+   Compiling synstructure v0.14.0
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling flate2 v1.1.10
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling zerocopy-derive v0.8.57
+   Compiling strum_macros v0.27.2
+   Compiling zip v6.0.0
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerotrie v0.2.5
+   Compiling regex v1.13.1
+   Compiling zerovec v0.11.8
+   Compiling strum v0.27.2
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling rustls-webpki v0.103.15
+   Compiling icu_locale_core v2.3.0
+   Compiling hyper v1.11.1
+   Compiling tower v0.5.3
+   Compiling serde_urlencoded v0.7.1
+   Compiling icu_provider v2.3.1
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling hyper-util v0.1.20
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling tower-http v0.6.11
+   Compiling half v2.7.1
+   Compiling arrow-buffer v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling arrow-data v58.4.0
+   Compiling arrow-array v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+   Compiling arrow-select v58.4.0
+   Compiling arrow-arith v58.4.0
+   Compiling arrow-row v58.4.0
+   Compiling arrow-ord v58.4.0
+   Compiling arrow-string v58.4.0
+   Compiling arrow-cast v58.4.0
+   Compiling arrow v58.4.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `test` profile [unoptimized] target(s) in 1m 20s
+  Executable unittests src/lib.rs (target-nodebug/debug/deps/consumer-20f465dec97650ac)
+  Executable unittests src/main.rs (target-nodebug/debug/deps/consumer_bin-00890c4e3640c5a3)
+  Executable tests/t01.rs (target-nodebug/debug/deps/t01-5fc01343193a92fb)
+  Executable tests/t02.rs (target-nodebug/debug/deps/t02-96d58699f5216d0f)
+  Executable tests/t03.rs (target-nodebug/debug/deps/t03-eb38242a6efd5551)
+  Executable tests/t04.rs (target-nodebug/debug/deps/t04-0dad823c37e94f6f)
+  Executable tests/t05.rs (target-nodebug/debug/deps/t05-2d1c426fa6c81b4e)
+  Executable tests/t06.rs (target-nodebug/debug/deps/t06-97cbe2ec2f6d1f92)
+  Executable tests/t07.rs (target-nodebug/debug/deps/t07-d9560e9f243c6c8c)
+  Executable tests/t08.rs (target-nodebug/debug/deps/t08-af4fb9cbc02ee2a7)
+  Executable tests/t09.rs (target-nodebug/debug/deps/t09-7ba2862920d19163)
+  Executable tests/t10.rs (target-nodebug/debug/deps/t10-1aa37e5702393029)
+  Executable tests/t11.rs (target-nodebug/debug/deps/t11-499cf0b90edeea87)
+  Executable tests/t12.rs (target-nodebug/debug/deps/t12-55116c30d302887e)
+  Executable tests/t13.rs (target-nodebug/debug/deps/t13-5632eb63f7c8f5b1)
+  Executable tests/t14.rs (target-nodebug/debug/deps/t14-472a661aed9d28f6)
+  Executable tests/t15.rs (target-nodebug/debug/deps/t15-9f3b29fec0a6ae6b)
+  Executable tests/t16.rs (target-nodebug/debug/deps/t16-162a5337d1667503)
+  Executable tests/t17.rs (target-nodebug/debug/deps/t17-c5d7d9e780f6cb3d)
+  Executable tests/t18.rs (target-nodebug/debug/deps/t18-b29f29b4b3a88ea4)
+  Executable tests/t19.rs (target-nodebug/debug/deps/t19-3bb06032a84ee7d2)
+  Executable tests/t20.rs (target-nodebug/debug/deps/t20-37bb3e2c27ce438c)
+### nodebug_incr_lib_test: cargo test --no-run -j32
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `test` profile [unoptimized] target(s) in 2.69s
+  Executable unittests src/lib.rs (target-nodebug/debug/deps/consumer-20f465dec97650ac)
+  Executable unittests src/main.rs (target-nodebug/debug/deps/consumer_bin-00890c4e3640c5a3)
+  Executable tests/t01.rs (target-nodebug/debug/deps/t01-5fc01343193a92fb)
+  Executable tests/t02.rs (target-nodebug/debug/deps/t02-96d58699f5216d0f)
+  Executable tests/t03.rs (target-nodebug/debug/deps/t03-eb38242a6efd5551)
+  Executable tests/t04.rs (target-nodebug/debug/deps/t04-0dad823c37e94f6f)
+  Executable tests/t05.rs (target-nodebug/debug/deps/t05-2d1c426fa6c81b4e)
+  Executable tests/t06.rs (target-nodebug/debug/deps/t06-97cbe2ec2f6d1f92)
+  Executable tests/t07.rs (target-nodebug/debug/deps/t07-d9560e9f243c6c8c)
+  Executable tests/t08.rs (target-nodebug/debug/deps/t08-af4fb9cbc02ee2a7)
+  Executable tests/t09.rs (target-nodebug/debug/deps/t09-7ba2862920d19163)
+  Executable tests/t10.rs (target-nodebug/debug/deps/t10-1aa37e5702393029)
+  Executable tests/t11.rs (target-nodebug/debug/deps/t11-499cf0b90edeea87)
+  Executable tests/t12.rs (target-nodebug/debug/deps/t12-55116c30d302887e)
+  Executable tests/t13.rs (target-nodebug/debug/deps/t13-5632eb63f7c8f5b1)
+  Executable tests/t14.rs (target-nodebug/debug/deps/t14-472a661aed9d28f6)
+  Executable tests/t15.rs (target-nodebug/debug/deps/t15-9f3b29fec0a6ae6b)
+  Executable tests/t16.rs (target-nodebug/debug/deps/t16-162a5337d1667503)
+  Executable tests/t17.rs (target-nodebug/debug/deps/t17-c5d7d9e780f6cb3d)
+  Executable tests/t18.rs (target-nodebug/debug/deps/t18-b29f29b4b3a88ea4)
+  Executable tests/t19.rs (target-nodebug/debug/deps/t19-3bb06032a84ee7d2)
+  Executable tests/t20.rs (target-nodebug/debug/deps/t20-37bb3e2c27ce438c)
+### nodebug_incr_lib_build: cargo build -j32
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `dev` profile [unoptimized] target(s) in 0.76s
+### nodebug_incr_test_test: cargo test --no-run -j32
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `test` profile [unoptimized] target(s) in 2.52s
+  Executable unittests src/lib.rs (target-nodebug/debug/deps/consumer-20f465dec97650ac)
+  Executable unittests src/main.rs (target-nodebug/debug/deps/consumer_bin-00890c4e3640c5a3)
+  Executable tests/t01.rs (target-nodebug/debug/deps/t01-5fc01343193a92fb)
+  Executable tests/t02.rs (target-nodebug/debug/deps/t02-96d58699f5216d0f)
+  Executable tests/t03.rs (target-nodebug/debug/deps/t03-eb38242a6efd5551)
+  Executable tests/t04.rs (target-nodebug/debug/deps/t04-0dad823c37e94f6f)
+  Executable tests/t05.rs (target-nodebug/debug/deps/t05-2d1c426fa6c81b4e)
+  Executable tests/t06.rs (target-nodebug/debug/deps/t06-97cbe2ec2f6d1f92)
+  Executable tests/t07.rs (target-nodebug/debug/deps/t07-d9560e9f243c6c8c)
+  Executable tests/t08.rs (target-nodebug/debug/deps/t08-af4fb9cbc02ee2a7)
+  Executable tests/t09.rs (target-nodebug/debug/deps/t09-7ba2862920d19163)
+  Executable tests/t10.rs (target-nodebug/debug/deps/t10-1aa37e5702393029)
+  Executable tests/t11.rs (target-nodebug/debug/deps/t11-499cf0b90edeea87)
+  Executable tests/t12.rs (target-nodebug/debug/deps/t12-55116c30d302887e)
+  Executable tests/t13.rs (target-nodebug/debug/deps/t13-5632eb63f7c8f5b1)
+  Executable tests/t14.rs (target-nodebug/debug/deps/t14-472a661aed9d28f6)
+  Executable tests/t15.rs (target-nodebug/debug/deps/t15-9f3b29fec0a6ae6b)
+  Executable tests/t16.rs (target-nodebug/debug/deps/t16-162a5337d1667503)
+  Executable tests/t17.rs (target-nodebug/debug/deps/t17-c5d7d9e780f6cb3d)
+  Executable tests/t18.rs (target-nodebug/debug/deps/t18-b29f29b4b3a88ea4)
+  Executable tests/t19.rs (target-nodebug/debug/deps/t19-3bb06032a84ee7d2)
+  Executable tests/t20.rs (target-nodebug/debug/deps/t20-37bb3e2c27ce438c)
+### release_build_j32: cargo build --release -j32
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.189
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling stable_deref_trait v1.2.1
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling zerocopy v0.8.57
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-core v0.3.34
+   Compiling bitflags v2.13.2
+   Compiling itoa v1.0.18
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.12
+   Compiling serde_core v1.0.229
+   Compiling writeable v0.6.4
+   Compiling smallvec v1.16.1
+   Compiling litemap v0.8.3
+   Compiling memchr v2.8.3
+   Compiling futures-sink v0.3.34
+   Compiling icu_normalizer_data v2.3.0
+   Compiling getrandom v0.3.4
+   Compiling utf8_iter v1.0.4
+   Compiling version_check v0.9.5
+   Compiling icu_properties_data v2.3.0
+   Compiling percent-encoding v2.3.2
+   Compiling zeroize v1.9.0
+   Compiling once_cell v1.21.4
+   Compiling slab v0.4.12
+   Compiling httparse v1.10.1
+   Compiling futures-task v0.3.34
+   Compiling iana-time-zone v0.1.65
+   Compiling futures-io v0.3.34
+   Compiling untrusted v0.9.0
+   Compiling hashbrown v0.17.1
+   Compiling crc32fast v1.5.2
+   Compiling rustls-pki-types v1.15.1
+   Compiling arrow-schema v58.4.0
+   Compiling rustls v0.23.45
+   Compiling try-lock v0.2.5
+   Compiling tower-service v0.3.3
+   Compiling tracing-core v0.1.36
+   Compiling form_urlencoded v1.2.2
+   Compiling futures-channel v0.3.34
+   Compiling atomic-waker v1.1.2
+   Compiling rustix v1.1.4
+   Compiling subtle v2.6.1
+   Compiling lexical-util v1.0.7
+   Compiling parking_lot_core v0.9.12
+   Compiling want v0.3.1
+   Compiling serde v1.0.229
+   Compiling simd-adler32 v0.3.10
+   Compiling sync_wrapper v1.0.2
+   Compiling zmij v1.0.23
+   Compiling log v0.4.34
+   Compiling ipnet v2.12.2
+   Compiling linux-raw-sys v0.12.1
+   Compiling base64 v0.22.1
+   Compiling tower-layer v0.3.3
+   Compiling ahash v0.8.12
+   Compiling scopeguard v1.2.0
+   Compiling num-traits v0.2.19
+   Compiling adler2 v2.0.1
+   Compiling rustix v0.38.44
+   Compiling equivalent v1.0.2
+   Compiling lock_api v0.4.14
+   Compiling serde_json v1.0.151
+   Compiling miniz_oxide v0.9.1
+   Compiling linux-raw-sys v0.4.15
+   Compiling zlib-rs v0.6.8
+   Compiling bumpalo v3.20.3
+   Compiling ryu v1.0.23
+   Compiling webpki-roots v1.0.9
+   Compiling futures-util v0.3.34
+   Compiling regex-syntax v0.8.11
+   Compiling vcpkg v0.2.15
+   Compiling unicode-segmentation v1.13.3
+   Compiling unicode-width v0.2.2
+   Compiling lexical-parse-integer v1.0.6
+   Compiling http v1.5.0
+   Compiling tracing v0.1.44
+   Compiling lexical-write-integer v1.0.6
+   Compiling pkg-config v0.3.34
+   Compiling zopfli v0.8.3
+   Compiling heck v0.5.0
+   Compiling foldhash v0.1.5
+   Compiling lexical-parse-float v1.0.6
+   Compiling rust_decimal v1.43.0
+   Compiling hashbrown v0.15.5
+   Compiling arrayvec v0.7.8
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling cast v0.3.0
+   Compiling lexical-write-float v1.0.6
+   Compiling fallible-iterator v0.3.0
+   Compiling aho-corasick v1.1.5
+   Compiling indexmap v2.14.2
+   Compiling lexical-core v1.0.6
+   Compiling jobserver v0.1.35
+   Compiling mio v1.2.3
+   Compiling socket2 v0.6.5
+   Compiling getrandom v0.2.17
+   Compiling filetime v0.2.29
+   Compiling http-body v1.1.0
+   Compiling http-body-util v0.1.5
+   Compiling cc v1.4.6
+   Compiling hashlink v0.10.0
+   Compiling parking_lot v0.12.5
+   Compiling tokio v1.53.1
+   Compiling crossterm v0.28.1
+   Compiling comfy-table v7.1.4
+   Compiling xattr v1.6.1
+   Compiling num-integer v0.1.47
+   Compiling chrono v0.4.45
+   Compiling num-complex v0.4.6
+   Compiling atoi v2.0.0
+   Compiling tar v0.4.46
+   Compiling ring v0.17.14
+   Compiling regex-automata v0.4.18
+   Compiling num-bigint v0.4.8
+   Compiling flate2 v1.1.10
+   Compiling zerocopy-derive v0.8.57
+   Compiling strum_macros v0.27.2
+   Compiling zip v6.0.0
+   Compiling synstructure v0.14.0
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling strum v0.27.2
+   Compiling hyper v1.11.1
+   Compiling tower v0.5.3
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling regex v1.13.1
+   Compiling rustls-webpki v0.103.15
+   Compiling hyper-util v0.1.20
+   Compiling serde_urlencoded v0.7.1
+   Compiling icu_provider v2.3.1
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling tower-http v0.6.11
+   Compiling half v2.7.1
+   Compiling arrow-buffer v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling arrow-data v58.4.0
+   Compiling arrow-array v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+   Compiling arrow-select v58.4.0
+   Compiling arrow-row v58.4.0
+   Compiling arrow-ord v58.4.0
+   Compiling arrow-string v58.4.0
+   Compiling arrow-arith v58.4.0
+   Compiling arrow-cast v58.4.0
+   Compiling arrow v58.4.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `release` profile [optimized] target(s) in 2m 27s
+### musl_build: cargo build --release --target x86_64-unknown-linux-musl -j32
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.189
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling stable_deref_trait v1.2.1
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling pin-project-lite v0.2.17
+   Compiling zerocopy v0.8.57
+   Compiling futures-core v0.3.34
+   Compiling shlex v2.0.1
+   Compiling bitflags v2.13.2
+   Compiling find-msvc-tools v0.1.12
+   Compiling serde_core v1.0.229
+   Compiling itoa v1.0.18
+   Compiling smallvec v1.16.1
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling icu_properties_data v2.3.0
+   Compiling utf8_iter v1.0.4
+   Compiling version_check v0.9.5
+   Compiling icu_normalizer_data v2.3.0
+   Compiling memchr v2.8.3
+   Compiling getrandom v0.3.4
+   Compiling futures-sink v0.3.34
+   Compiling zeroize v1.9.0
+   Compiling once_cell v1.21.4
+   Compiling percent-encoding v2.3.2
+   Compiling slab v0.4.12
+   Compiling futures-task v0.3.34
+   Compiling futures-io v0.3.34
+   Compiling iana-time-zone v0.1.65
+   Compiling untrusted v0.9.0
+   Compiling httparse v1.10.1
+   Compiling try-lock v0.2.5
+   Compiling rustls-pki-types v1.15.1
+   Compiling hashbrown v0.17.1
+   Compiling rustls v0.23.45
+   Compiling crc32fast v1.5.2
+   Compiling tower-service v0.3.3
+   Compiling want v0.3.1
+   Compiling form_urlencoded v1.2.2
+   Compiling futures-channel v0.3.34
+   Compiling rustix v1.1.4
+   Compiling atomic-waker v1.1.2
+   Compiling serde v1.0.229
+   Compiling lexical-util v1.0.7
+   Compiling subtle v2.6.1
+   Compiling tracing-core v0.1.36
+   Compiling simd-adler32 v0.3.10
+   Compiling parking_lot_core v0.9.12
+   Compiling sync_wrapper v1.0.2
+   Compiling base64 v0.22.1
+   Compiling scopeguard v1.2.0
+   Compiling log v0.4.34
+   Compiling arrow-schema v58.4.0
+   Compiling zmij v1.0.23
+   Compiling tower-layer v0.3.3
+   Compiling ahash v0.8.12
+   Compiling ipnet v2.12.2
+   Compiling rustix v0.38.44
+   Compiling linux-raw-sys v0.12.1
+   Compiling num-traits v0.2.19
+   Compiling adler2 v2.0.1
+   Compiling lock_api v0.4.14
+   Compiling bumpalo v3.20.3
+   Compiling miniz_oxide v0.9.1
+   Compiling serde_json v1.0.151
+   Compiling equivalent v1.0.2
+   Compiling zlib-rs v0.6.8
+   Compiling webpki-roots v1.0.9
+   Compiling linux-raw-sys v0.4.15
+   Compiling ryu v1.0.23
+   Compiling regex-syntax v0.8.11
+   Compiling futures-util v0.3.34
+   Compiling pkg-config v0.3.34
+   Compiling unicode-width v0.2.2
+   Compiling vcpkg v0.2.15
+   Compiling http v1.5.0
+   Compiling zopfli v0.8.3
+   Compiling tracing v0.1.44
+   Compiling unicode-segmentation v1.13.3
+   Compiling lexical-write-integer v1.0.6
+   Compiling lexical-parse-integer v1.0.6
+   Compiling foldhash v0.1.5
+   Compiling heck v0.5.0
+   Compiling rust_decimal v1.43.0
+   Compiling arrayvec v0.7.8
+   Compiling fallible-iterator v0.3.0
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling lexical-parse-float v1.0.6
+   Compiling indexmap v2.14.2
+   Compiling hashbrown v0.15.5
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling aho-corasick v1.1.5
+   Compiling cast v0.3.0
+   Compiling lexical-write-float v1.0.6
+   Compiling http-body v1.1.0
+   Compiling lexical-core v1.0.6
+   Compiling jobserver v0.1.35
+   Compiling mio v1.2.3
+   Compiling socket2 v0.6.5
+   Compiling getrandom v0.2.17
+   Compiling filetime v0.2.29
+   Compiling http-body-util v0.1.5
+   Compiling parking_lot v0.12.5
+   Compiling cc v1.4.6
+   Compiling hashlink v0.10.0
+   Compiling tokio v1.53.1
+   Compiling crossterm v0.28.1
+   Compiling num-integer v0.1.47
+   Compiling num-complex v0.4.6
+   Compiling chrono v0.4.45
+   Compiling atoi v2.0.0
+   Compiling num-bigint v0.4.8
+   Compiling xattr v1.6.1
+   Compiling comfy-table v7.1.4
+   Compiling tar v0.4.46
+   Compiling flate2 v1.1.10
+   Compiling regex-automata v0.4.18
+   Compiling ring v0.17.14
+   Compiling zip v6.0.0
+   Compiling zerocopy-derive v0.8.57
+   Compiling synstructure v0.14.0
+   Compiling strum_macros v0.27.2
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling strum v0.27.2
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling hyper v1.11.1
+   Compiling tower v0.5.3
+   Compiling rustls-webpki v0.103.15
+   Compiling regex v1.13.1
+   Compiling icu_provider v2.3.1
+   Compiling serde_urlencoded v0.7.1
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling hyper-util v0.1.20
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling half v2.7.1
+   Compiling tower-http v0.6.11
+   Compiling arrow-buffer v58.4.0
+   Compiling arrow-data v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling arrow-array v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+error: failed to run custom build command for `libduckdb-sys v1.10504.0`
+
+Caused by:
+  process didn't exit successfully: `/home/pepe/scratch/burrmill-footprint/A/target-musl/release/build/libduckdb-sys-42479e01c846e1b6/build-script-build` (exit status: 1)
+  --- stdout
+  cargo:rerun-if-changed=src/bindgen_bundled_version.rs
+  cargo:include=/home/pepe/scratch/burrmill-footprint/A/target-musl/x86_64-unknown-linux-musl/release/build/libduckdb-sys-c9f4168c7ff9b847/out/duckdb/src/include
+  cargo:rerun-if-changed=duckdb.tar.gz
+  cargo:rerun-if-env-changed=CC_FORCE_DISABLE
+  CC_FORCE_DISABLE = None
+  cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-musl
+  CXX_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_musl
+  CXX_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=TARGET_CXX
+  TARGET_CXX = None
+  cargo:rerun-if-env-changed=CXX
+  CXX = None
+  cargo:rerun-if-env-changed=CROSS_COMPILE
+  CROSS_COMPILE = None
+  PATH = Some(/home/pepe/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/games)
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+
+  --- stderr
+
+
+  error occurred in cc-rs: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+
+
+warning: build failed, waiting for other jobs to finish...
+### wasm_check: cargo check --target wasm32-unknown-unknown -j32
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.5
+   Compiling once_cell v1.21.4
+   Compiling libm v0.2.16
+   Compiling autocfg v1.5.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling crunchy v0.2.4
+   Compiling zerocopy v0.8.57
+   Compiling pin-project-lite v0.2.17
+   Compiling bytes v1.12.1
+   Compiling shlex v2.0.1
+   Compiling tiny-keccak v2.0.2
+   Compiling serde_core v1.0.229
+   Compiling itoa v1.0.18
+   Compiling find-msvc-tools v0.1.12
+   Compiling futures-core v0.3.34
+   Compiling smallvec v1.16.1
+   Compiling writeable v0.6.4
+    Checking bitflags v2.13.2
+   Compiling litemap v0.8.3
+   Compiling memchr v2.8.3
+   Compiling icu_normalizer_data v2.3.0
+   Compiling futures-sink v0.3.34
+   Compiling utf8_iter v1.0.4
+   Compiling icu_properties_data v2.3.0
+   Compiling version_check v0.9.5
+   Compiling percent-encoding v2.3.2
+   Compiling zeroize v1.9.0
+   Compiling slab v0.4.12
+   Compiling futures-io v0.3.34
+   Compiling httparse v1.10.1
+   Compiling untrusted v0.9.0
+   Compiling futures-task v0.3.34
+    Checking hashbrown v0.17.1
+   Compiling crc32fast v1.5.2
+   Compiling try-lock v0.2.5
+   Compiling rustls-pki-types v1.15.1
+   Compiling tower-service v0.3.3
+   Compiling rustls v0.23.45
+   Compiling form_urlencoded v1.2.2
+   Compiling tracing-core v0.1.36
+   Compiling futures-channel v0.3.34
+    Checking lexical-util v1.0.7
+   Compiling want v0.3.1
+   Compiling simd-adler32 v0.3.10
+   Compiling atomic-waker v1.1.2
+   Compiling subtle v2.6.1
+   Compiling serde v1.0.229
+   Compiling parking_lot_core v0.9.12
+   Compiling rustix v1.1.4
+    Checking arrow-schema v58.4.0
+   Compiling sync_wrapper v1.0.2
+   Compiling tower-layer v0.3.3
+   Compiling base64 v0.22.1
+   Compiling zmij v1.0.23
+    Checking scopeguard v1.2.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling adler2 v2.0.1
+   Compiling ipnet v2.12.2
+   Compiling log v0.4.34
+    Checking lock_api v0.4.14
+   Compiling zlib-rs v0.6.8
+   Compiling miniz_oxide v0.9.1
+   Compiling ryu v1.0.23
+   Compiling equivalent v1.0.2
+   Compiling serde_json v1.0.151
+   Compiling ahash v0.8.12
+   Compiling futures-util v0.3.34
+   Compiling webpki-roots v1.0.9
+   Compiling http v1.5.0
+   Compiling bumpalo v3.20.3
+   Compiling num-traits v0.2.19
+   Compiling tracing v0.1.44
+    Checking regex-syntax v0.8.11
+   Compiling pkg-config v0.3.34
+    Checking lexical-parse-integer v1.0.6
+    Checking lexical-write-integer v1.0.6
+    Checking parking_lot v0.12.5
+    Checking unicode-width v0.2.2
+    Checking unicode-segmentation v1.13.3
+   Compiling vcpkg v0.2.15
+    Checking foldhash v0.1.5
+    Checking lexical-parse-float v1.0.6
+    Checking aho-corasick v1.1.5
+   Compiling zopfli v0.8.3
+   Compiling rust_decimal v1.43.0
+   Compiling heck v0.5.0
+    Checking crossterm v0.28.1
+    Checking hashbrown v0.15.5
+    Checking arrayvec v0.7.8
+    Checking lexical-write-float v1.0.6
+    Checking fallible-streaming-iterator v0.1.9
+    Checking cast v0.3.0
+error[E0425]: cannot find function `enable_raw_mode` in module `sys`
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal.rs:123:10
+    |
+123 |     sys::enable_raw_mode()
+    |          ^^^^^^^^^^^^^^^ not found in `sys`
+    |
+note: found an item that was configured out
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal/sys.rs:8:23
+    |
+  6 | #[cfg(unix)]
+    |       ---- the item is gated here
+  7 | pub(crate) use self::unix::{
+  8 |     disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, size, window_size,
+    |                       ^^^^^^^^^^^^^^^
+note: found an item that was configured out
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal/sys.rs:17:30
+    |
+ 15 | #[cfg(windows)]
+    |       ------- the item is gated here
+ 16 | pub(crate) use self::windows::{
+ 17 |     clear, disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, scroll_down, scroll_up,
+    |                              ^^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `disable_raw_mode` in module `sys`
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal.rs:130:10
+    |
+130 |     sys::disable_raw_mode()
+    |          ^^^^^^^^^^^^^^^^ not found in `sys`
+    |
+note: found an item that was configured out
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal/sys.rs:8:5
+    |
+  6 | #[cfg(unix)]
+    |       ---- the item is gated here
+  7 | pub(crate) use self::unix::{
+  8 |     disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, size, window_size,
+    |     ^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal/sys.rs:17:12
+    |
+ 15 | #[cfg(windows)]
+    |       ------- the item is gated here
+ 16 | pub(crate) use self::windows::{
+ 17 |     clear, disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, scroll_down, scroll_up,
+    |            ^^^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `size` in module `sys`
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal.rs:137:10
+    |
+137 |     sys::size()
+    |          ^^^^ not found in `sys`
+    |
+note: found an item that was configured out
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal/sys.rs:8:61
+    |
+  6 | #[cfg(unix)]
+    |       ---- the item is gated here
+  7 | pub(crate) use self::unix::{
+  8 |     disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, size, window_size,
+    |                                                             ^^^^
+note: found an item that was configured out
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal/sys.rs:18:33
+    |
+ 15 | #[cfg(windows)]
+    |       ------- the item is gated here
+...
+ 18 |     set_size, set_window_title, size, window_size,
+    |                                 ^^^^
+
+error[E0425]: cannot find function `window_size` in module `sys`
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal.rs:154:10
+    |
+154 |     sys::window_size()
+    |          ^^^^^^^^^^^ not found in `sys`
+    |
+note: found an item that was configured out
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal/sys.rs:8:67
+    |
+  6 | #[cfg(unix)]
+    |       ---- the item is gated here
+  7 | pub(crate) use self::unix::{
+  8 |     disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, size, window_size,
+    |                                                                   ^^^^^^^^^^^
+note: found an item that was configured out
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal/sys.rs:18:39
+    |
+ 15 | #[cfg(windows)]
+    |       ------- the item is gated here
+...
+ 18 |     set_size, set_window_title, size, window_size,
+    |                                       ^^^^^^^^^^^
+
+    Checking fallible-iterator v0.3.0
+error[E0308]: mismatched types
+   --> /home/pepe/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossterm-0.28.1/src/terminal.rs:107:33
+    |
+107 | pub fn is_raw_mode_enabled() -> io::Result<bool> {
+    |        -------------------      ^^^^^^^^^^^^^^^^ expected `Result<bool, Error>`, found `()`
+    |        |
+    |        implicitly returns `()` as its body has no tail or `return` expression
+    |
+    = note:   expected enum `Result<bool, std::io::Error>`
+            found unit type `()`
+
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+Some errors have detailed explanations: E0308, E0425.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `crossterm` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...

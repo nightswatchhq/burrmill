@@ -293,3 +293,41 @@ This is the better arrangement anyway, for three reasons the RFC's own text alre
 - §12's "a no is a result" is much cheaper to act on when the answer is "archive a repo" rather than "unpick a crate from a workspace".
 
 The cost, stated: no path dependency on nuthatch, so anything Burrmill needs from it (`seal::SEGMENTS_DIR` and the segment naming convention) is duplicated rather than imported, and a change to nuthatch's seal layout will not break Burrmill's build - it will break its *reading*, silently, until a test catches it. That test is owed.
+
+## Amendment 2 — the goal is the swap, 2026-09-16
+
+Chief directed that DuckDB is to be replaced in nuthatch by a Rust engine, and that Burrmill may rent
+DataFusion or anything else to get there. The bar becomes "no regression users feel, plus the wins
+DuckDB cannot offer", instead of "≤1.0x DuckDB on every shape". Answer parity on every authored
+statement does not relax. The guardrail on nuthatch still stands: nothing there changes until Chief
+says so.
+
+Five investigations ran the same day, and they revise this RFC in four places. Evidence and plan are
+in `docs/research/replacing-duckdb/`.
+
+- **§1 and A4.**
+  - A4 returned the open-ended answer: 32 shapes and 22 plan families in 65 statements, with
+    statement coverage at 0/65.
+  - The design therefore becomes the host-planner variant. DataFusion plans every statement, and the
+    owned operators are substituted into its physical plan wherever a subtree matches.
+  - Coverage is counted per subtree, so the 8 fold sub-plans run owned inside statements that
+    DataFusion handles.
+- **§4.1's cold-path penalty was DataFusion's defaults.**
+  - The penalty came from plan-time statistics, a footer cache smaller than the table's working
+    set, and a per-file `head` on every scan.
+  - With a nest provider, DataFusion is 0.71x DuckDB on the real authored views, and 0.55x on the
+    worst six (investigation 04).
+  - §4.3's owned operators remain the hot path. The fallback is no longer the slow path.
+- **§3.2, and Q2/Q3.**
+  - Checked arithmetic on DataFusion is a Burrmill-owned analyzer rule, plus checked UDAFs over a
+    320-bit accumulator.
+  - It answers uint256 sums exactly and refuses what it cannot represent, order-independently
+    (investigation 03).
+  - Decimal256 cannot hold `type(uint256).max`, so exact uint256 output is canonical text.
+- **§11 and burrmill#1.** The umbrella `datafusion` crate fails burrmill#1: test binaries are 2.6x
+  bundled DuckDB's at `-g0`, and the release binary is 3x (investigation 05). The component-crate
+  route is about even, but it needs an owned physical planner. The plan's phase 0 measures that
+  route before anything is built around the umbrella crate.
+
+§7's slices are superseded by the phases in `docs/research/replacing-duckdb/plan.md`, and slices 7-8
+survive there as phase 3.

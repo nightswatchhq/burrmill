@@ -1,0 +1,257 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.189
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling stable_deref_trait v1.2.1
+   Compiling cfg-if v1.0.5
+   Compiling bytes v1.12.1
+   Compiling pin-project-lite v0.2.17
+   Compiling zerocopy v0.8.57
+   Compiling futures-core v0.3.34
+   Compiling shlex v2.0.1
+   Compiling bitflags v2.13.2
+   Compiling find-msvc-tools v0.1.12
+   Compiling serde_core v1.0.229
+   Compiling itoa v1.0.18
+   Compiling smallvec v1.16.1
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling icu_properties_data v2.3.0
+   Compiling utf8_iter v1.0.4
+   Compiling version_check v0.9.5
+   Compiling icu_normalizer_data v2.3.0
+   Compiling memchr v2.8.3
+   Compiling getrandom v0.3.4
+   Compiling futures-sink v0.3.34
+   Compiling zeroize v1.9.0
+   Compiling once_cell v1.21.4
+   Compiling percent-encoding v2.3.2
+   Compiling slab v0.4.12
+   Compiling futures-task v0.3.34
+   Compiling futures-io v0.3.34
+   Compiling iana-time-zone v0.1.65
+   Compiling untrusted v0.9.0
+   Compiling httparse v1.10.1
+   Compiling try-lock v0.2.5
+   Compiling rustls-pki-types v1.15.1
+   Compiling hashbrown v0.17.1
+   Compiling rustls v0.23.45
+   Compiling crc32fast v1.5.2
+   Compiling tower-service v0.3.3
+   Compiling want v0.3.1
+   Compiling form_urlencoded v1.2.2
+   Compiling futures-channel v0.3.34
+   Compiling rustix v1.1.4
+   Compiling atomic-waker v1.1.2
+   Compiling serde v1.0.229
+   Compiling lexical-util v1.0.7
+   Compiling subtle v2.6.1
+   Compiling tracing-core v0.1.36
+   Compiling simd-adler32 v0.3.10
+   Compiling parking_lot_core v0.9.12
+   Compiling sync_wrapper v1.0.2
+   Compiling base64 v0.22.1
+   Compiling scopeguard v1.2.0
+   Compiling log v0.4.34
+   Compiling arrow-schema v58.4.0
+   Compiling zmij v1.0.23
+   Compiling tower-layer v0.3.3
+   Compiling ahash v0.8.12
+   Compiling ipnet v2.12.2
+   Compiling rustix v0.38.44
+   Compiling linux-raw-sys v0.12.1
+   Compiling num-traits v0.2.19
+   Compiling adler2 v2.0.1
+   Compiling lock_api v0.4.14
+   Compiling bumpalo v3.20.3
+   Compiling miniz_oxide v0.9.1
+   Compiling serde_json v1.0.151
+   Compiling equivalent v1.0.2
+   Compiling zlib-rs v0.6.8
+   Compiling webpki-roots v1.0.9
+   Compiling linux-raw-sys v0.4.15
+   Compiling ryu v1.0.23
+   Compiling regex-syntax v0.8.11
+   Compiling futures-util v0.3.34
+   Compiling pkg-config v0.3.34
+   Compiling unicode-width v0.2.2
+   Compiling vcpkg v0.2.15
+   Compiling http v1.5.0
+   Compiling zopfli v0.8.3
+   Compiling tracing v0.1.44
+   Compiling unicode-segmentation v1.13.3
+   Compiling lexical-write-integer v1.0.6
+   Compiling lexical-parse-integer v1.0.6
+   Compiling foldhash v0.1.5
+   Compiling heck v0.5.0
+   Compiling rust_decimal v1.43.0
+   Compiling arrayvec v0.7.8
+   Compiling fallible-iterator v0.3.0
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling lexical-parse-float v1.0.6
+   Compiling indexmap v2.14.2
+   Compiling hashbrown v0.15.5
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling aho-corasick v1.1.5
+   Compiling cast v0.3.0
+   Compiling lexical-write-float v1.0.6
+   Compiling http-body v1.1.0
+   Compiling lexical-core v1.0.6
+   Compiling jobserver v0.1.35
+   Compiling mio v1.2.3
+   Compiling socket2 v0.6.5
+   Compiling getrandom v0.2.17
+   Compiling filetime v0.2.29
+   Compiling http-body-util v0.1.5
+   Compiling parking_lot v0.12.5
+   Compiling cc v1.4.6
+   Compiling hashlink v0.10.0
+   Compiling tokio v1.53.1
+   Compiling crossterm v0.28.1
+   Compiling num-integer v0.1.47
+   Compiling num-complex v0.4.6
+   Compiling chrono v0.4.45
+   Compiling atoi v2.0.0
+   Compiling num-bigint v0.4.8
+   Compiling xattr v1.6.1
+   Compiling comfy-table v7.1.4
+   Compiling tar v0.4.46
+   Compiling flate2 v1.1.10
+   Compiling regex-automata v0.4.18
+   Compiling ring v0.17.14
+   Compiling zip v6.0.0
+   Compiling zerocopy-derive v0.8.57
+   Compiling synstructure v0.14.0
+   Compiling strum_macros v0.27.2
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling strum v0.27.2
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling hyper v1.11.1
+   Compiling tower v0.5.3
+   Compiling rustls-webpki v0.103.15
+   Compiling regex v1.13.1
+   Compiling icu_provider v2.3.1
+   Compiling serde_urlencoded v0.7.1
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling hyper-util v0.1.20
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling half v2.7.1
+   Compiling tower-http v0.6.11
+   Compiling arrow-buffer v58.4.0
+   Compiling arrow-data v58.4.0
+   Compiling tokio-rustls v0.26.5
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling arrow-array v58.4.0
+   Compiling libduckdb-sys v1.10504.0
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+warning: libduckdb-sys@1.10504.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+error: failed to run custom build command for `libduckdb-sys v1.10504.0`
+
+Caused by:
+  process didn't exit successfully: `/home/pepe/scratch/burrmill-footprint/A/target-musl/release/build/libduckdb-sys-42479e01c846e1b6/build-script-build` (exit status: 1)
+  --- stdout
+  cargo:rerun-if-changed=src/bindgen_bundled_version.rs
+  cargo:include=/home/pepe/scratch/burrmill-footprint/A/target-musl/x86_64-unknown-linux-musl/release/build/libduckdb-sys-c9f4168c7ff9b847/out/duckdb/src/include
+  cargo:rerun-if-changed=duckdb.tar.gz
+  cargo:rerun-if-env-changed=CC_FORCE_DISABLE
+  CC_FORCE_DISABLE = None
+  cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-musl
+  CXX_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_musl
+  CXX_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=TARGET_CXX
+  TARGET_CXX = None
+  cargo:rerun-if-env-changed=CXX
+  CXX = None
+  cargo:rerun-if-env-changed=CROSS_COMPILE
+  CROSS_COMPILE = None
+  PATH = Some(/home/pepe/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/usr/games)
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CXXFLAGS
+  TARGET_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_musl
+  CXXFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-musl
+  CXXFLAGS_x86_64-unknown-linux-musl = None
+
+  --- stderr
+
+
+  error occurred in cc-rs: failed to find tool "x86_64-linux-musl-g++": No such file or directory (os error 2)
+
+
+warning: build failed, waiting for other jobs to finish...

@@ -4,9 +4,12 @@
 refuse-on-overflow, faster than DuckDB on the queries an indexer actually runs. One binary, nothing
 to configure.**
 
-Status: **slice 1 of [RFC-0044](docs/rfc/RFC-0044-burrmill.md), gate passed.** One owned plan shape,
-one owned operator, the allowlist, a generated corpus against two oracles, and a head-to-head harness
-against both incumbents. Not usable as a general query engine and not trying to be.
+Status: **slice 1 of [RFC-0044](docs/rfc/RFC-0044-burrmill.md) gate passed; the seam, n-table folds
+and serving work have landed since** (see [ROADMAP.md](ROADMAP.md)). One owned operator family, the
+allowlist, a generated corpus against two oracles, and a head-to-head harness against both
+incumbents. Not yet usable as a general query engine. Replacing DuckDB inside nuthatch, renting
+DataFusion for what Burrmill does not own, is now under investigation in
+[docs/research/replacing-duckdb](docs/research/replacing-duckdb/README.md).
 
 The gate is "≤1.0x DuckDB at exact parity under 256 MB peak RSS", and both legs are met **at eight
 threads per query, with all three engines held to the same budget**: 0.38-0.87x across fourteen
@@ -31,13 +34,19 @@ layout, and honest about everything else.
 **0.80x, 0.95x and 1.01x** DuckDB over 6,000 to 9,745 sealed segments, parity verified, same files
 and same eight threads (`burrmill-bench views`). That test did not exist until recently and the
 claim did not survive it first time: re-reading immutable Parquet footers cost 57-93 ms of every
-query and the ratios were 1.20-1.38x until they were cached.
+query and the ratios were 1.20-1.38x until they were cached. **Caveat (roadmap 4.2c):** that run did
+not give DuckDB its own `parquet_metadata_cache`, which is off by default and worth about 9% on the
+curation fold, so these ratios flatter Burrmill until they are re-run with it set.
 
 On the synthetic sweep: 0.38-0.87x DuckDB across fourteen configurations, parity verified on every one, on a
 twelve-column nest-shaped fixture with every engine on the same eight threads. On the same runs
 general DataFusion measures 3.6x DuckDB at ten thousand segments — the many-small-files layout a nest
-actually produces — while beating it at high cardinality. That swing between renting general
-execution and owning a specialised one is the whole architectural argument.
+actually produces — while beating it at high cardinality. **That 3.6x is DataFusion's defaults**
+(`register_parquet`): plan-time statistics, a footer cache too small for the table, and a per-file
+`head` on every scan. On the real authored views, with a provider that knows its files and a cache
+that fits, DataFusion is 0.71x DuckDB overall and 0.55x on the worst six (`burrmill-bench df-views`,
+`docs/research/replacing-duckdb/04-real-views-on-datafusion.md`). The synthetic sweep has not been
+re-run with those remedies.
 `cargo run -p burrmill-bench --release` re-runs it, parity first.
 
 **Exact.** Integer overflow returns `BurrmillError::Overflow`, never a wrapped number. Said precisely,
@@ -57,8 +66,11 @@ corpus found where. Credit one party with `i128::MAX` and then `1`, across two f
 threads, and DuckDB returns **`i128::MIN`** for a sum whose true value is `MAX + 1`: a wrapped
 balance, silently. At one thread, or over a single file, the same query refuses correctly - so the
 check is in the single-threaded path and missing from the partial-aggregate combine, which means it
-only goes wrong once the data is large enough to parallelise. Measured on libduckdb-sys 1.10501.0;
-`cargo run -p burrmill-bench --release -- duckdb-gaps` reproduces it across the grid.
+only goes wrong once the data is large enough to parallelise. Measured on libduckdb-sys 1.10501.0,
+and still present in the 1.5.5 CLI; `cargo run -p burrmill-bench --release -- duckdb-gaps`
+reproduces it across the grid. Upstream already knows: it is
+[duckdb#24081](https://github.com/duckdb/duckdb/issues/24081), fixed on `main` by #24168 after 1.5.5
+was cut, so the claim holds for the 1.5 line and will expire with the next major release.
 
 Refusing, everywhere, is a guarantee neither of them offers.
 
@@ -73,10 +85,14 @@ that made Grafana's DuckDB-backed SQL Expressions a CVSS 9.9 local file read (CV
 
 Said plainly, because a README that implies otherwise is the thing this project is against.
 
-- **One plan shape.** Signed union fold - one table read twice, one column crediting and one
-  debiting the same signed value, grouped by the party. Everything else is `NotAllowed`.
-- **Cold segments only.** The redb hot tip and the hot/cold seam are the next slice, and the seam is
-  the highest-risk invariant in the design.
+- **One plan family, and no whole statements.** The signed union fold is generalised to n tables,
+  composite and computed group keys, and several `SUM`s, and every fold sub-plan in the real
+  workload now admits (8/8). But each of those folds sits inside a CTE or a join, so **0 of 65 real
+  statements** run end to end (roadmap 4.1f, `docs/bench/a4-plan-shapes.txt`). Everything else is
+  `NotAllowed`.
+- **No redb adapter yet.** The hot/cold seam exists and COR-1 holds under concurrent seal (stage 3),
+  but the only `HotTip` is in-memory. A redb-backed one needs nuthatch's hot entity encoding pinned
+  down (roadmap 3.4).
 - **A narrower value domain than DuckDB, deliberately.** Surrounding whitespace is trimmed, as DuckDB
   does; it was silently dropping the row and returning a short balance. But DuckDB also reads
   `1e18`, `7.0` and `1_000`, and **rounds `7.9` to 8**, and Burrmill will not guess at any of them: a

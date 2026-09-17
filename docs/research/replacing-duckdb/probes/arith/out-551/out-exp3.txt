@@ -1,0 +1,60 @@
+=== 3. Nuthatch pattern (DataFusion 55.1.0) ===
+true balances:
+    fits76       0
+    final_over   2*(10^76-1)  = 19999...98 (77 digits, fits i256, exceeds DECIMAL(76,0))
+    final_over2  6*(10^76-1)  = 59999...94 (77 digits, exceeds i256::MAX)
+    max          uint256 max  = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+    neg          -2
+    p255         2^255 (exceeds i256::MAX by one)
+    p255m1       2^255-1 (= i256::MAX, 77 digits, exceeds DECIMAL(76,0))
+    partial_over 10^76-1 (credits partial is 6*(10^76-1) > i256::MAX; final fits)
+    small        2
+--- target_partitions = 1 ---
+[UNION ALL, CAST DECIMAL(76,0), 1p] EXEC ERROR: Arrow error: Cast error: Cannot cast string '115792089237316195423570985008687907853269984665640564039457584007913129639935' to value of Decimal256(76, 10) type
+[UNION ALL, TRY_CAST DECIMAL(76,0), 1p] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: -55792089237316195423570985008687907853269984665640564039457584007913129639942 - 49999999999999999999999999999999999999999999999999999999999999999999999999995
+[nuthatch today: TRY_CAST DECIMAL(38,0) + _overflow, 1p] OK:
++--------------+---------+-----------+
+| party        | balance | _overflow |
++--------------+---------+-----------+
+| final_over   |         | 1         |
+| final_over2  |         | 1         |
+| fits76       | 0       | 1         |
+| max          |         | 1         |
+| neg          | -2      | 0         |
+| p255         | 1       | 1         |
+| p255m1       |         | 1         |
+| partial_over | 0       | 1         |
+| small        | 2       | 0         |
++--------------+---------+-----------+
+--- target_partitions = 4 ---
+[UNION ALL, CAST DECIMAL(76,0), 4p] EXEC ERROR: Arrow error: Invalid argument error: 57896044618658097711785492504343953926634992332820282019728792003956564819967 is too large to store in a Decimal256 of precision 76. Max is 99999999999999999999999999999999999999999999999999999...
+[UNION ALL, TRY_CAST DECIMAL(76,0), 4p] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: -55792089237316195423570985008687907853269984665640564039457584007913129639942 - 49999999999999999999999999999999999999999999999999999999999999999999999999995
+[nuthatch today: TRY_CAST DECIMAL(38,0) + _overflow, 4p] OK:
++--------------+---------+-----------+
+| party        | balance | _overflow |
++--------------+---------+-----------+
+| final_over   |         | 1         |
+| final_over2  |         | 1         |
+| fits76       | 0       | 1         |
+| max          |         | 1         |
+| neg          | -2      | 0         |
+| p255         | 1       | 1         |
+| p255m1       |         | 1         |
+| partial_over | 0       | 1         |
+| small        | 2       | 0         |
++--------------+---------+-----------+
+[UNION ALL TRY_CAST 76] physical plan:
+    |       AggregateExec: mode=FinalPartitioned, gby=[party@0 as party], aggr=[sum(m.c), sum(m.d)]
+    |         RepartitionExec: partitioning=Hash([party@0], 4), input_partitions=4
+    |           AggregateExec: mode=Partial, gby=[party@0 as party], aggr=[sum(m.c), sum(m.d)]
+    |               DataSourceExec: file_groups={2 groups: [[home/pepe/scratch/burrmill-arith-551/data/credits/part0.parquet], [home/pepe/scratch/burrmill-arith-551/data/credits/part1.parquet]]}, projection=[party, TRY_CAST(amount@1 AS Decimal256(76, 0)) as c, CAST(0 AS Decimal256(76, 0)) as d], file_type=parquet
+    |               DataSourceExec: file_groups={2 groups: [[home/pepe/scratch/burrmill-arith-551/data/debits/part0.parquet], [home/pepe/scratch/burrmill-arith-551/data/debits/part1.parquet]]}, projection=[party, CAST(0 AS Decimal256(76, 0)) as c, TRY_CAST(amount@1 AS Decimal256(76, 0)) as d], file_type=parquet
+[SUM directly over VARCHAR] PLAN ERROR: Error during planning: Internal error: Function 'sum' failed to match any signature, errors: Error during planning: Function 'sum' requires Decimal, but received String (DataType: Utf8View).,Error during planning: Function 'sum' r...
+[CAST DECIMAL(76,0) without the union, small parties only] OK:
++--------+------------------------------------------------------------------------------+
+| party  | sum(credits.amount)                                                          |
++--------+------------------------------------------------------------------------------+
+| fits76 | 9999999999999999999999999999999999999999999999999999999999999999999999999999 |
+| neg    | 5                                                                            |
+| small  | 6                                                                            |
++--------+------------------------------------------------------------------------------+

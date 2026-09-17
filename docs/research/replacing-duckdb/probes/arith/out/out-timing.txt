@@ -1,0 +1,37 @@
+builtin: 1000000 groups in 0.269s
+  [builtin] wall 0.357s  peak RSS 203 MB  exit 0
+checked: 1000000 groups in 0.172s
+  [checked] wall 0.194s  peak RSS 336 MB  exit 0
+builtin-text: 1000000 groups in 0.442s
+  [builtin-text] wall 0.458s  peak RSS 267 MB  exit 0
+checked-text: 1000000 groups in 0.344s
+  [checked-text] wall 0.366s  peak RSS 355 MB  exit 0
+checked-texttext: 1000000 groups in 0.352s
+  [checked-texttext] wall 0.372s  peak RSS 379 MB  exit 0
+scan: 1000000 groups in 0.072s
+  [scan] wall 0.090s  peak RSS 202 MB  exit 0
+builtin: 1000000 groups in 0.093s
+  [builtin] wall 0.112s  peak RSS 215 MB  exit 0
+checked: 1000000 groups in 0.163s
+  [checked] wall 0.186s  peak RSS 349 MB  exit 0
+builtin-text: 1000000 groups in 0.329s
+  [builtin-text] wall 0.349s  peak RSS 261 MB  exit 0
+checked-text: 1000000 groups in 0.328s
+  [checked-text] wall 0.352s  peak RSS 375 MB  exit 0
+checked-texttext: 1000000 groups in 0.354s
+  [checked-texttext] wall 0.375s  peak RSS 397 MB  exit 0
+scan: 1000000 groups in 0.084s
+  [scan] wall 0.104s  peak RSS 202 MB  exit 0
+builtin: 1000000 groups in 0.093s
+  [builtin] wall 0.112s  peak RSS 219 MB  exit 0
+checked: 1000000 groups in 0.161s
+  [checked] wall 0.185s  peak RSS 343 MB  exit 0
+builtin-text: 1000000 groups in 0.362s
+  [builtin-text] wall 0.385s  peak RSS 275 MB  exit 0
+checked-text: 1000000 groups in 0.328s
+  [checked-text] wall 0.351s  peak RSS 370 MB  exit 0
+checked-texttext: 1000000 groups in 0.386s
+  [checked-texttext] wall 0.407s  peak RSS 368 MB  exit 0
+scan: 1000000 groups in 0.080s
+  [scan] wall 0.100s  peak RSS 208 MB  exit 0
+TIMING-DONE

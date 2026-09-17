@@ -1,0 +1,293 @@
+files=97 lines=4275
+
+| feature | count | files | nests | example |
+|---|---|---|---|---|
+| CREATE VIEW | 118 | 57 | 15: arcaidia-nest, dips-nest, epoch-block-oracle-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest, nests-mvp/subgraph-availability-oracle, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/10-vault_policy.sql:5 |
+| CREATE OR REPLACE VIEW | 0 | 0 | 0:  |  |
+| CREATE TABLE/MACRO/other | 0 | 0 | 0:  |  |
+| WITH (CTE) | 38 | 29 | 9: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-tap-escrow-nest, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/10-vault_policy.sql:6 |
+| WITH RECURSIVE | 0 | 0 | 0:  |  |
+| SELECT | 570 | 71 | 15: arcaidia-nest, dips-nest, epoch-block-oracle-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest, nests-mvp/subgraph-availability-oracle, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/10-vault_policy.sql:7 |
+| SELECT DISTINCT | 3 | 3 | 3: graph-gns-nest, nuthatch/obib-case2, qos-reo-nest | graph-gns-nest/views/30-identity.sql:40 |
+| DISTINCT ON | 0 | 0 | 0:  |  |
+| SELECT * EXCLUDE | 0 | 0 | 0:  |  |
+| SELECT * REPLACE | 0 | 0 | 0:  |  |
+| SELECT * / t.* | 27 | 17 | 10: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-tap-escrow-nest, nests-mvp/subgraph-availability-oracle, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/80-pending_intents.sql:3 |
+| FROM-first syntax (stmt or subquery opens with FROM) | 0 | 0 | 0:  |  |
+| CTE definitions (name AS () | 138 | 29 | 9: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-tap-escrow-nest, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/10-vault_policy.sql:6 |
+| JOIN (any) | 119 | 37 | 10: arcaidia-nest, dips-nest, graph-allocations-nest, graph-gns-nest, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/10-vault_policy.sql:58 |
+| LEFT JOIN | 75 | 21 | 6: arcaidia-nest, graph-allocations-nest, graph-gns-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/10-vault_policy.sql:58 |
+| INNER JOIN | 0 | 0 | 0:  |  |
+| FULL JOIN | 4 | 3 | 2: graph-allocations-nest, qos-reo-nest-typed | graph-allocations-nest/checks/indexer-daily-sums.sql:23 |
+| RIGHT JOIN | 0 | 0 | 0:  |  |
+| CROSS JOIN | 1 | 1 | 1: qos-reo-nest-typed | qos-reo-nest-typed/views/50-qos-freshness-summary.sql:27 |
+| SEMI/ANTI JOIN | 0 | 0 | 0:  |  |
+| ASOF JOIN | 2 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/90-lodestar-indexers.sql:45 |
+| NATURAL JOIN | 0 | 0 | 0:  |  |
+| POSITIONAL JOIN | 0 | 0 | 0:  |  |
+| LATERAL | 2 | 2 | 2: graph-allocations-nest, qos-reo-nest | graph-allocations-nest/views/90-lodestar-indexers.sql:228 |
+| JOIN ... USING (col) | 4 | 4 | 1: qos-reo-nest-typed | qos-reo-nest-typed/checks/freshness.sql:11 |
+| comma join (FROM a, b) | 3 | 3 | 3: arcaidia-nest, graph-allocations-nest, qos-reo-nest | arcaidia-nest/views/85-protocol_state.sql:38 |
+| UNION ALL | 160 | 28 | 10: arcaidia-nest, dips-nest, graph-allocations-nest, graph-staking-nest, graph-tap-escrow-nest, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/30-settlements.sql:10 |
+| UNION (distinct) | 2 | 2 | 2: graph-allocations-nest, nuthatch/obib-case2 | graph-allocations-nest/views/95-lodestar-deployments.sql:43 |
+| UNION BY NAME | 0 | 0 | 0:  |  |
+| INTERSECT/EXCEPT | 0 | 0 | 0:  |  |
+| GROUP BY | 108 | 38 | 13: arcaidia-nest, dips-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest, nests-mvp/subgraph-availability-oracle, nuthatch/obib-case2, perpl-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/10-vault_policy.sql:33 |
+| GROUP BY ALL | 20 | 7 | 3: qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | qos-reo-nest-typed/views/05-qos-publisher.sql:25 |
+| GROUP BY <ordinal> | 51 | 12 | 3: graph-allocations-nest, graph-gns-nest, perpl-nest | graph-allocations-nest/checks/indexer-daily-sums.sql:15 |
+| GROUPING SETS/ROLLUP/CUBE | 0 | 0 | 0:  |  |
+| HAVING | 4 | 4 | 4: nests-mvp/subgraph-availability-oracle, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | nests-mvp/subgraph-availability-oracle/views/20-denials.sql:18 |
+| ORDER BY | 50 | 28 | 10: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest, nests-mvp/subgraph-availability-oracle, perpl-nest, qos-reo-nest, qos-reo-nest-typed | arcaidia-nest/views/60-fee_snapshots.sql:13 |
+| ORDER BY ALL | 0 | 0 | 0:  |  |
+| ORDER BY <ordinal> | 2 | 2 | 1: qos-reo-nest-typed | qos-reo-nest-typed/checks/day-resolution.sql:19 |
+| NULLS FIRST/LAST | 0 | 0 | 0:  |  |
+| LIMIT | 11 | 10 | 6: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest | arcaidia-nest/views/90-vault.sql:3 |
+| OFFSET | 0 | 0 | 0:  |  |
+| QUALIFY | 2 | 1 | 1: qos-reo-nest-wt-peers | qos-reo-nest-wt-peers/views/20-qos-rows.sql:36 |
+| WINDOW clause (named) | 3 | 3 | 2: qos-reo-nest-wt-peers, qos-reo-nest-wt-range | qos-reo-nest-wt-peers/views/30-qos-daily.sql:67 |
+| OVER ( | 33 | 13 | 8: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-tap-escrow-nest, nests-mvp/subgraph-availability-oracle, perpl-nest, qos-reo-nest, qos-reo-nest-wt-peers | arcaidia-nest/views/60-fee_snapshots.sql:13 |
+| PARTITION BY | 27 | 14 | 9: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-tap-escrow-nest, nests-mvp/subgraph-availability-oracle, perpl-nest, qos-reo-nest, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/60-fee_snapshots.sql:13 |
+| ROWS BETWEEN | 2 | 1 | 1: arcaidia-nest | arcaidia-nest/views/60-fee_snapshots.sql:14 |
+| RANGE BETWEEN | 0 | 0 | 0:  |  |
+| ROWS/RANGE UNBOUNDED (short form) | 3 | 3 | 1: graph-allocations-nest | graph-allocations-nest/views/50-lodestar-epochs.sql:365 |
+| UNBOUNDED PRECEDING | 5 | 4 | 2: arcaidia-nest, graph-allocations-nest | arcaidia-nest/views/60-fee_snapshots.sql:14 |
+| UNBOUNDED FOLLOWING | 0 | 0 | 0:  |  |
+| CURRENT ROW | 2 | 1 | 1: arcaidia-nest | arcaidia-nest/views/60-fee_snapshots.sql:14 |
+| n PRECEDING/FOLLOWING | 0 | 0 | 0:  |  |
+| EXCLUDE CURRENT ROW etc (frame) | 0 | 0 | 0:  |  |
+| FILTER (WHERE | 62 | 13 | 7: arcaidia-nest, graph-allocations-nest, graph-staking-nest, nests-mvp/subgraph-availability-oracle, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/85-protocol_state.sql:17 |
+| WITHIN GROUP | 0 | 0 | 0:  |  |
+| CASE | 39 | 15 | 6: arcaidia-nest, graph-allocations-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/20-fills.sql:13 |
+| EXISTS | 4 | 3 | 3: graph-allocations-nest, graph-tap-escrow-nest, qos-reo-nest | graph-allocations-nest/views/50-lodestar-epochs.sql:334 |
+| NOT EXISTS | 4 | 3 | 3: graph-allocations-nest, graph-tap-escrow-nest, qos-reo-nest | graph-allocations-nest/views/50-lodestar-epochs.sql:334 |
+| IN (subquery) | 8 | 4 | 1: graph-allocations-nest | graph-allocations-nest/checks/indexer-daily-sums.sql:11 |
+| NOT IN (subquery) | 6 | 3 | 1: graph-allocations-nest | graph-allocations-nest/views/20-allocations.sql:15 |
+| IN (list) | 5 | 3 | 2: graph-allocations-nest, qos-reo-nest-typed | graph-allocations-nest/views/90-lodestar-indexers.sql:93 |
+| scalar subquery (SELECT in expr) | 39 | 5 | 1: graph-allocations-nest | graph-allocations-nest/checks/populations.sql:2 |
+| ANY/ALL (quantified) | 0 | 0 | 0:  |  |
+| column IN table (DuckDB) | 0 | 0 | 0:  |  |
+| IS DISTINCT FROM | 12 | 4 | 2: graph-allocations-nest, qos-reo-nest-typed | graph-allocations-nest/checks/indexer-daily-sums.sql:25 |
+| IS NULL / IS NOT NULL | 47 | 15 | 6: arcaidia-nest, graph-allocations-nest, graph-gns-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/20-fills.sql:13 |
+| BETWEEN | 4 | 2 | 2: nuthatch/obib-case2, qos-reo-nest-wt-peers | nuthatch/obib-case2/views/case2-accounts.sql:32 |
+| LIKE | 4 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/90-lodestar-indexers.sql:500 |
+| ILIKE | 0 | 0 | 0:  |  |
+| SIMILAR TO | 0 | 0 | 0:  |  |
+| VALUES ( | 9 | 9 | 4: graph-allocations-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | graph-allocations-nest/views/50-lodestar-epochs.sql:52 |
+| SAMPLE/TABLESAMPLE | 0 | 0 | 0:  |  |
+| SUMMARIZE/DESCRIBE/PRAGMA/SET/EXPLAIN | 0 | 0 | 0:  |  |
+| PIVOT/UNPIVOT | 0 | 0 | 0:  |  |
+| TRUE/FALSE literal | 27 | 9 | 6: arcaidia-nest, graph-allocations-nest, nests-mvp/subgraph-availability-oracle, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/40-vault_flows.sql:28 |
+| NULL literal | 34 | 11 | 6: arcaidia-nest, dips-nest, graph-allocations-nest, graph-tap-escrow-nest, perpl-nest, qos-reo-nest-typed | arcaidia-nest/views/30-settlements.sql:21 |
+| INTERVAL literal | 0 | 0 | 0:  |  |
+| DATE literal | 10 | 6 | 3: qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | qos-reo-nest-typed/checks/day-resolution.sql:17 |
+| TIMESTAMP literal | 0 | 0 | 0:  |  |
+| dollar-quoted string | 0 | 0 | 0:  |  |
+| $n / ? params | 0 | 0 | 0:  |  |
+| double-quoted identifier | 543 | 34 | 11: arcaidia-nest, dips-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed | arcaidia-nest/views/10-vault_policy.sql:19 |
+| backtick identifier | 0 | 0 | 0:  |  |
+| struct literal {'a':..} | 4 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/90-lodestar-indexers.sql:359 |
+| list literal [..] | 35 | 9 | 5: arcaidia-nest, graph-allocations-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/10-vault_policy.sql:12 |
+| lambda x -> ... | 0 | 0 | 0:  |  |
+| method chaining .func( | 0 | 0 | 0:  |  |
+| trailing comma before FROM/) | 0 | 0 | 0:  |  |
+| E'..' escape string | 0 | 0 | 0:  |  |
+| main. prefix | 0 | 0 | 0:  |  |
+| nest. prefix | 16 | 1 | 1: qos-reo-nest-typed | qos-reo-nest-typed/checks/parity-2026-09-07.sql:71 |
+| hex literal 0x | 69 | 9 | 6: arcaidia-nest, graph-allocations-nest, nuthatch/obib-case2, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/85-protocol_state.sql:17 |
+| numeric literal >= 1e18 / big int | 22 | 5 | 2: graph-allocations-nest, perpl-nest | graph-allocations-nest/views/30-port-queue.sql:13 |
+| exponent literal 1e18 style | 7 | 1 | 1: perpl-nest | perpl-nest/views/10-perpl.sql:64 |
+| CAST( | 575 | 36 | 12: arcaidia-nest, epoch-block-oracle-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, nests-mvp/subgraph-availability-oracle, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/10-vault_policy.sql:12 |
+| TRY_CAST( | 2 | 1 | 1: nuthatch/obib-case2 | nuthatch/obib-case2/views/balances.sql:5 |
+| :: cast | 41 | 7 | 5: graph-allocations-nest, graph-staking-nest, graph-tap-escrow-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | graph-allocations-nest/views/90-lodestar-indexers.sql:359 |
+| HUGEINT | 307 | 14 | 3: graph-allocations-nest, nuthatch/obib-case2, perpl-nest | graph-allocations-nest/checks/indexer-daily-sums.sql:9 |
+| UHUGEINT | 0 | 0 | 0:  |  |
+| INT128 | 0 | 0 | 0:  |  |
+| DECIMAL(p,s) | 5 | 4 | 3: graph-staking-nest, graph-tap-escrow-nest, nuthatch/obib-case2 | graph-staking-nest/views/20-delegation-aggregates.sql:6 |
+| DECIMAL(38,0) | 5 | 4 | 3: graph-staking-nest, graph-tap-escrow-nest, nuthatch/obib-case2 | graph-staking-nest/views/20-delegation-aggregates.sql:6 |
+| DECIMAL/NUMERIC bare | 0 | 0 | 0:  |  |
+| BIGINT | 137 | 16 | 7: arcaidia-nest, graph-allocations-nest, graph-gns-nest, nests-mvp/subgraph-availability-oracle, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/10-vault_policy.sql:12 |
+| UBIGINT | 0 | 0 | 0:  |  |
+| INTEGER/INT | 18 | 8 | 7: graph-allocations-nest, graph-gns-nest, nests-mvp/subgraph-availability-oracle, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | graph-allocations-nest/views/90-lodestar-indexers.sql:173 |
+| UINTEGER/USMALLINT/UTINYINT | 0 | 0 | 0:  |  |
+| SMALLINT/TINYINT | 0 | 0 | 0:  |  |
+| DOUBLE | 87 | 6 | 4: graph-allocations-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | graph-allocations-nest/views/90-lodestar-indexers.sql:359 |
+| FLOAT/REAL | 0 | 0 | 0:  |  |
+| VARCHAR/TEXT/STRING type | 101 | 18 | 8: epoch-block-oracle-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | epoch-block-oracle-nest/views/10-data-edge-messages.sql:5 |
+| BLOB/BYTEA | 0 | 0 | 0:  |  |
+| BOOLEAN/BOOL | 1 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/40-lodestar-allocations.sql:31 |
+| TIMESTAMP type | 18 | 12 | 7: arcaidia-nest, epoch-block-oracle-nest, graph-allocations-nest, graph-staking-nest, graph-tap-escrow-nest, nests-mvp/subgraph-availability-oracle, qos-reo-nest-typed | arcaidia-nest/views/20-fills.sql:19 |
+| TIMESTAMP WITH TIME ZONE | 0 | 0 | 0:  |  |
+| DATE type | 1 | 1 | 1: perpl-nest | perpl-nest/views/10-perpl.sql:72 |
+| UUID | 0 | 0 | 0:  |  |
+| JSON type | 0 | 0 | 0:  |  |
+| MAP/STRUCT/LIST type | 1 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/90-lodestar-indexers.sql:360 |
+| ENUM | 0 | 0 | 0:  |  |
+| // integer division | 24 | 11 | 4: graph-allocations-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | graph-allocations-nest/views/40-lodestar-allocations.sql:63 |
+| / division | 74 | 13 | 8: arcaidia-nest, dips-nest, graph-allocations-nest, hackathon-nest, perpl-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/50-vaults.sql:18 |
+| % modulo | 1 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/90-lodestar-indexers.sql:399 |
+| power/pow/** | 9 | 1 | 1: perpl-nest | perpl-nest/views/10-perpl.sql:60 |
+| abs( | 12 | 1 | 1: qos-reo-nest-typed | qos-reo-nest-typed/checks/parity-2026-09-07.sql:80 |
+| round( | 0 | 0 | 0:  |  |
+| floor( | 0 | 0 | 0:  |  |
+| ceil( | 0 | 0 | 0:  |  |
+| greatest( | 12 | 5 | 4: graph-allocations-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | graph-allocations-nest/views/90-lodestar-indexers.sql:139 |
+| least( | 1 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/95-lodestar-deployments.sql:48 |
+| sign( | 0 | 0 | 0:  |  |
+| bit ops & | << >> xor | 4 | 3 | 3: qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | qos-reo-nest-typed/views/05-qos-publisher.sql:6 |
+| unary minus (negation after ( or ,) | 50 | 9 | 3: arcaidia-nest, graph-allocations-nest, nuthatch/obib-case2 | arcaidia-nest/views/60-fee_snapshots.sql:8 |
+| subtraction a - b | 76 | 17 | 6: arcaidia-nest, graph-allocations-nest, graph-gns-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/40-vault_flows.sql:21 |
+| sum( | 214 | 25 | 11: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest, nuthatch/obib-case2, perpl-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/40-vault_flows.sql:4 |
+| count(*) | 61 | 26 | 12: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest, nests-mvp/subgraph-availability-oracle, nuthatch/obib-case2, perpl-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/40-vault_flows.sql:6 |
+| count(col) | 0 | 0 | 0:  |  |
+| count(DISTINCT | 22 | 11 | 4: graph-allocations-nest, graph-gns-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | graph-allocations-nest/views/10-signal.sql:13 |
+| avg( | 0 | 0 | 0:  |  |
+| min( | 26 | 16 | 8: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/85-protocol_state.sql:20 |
+| max( | 31 | 18 | 9: arcaidia-nest, dips-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, nests-mvp/subgraph-availability-oracle, nuthatch/obib-case2, qos-reo-nest-typed | arcaidia-nest/views/40-vault_flows.sql:11 |
+| median( | 0 | 0 | 0:  |  |
+| quantile*( | 0 | 0 | 0:  |  |
+| approx_*( | 0 | 0 | 0:  |  |
+| arg_max/max_by | 11 | 2 | 1: arcaidia-nest | arcaidia-nest/views/10-vault_policy.sql:26 |
+| arg_min/min_by | 17 | 5 | 3: arcaidia-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/20-fills.sql:22 |
+| string_agg/listagg/group_concat | 0 | 0 | 0:  |  |
+| array_agg/list( | 1 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/90-lodestar-indexers.sql:360 |
+| first(/last( aggregate | 0 | 0 | 0:  |  |
+| bool_or/bool_and | 0 | 0 | 0:  |  |
+| bit_or/bit_and agg | 0 | 0 | 0:  |  |
+| histogram( | 0 | 0 | 0:  |  |
+| mode( | 0 | 0 | 0:  |  |
+| stddev/var/corr/regr | 0 | 0 | 0:  |  |
+| product( | 0 | 0 | 0:  |  |
+| favg/fsum | 0 | 0 | 0:  |  |
+| row_number( | 17 | 7 | 5: graph-allocations-nest, graph-gns-nest, graph-tap-escrow-nest, nests-mvp/subgraph-availability-oracle, perpl-nest | graph-allocations-nest/views/40-lodestar-allocations.sql:22 |
+| rank(/dense_rank( | 2 | 1 | 1: qos-reo-nest | qos-reo-nest/views/20-qos-rows.sql:11 |
+| lag( | 1 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/50-lodestar-epochs.sql:348 |
+| lead( | 2 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/50-lodestar-epochs.sql:340 |
+| first_value( | 0 | 0 | 0:  |  |
+| last_value( | 0 | 0 | 0:  |  |
+| nth_value( | 0 | 0 | 0:  |  |
+| ntile/percent_rank/cume_dist | 0 | 0 | 0:  |  |
+| epoch_ms( | 0 | 0 | 0:  |  |
+| epoch( | 0 | 0 | 0:  |  |
+| to_timestamp( | 3 | 3 | 3: graph-gns-nest, graph-staking-nest, perpl-nest | graph-gns-nest/views/20-activity.sql:4 |
+| make_timestamp( | 0 | 0 | 0:  |  |
+| make_date( | 0 | 0 | 0:  |  |
+| strftime( | 0 | 0 | 0:  |  |
+| strptime( | 0 | 0 | 0:  |  |
+| date_trunc( | 2 | 2 | 2: graph-gns-nest, graph-staking-nest | graph-gns-nest/views/20-activity.sql:4 |
+| time_bucket( | 0 | 0 | 0:  |  |
+| date_part( | 0 | 0 | 0:  |  |
+| extract( | 0 | 0 | 0:  |  |
+| date_diff/datediff( | 0 | 0 | 0:  |  |
+| date_add/dateadd( | 0 | 0 | 0:  |  |
+| age( | 0 | 0 | 0:  |  |
+| now()/current_timestamp/current_date | 0 | 0 | 0:  |  |
+| to_days/to_seconds/to_hours etc | 0 | 0 | 0:  |  |
+| ::DATE / ::TIMESTAMP cast | 0 | 0 | 0:  |  |
+| year(/month(/day(/hour(/dayofweek( | 0 | 0 | 0:  |  |
+| timezone(/AT TIME ZONE | 0 | 0 | 0:  |  |
+| lower( | 184 | 17 | 6: graph-allocations-nest, graph-gns-nest, nuthatch/obib-case2, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | graph-allocations-nest/checks/indexer-daily-sums.sql:6 |
+| upper( | 0 | 0 | 0:  |  |
+| substr/substring( | 15 | 6 | 3: graph-allocations-nest, qos-reo-nest, qos-reo-nest-typed | graph-allocations-nest/views/85-lodestar-params.sql:22 |
+| left( | 0 | 0 | 0:  |  |
+| right( | 0 | 0 | 0:  |  |
+| length(/len( | 0 | 0 | 0:  |  |
+| concat( | 0 | 0 | 0:  |  |
+| concat_ws( | 0 | 0 | 0:  |  |
+| || concat | 72 | 12 | 6: arcaidia-nest, epoch-block-oracle-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest | arcaidia-nest/views/20-fills.sql:4 |
+| split_part( | 0 | 0 | 0:  |  |
+| string_split/str_split/split( | 7 | 3 | 1: graph-allocations-nest | graph-allocations-nest/views/85-lodestar-params.sql:22 |
+| replace( | 0 | 0 | 0:  |  |
+| trim/ltrim/rtrim( | 0 | 0 | 0:  |  |
+| starts_with/prefix( | 0 | 0 | 0:  |  |
+| ends_with/suffix( | 0 | 0 | 0:  |  |
+| contains( | 0 | 0 | 0:  |  |
+| position/strpos/instr( | 7 | 3 | 1: graph-allocations-nest | graph-allocations-nest/views/85-lodestar-params.sql:21 |
+| lpad/rpad( | 0 | 0 | 0:  |  |
+| repeat(/reverse( | 0 | 0 | 0:  |  |
+| regexp_matches( | 0 | 0 | 0:  |  |
+| regexp_extract( | 0 | 0 | 0:  |  |
+| regexp_replace( | 0 | 0 | 0:  |  |
+| regexp_full_match( | 0 | 0 | 0:  |  |
+| ~ regex operator | 0 | 0 | 0:  |  |
+| printf/format( | 0 | 0 | 0:  |  |
+| hex(/to_hex( | 0 | 0 | 0:  |  |
+| unhex(/from_hex( | 4 | 3 | 3: graph-allocations-nest, qos-reo-nest, qos-reo-nest-typed | graph-allocations-nest/views/90-lodestar-indexers.sql:223 |
+| encode(/decode( | 4 | 3 | 3: graph-allocations-nest, qos-reo-nest, qos-reo-nest-typed | graph-allocations-nest/views/90-lodestar-indexers.sql:223 |
+| hash/md5/sha256( | 0 | 0 | 0:  |  |
+| bit_length/octet_length | 0 | 0 | 0:  |  |
+| ord(/chr(/ascii(/unicode( | 0 | 0 | 0:  |  |
+| string_agg | 0 | 0 | 0:  |  |
+| coalesce( | 112 | 20 | 6: arcaidia-nest, graph-allocations-nest, graph-gns-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | arcaidia-nest/views/10-vault_policy.sql:47 |
+| nullif( | 73 | 7 | 3: qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | qos-reo-nest-typed/views/10-qos-documents.sql:19 |
+| ifnull( | 0 | 0 | 0:  |  |
+| if( | 0 | 0 | 0:  |  |
+| iif( | 0 | 0 | 0:  |  |
+| nvl(/nvl2( | 0 | 0 | 0:  |  |
+| typeof( | 0 | 0 | 0:  |  |
+| list_*( | 9 | 4 | 1: graph-allocations-nest | graph-allocations-nest/views/85-lodestar-params.sql:21 |
+| array_*( | 0 | 0 | 0:  |  |
+| struct_*( | 0 | 0 | 0:  |  |
+| unnest( | 4 | 3 | 2: qos-reo-nest, qos-reo-nest-typed | qos-reo-nest-typed/views/15-qos-postings.sql:15 |
+| map_*(/map( | 0 | 0 | 0:  |  |
+| json_*( | 18 | 3 | 3: arcaidia-nest, qos-reo-nest, qos-reo-nest-typed | arcaidia-nest/views/10-vault_policy.sql:12 |
+| -> / ->> json ops | 0 | 0 | 0:  |  |
+| [i] list index | 0 | 0 | 0:  |  |
+| generate_series/range( | 1 | 1 | 1: qos-reo-nest-wt-peers | qos-reo-nest-wt-peers/views/10-qos-documents.sql:14 |
+| row(/struct_pack( | 0 | 0 | 0:  |  |
+| apply(/filter(/reduce( list fns | 8 | 4 | 1: graph-allocations-nest | graph-allocations-nest/views/85-lodestar-params.sql:21 |
+| enum_* | 0 | 0 | 0:  |  |
+| read_parquet( | 0 | 0 | 0:  |  |
+| union_by_name | 0 | 0 | 0:  |  |
+| read_csv/read_json/read_text/glob( | 0 | 0 | 0:  |  |
+| duckdb_*()/information_schema | 0 | 0 | 0:  |  |
+| gen_random_uuid/uuid( | 0 | 0 | 0:  |  |
+| random( | 0 | 0 | 0:  |  |
+| current_setting/version( | 0 | 0 | 0:  |  |
+| lambda keyword (lambda x, y: ...) | 8 | 4 | 1: graph-allocations-nest | graph-allocations-nest/views/85-lodestar-params.sql:23 |
+| list comprehension [.. FOR x IN ..] | 7 | 3 | 1: graph-allocations-nest | graph-allocations-nest/views/85-lodestar-params.sql:21 |
+| ordered aggregate agg(x ORDER BY ..) | 0 | 0 | 0:  |  |
+| CAST('0x'||hex AS BIGINT/HUGEINT) (hex-string to int) | 2 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/90-lodestar-indexers.sql:224 |
+| substr(..., -n) negative start | 0 | 0 | 0:  |  |
+| i64 max sentinel 9223372036854775807 | 4 | 3 | 1: graph-allocations-nest | graph-allocations-nest/views/50-lodestar-epochs.sql:343 |
+| ASOF LEFT JOIN | 6 | 3 | 1: graph-allocations-nest | graph-allocations-nest/views/50-lodestar-epochs.sql:376 |
+| block_number * N + log_index ordering key | 51 | 6 | 3: arcaidia-nest, graph-allocations-nest, qos-reo-nest-typed | arcaidia-nest/views/10-vault_policy.sql:26 |
+| decode( | 4 | 3 | 3: graph-allocations-nest, qos-reo-nest, qos-reo-nest-typed | graph-allocations-nest/views/90-lodestar-indexers.sql:223 |
+| from_json( | 4 | 2 | 2: qos-reo-nest, qos-reo-nest-typed | qos-reo-nest-typed/views/15-qos-postings.sql:16 |
+| json_extract_string( | 16 | 2 | 2: arcaidia-nest, qos-reo-nest | arcaidia-nest/views/10-vault_policy.sql:12 |
+| json_type( | 2 | 2 | 2: qos-reo-nest, qos-reo-nest-typed | qos-reo-nest-typed/views/15-qos-postings.sql:15 |
+| ->> / -> json extraction op | 0 | 0 | 0:  |  |
+| column IN table | 0 | 0 | 0:  |  |
+| COUNT(*) FILTER | 21 | 12 | 7: arcaidia-nest, graph-allocations-nest, graph-staking-nest, nests-mvp/subgraph-availability-oracle, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/85-protocol_state.sql:17 |
+| SUM(...) FILTER | 19 | 5 | 4: graph-allocations-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | graph-allocations-nest/views/90-lodestar-indexers.sql:93 |
+| MIN/MAX(...) FILTER | 10 | 5 | 4: graph-allocations-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | graph-allocations-nest/views/90-lodestar-indexers.sql:91 |
+| arg_min/arg_max(...) FILTER | 8 | 2 | 2: qos-reo-nest-typed, qos-reo-nest-wt-peers | qos-reo-nest-typed/views/30-qos-daily.sql:30 |
+| SUM(x) OVER (window) | 8 | 6 | 3: arcaidia-nest, graph-allocations-nest, graph-gns-nest | arcaidia-nest/views/60-fee_snapshots.sql:13 |
+| ROW_NUMBER() OVER ... rn = 1 dedupe | 16 | 6 | 4: graph-allocations-nest, graph-gns-nest, nests-mvp/subgraph-availability-oracle, perpl-nest | graph-allocations-nest/views/40-lodestar-allocations.sql:104 |
+| TRY( expression | 3 | 1 | 1: qos-reo-nest-typed | qos-reo-nest-typed/views/15-qos-postings.sql:10 |
+| range(a,b) table function | 1 | 1 | 1: qos-reo-nest-wt-peers | qos-reo-nest-wt-peers/views/10-qos-documents.sql:14 |
+| arg_min/arg_max with list key [..] | 8 | 2 | 2: qos-reo-nest-typed, qos-reo-nest-wt-peers | qos-reo-nest-typed/views/30-qos-daily.sql:30 |
+| DATE 'x' + int arithmetic | 8 | 4 | 3: qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers | qos-reo-nest-typed/views/15-qos-postings.sql:27 |
+| unnest(CASE/list) in select list | 4 | 3 | 2: qos-reo-nest, qos-reo-nest-typed | qos-reo-nest-typed/views/15-qos-postings.sql:15 |
+| calls table ref | 2 | 2 | 2: qos-reo-nest, qos-reo-nest-typed | qos-reo-nest-typed/views/15-qos-postings.sql:18 |
+| tx_from column | 3 | 3 | 2: qos-reo-nest-typed, qos-reo-nest-wt-peers | qos-reo-nest-typed/views/05-qos-publisher.sql:14 |
+| ordered agg list(x ORDER BY) | 1 | 1 | 1: graph-allocations-nest | graph-allocations-nest/views/90-lodestar-indexers.sql:360 |
+| substr(..., -n) negative (nested) | 7 | 3 | 1: graph-allocations-nest | graph-allocations-nest/views/85-lodestar-params.sql:22 |
+| AS alias | 1800 | 68 | 15: arcaidia-nest, dips-nest, epoch-block-oracle-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest, nests-mvp/subgraph-availability-oracle, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/10-vault_policy.sql:5 |
+| * (star) | 201 | 44 | 13: arcaidia-nest, graph-allocations-nest, graph-gns-nest, graph-staking-nest, graph-tap-escrow-nest, hackathon-nest, nests-mvp/subgraph-availability-oracle, nuthatch/obib-case2, perpl-nest, qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers, qos-reo-nest-wt-range | arcaidia-nest/views/10-vault_policy.sql:26 |
+
+## per-file distinct feature counts (top 15)
+ 66 distinct features  graph-allocations-nest/views/90-lodestar-indexers.sql
+ 40 distinct features  graph-allocations-nest/views/96-lodestar-indexer-deployment-daily.sql
+ 36 distinct features  graph-allocations-nest/views/50-lodestar-epochs.sql
+ 35 distinct features  graph-allocations-nest/views/91-lodestar-network.sql
+ 31 distinct features  qos-reo-nest-typed/views/15-qos-postings.sql
+ 28 distinct features  graph-allocations-nest/views/85-lodestar-params.sql
+ 27 distinct features  qos-reo-nest/pending/publisher-filter.sql
+ 26 distinct features  graph-allocations-nest/views/95-lodestar-deployments.sql
+ 25 distinct features  graph-allocations-nest/views/40-lodestar-allocations.sql
+ 24 distinct features  graph-gns-nest/views/30-identity.sql
+ 23 distinct features  perpl-nest/views/10-perpl.sql
+ 21 distinct features  qos-reo-nest-typed/views/30-qos-daily.sql
+ 21 distinct features  qos-reo-nest-wt-peers/views/30-qos-daily.sql
+ 21 distinct features  qos-reo-nest-wt-peers/views/40-qos-freshness.sql
+ 21 distinct features  qos-reo-nest-wt-range/views/40-qos-freshness.sql

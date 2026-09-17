@@ -4,6 +4,71 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Replacing DuckDB — the direction changes, and three claims are corrected first — 2026-09-16
+
+Chief set the goal: swap DuckDB out of nuthatch for a Rust engine, with DataFusion or anything else
+allowed under the hood. The bar moves from "≤1.0x DuckDB on every shape" to "no regression users
+feel", and answer parity on every authored statement stays fixed. The work now has its own directory,
+`docs/research/replacing-duckdb/`, and five investigations are running.
+
+Before any of that, three things this repo said had to be corrected. Each was found by checking
+rather than reading.
+
+1. **The DuckDB wrap is not ours to report.** duckdb#24081 describes it, and #24168 fixed it on
+   `main` six days after 1.5.5 was tagged. It is still in the 1.5.5 CLI: one thread errors, while
+   two or four threads return `i128::MIN`. The upstream draft now says not to file, and roadmap
+   2.3a says so too.
+2. **4.2 cached footers on one side only.** DuckDB's `parquet_metadata_cache` is off by default and
+   `views.rs` never set it. On the curation fold it measures 151 ms off and 138 ms on, which is
+   enough to move the staking fold to about 1.0x. Filed as 4.2c. The README carries the caveat
+   until a re-run.
+3. **The README was behind the roadmap.** It still said "one plan shape" and "cold segments only"
+   after stage 3 and 4.1a-d had landed. It now says 8/8 fold sub-plans and 0/65 statements, which
+   is less flattering and true.
+
+An external brief arrived the same day and is kept verbatim in the research directory, with its
+corrections above it. Its central recommendation was to report the wrap upstream. The fix had
+already merged by then.
+
+### What the five investigations found
+
+Each report is filed in `docs/research/replacing-duckdb/` with its corrections first. Two of the five
+needed correcting before they could be filed.
+
+- **01, what nuthatch needs from DuckDB.**
+  - DuckDB is executor, parser (7 sites), RFC-0041 oracle, restart seed and admission bound.
+  - The authored SQL is 132 statements, with the DuckDB-only syntax almost all in the Lodestar and
+    qos views.
+  - It also found a live nuthatch bug, confirmed here: the cold velocity seed is always empty
+    (`docs/upstream/nuthatch-cold-velocity-seed-empty.md`).
+- **02, DataFusion 55.**
+  - The caches and extension points the design needs all exist.
+  - Overflow is ours to own, and an unconfigured `SessionContext` will read `/etc/hosts` and write
+    files.
+  - None of the other Rust engines is a better host.
+- **03, exact arithmetic.** A 320-bit accumulator plus an analyzer rule refuses or answers exactly
+  through CTEs, joins and windows, at +100-130 MB at a million groups. The report said wide literals
+  cannot be fixed; `parse_float_as_decimal` can fix them, untested.
+- **04, the real views on DataFusion.**
+  - 11 of 22 statements run with parity after three rewrites, at **0.71x DuckDB**, and 0.55x on the
+    worst six with a provider that knows its files.
+  - The agent's own figure was 0.60x. It had timed DuckDB through the parity path, which formats and
+    sorts every cell, while DataFusion's time stopped at Arrow batches. DuckDB is now timed through
+    `query_arrow` and both nests were re-run.
+  - The README's 3.6x was DataFusion's defaults.
+- **05, build footprint.**
+  - The umbrella crate costs 2.6x bundled DuckDB per test binary at `-g0`, and 3x on the release
+    binary, which fails burrmill#1. The component crates come out about even, but need an owned
+    planner.
+  - It also found `sqllogictest` in Burrmill's normal dependencies, beneath a comment saying it was
+    a dev-dependency. Removed; `cargo test -p burrmill` passes.
+
+**The plan** (`docs/research/replacing-duckdb/plan.md`, roadmap stage 6, RFC-0044 Amendment 2)
+starts with a footprint spike. That decision should be made on a measurement before the
+architecture sets around the umbrella crate by default.
+
+---
+
 ## 4.2 — the headline claim, tested at last on the queries it is about — 2026-08-31
 
 The README says Burrmill is "faster than DuckDB on the queries an indexer actually runs". Every

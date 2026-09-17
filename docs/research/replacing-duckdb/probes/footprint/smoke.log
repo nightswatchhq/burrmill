@@ -1,0 +1,28 @@
+== D
+   Compiling arrow-json v59.3.0
+   Compiling arrow v59.3.0
+   Compiling burrmill v0.0.1 (/home/pepe/scratch/burrmill-footprint/burrmill/crates/burrmill)
+   Compiling consumer_d v0.1.0 (/home/pepe/scratch/burrmill-footprint/D)
+    Finished `release` profile [optimized] target(s) in 1m 21s
+96 parties; first = Some(("0x0000000000000000000000000000000000000000", "859000000000000"))
+== C
+   Compiling datafusion-functions-table v55.1.0
+   Compiling datafusion-catalog-listing v55.1.0
+   Compiling datafusion v55.0.0
+   Compiling consumer_c v0.1.0 (/home/pepe/scratch/burrmill-footprint/C)
+    Finished `release` profile [optimized] target(s) in 4m 16s
+96 parties; first = Some(("0x0000000000000000000000000000000000000000", "859000000000000"))
+== B
+   Compiling datafusion-functions-table v55.1.0
+   Compiling datafusion-catalog-listing v55.1.0
+   Compiling datafusion v55.0.0
+   Compiling consumer_b v0.1.0 (/home/pepe/scratch/burrmill-footprint/B)
+    Finished `release` profile [optimized] target(s) in 3m 34s
+96 parties; first = Some(("0x0000000000000000000000000000000000000000", "859000000000000"))
+== A
+   Compiling arrow-row v58.4.0
+   Compiling arrow v58.4.0
+   Compiling duckdb v1.10504.0
+   Compiling consumer_a v0.1.0 (/home/pepe/scratch/burrmill-footprint/A)
+    Finished `release` profile [optimized] target(s) in 2m 15s
+96 parties; first = Some(("0x0000000000000000000000000000000000000000", "859000000000000"))
