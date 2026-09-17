@@ -30,3 +30,10 @@ sqllogictest = "0.28"
 # Experiment A4: parsing a real workload to count the plan shapes it produces.
 sqlparser.workspace = true
 walkdir = "2"
+# `df-views`: a custom DataFusion table provider over an explicit segment list, and the nest's
+# schema.json for the tables it declares but has not sealed.
+object_store = "0.13"
+futures = "0.3"
+async-trait = "0.1"
+bytes = "1"
+serde_json = "1"

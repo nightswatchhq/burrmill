@@ -1,0 +1,143 @@
+# Every authored view, whole, on DataFusion against DuckDB (roadmap: rent what is not owned).
+#
+# `views` measures the fold sub-plans Burrmill owns. This measures the 22 CREATE VIEW statements
+# in graph-allocations-nest as written, on the engine Burrmill intends to rent for everything
+# else, with DuckDB on the same explicit file lists (no directory glob, roadmap 1.1), the same
+# eight threads, and DuckDB's Parquet metadata cache ON - which `views` leaves off, and which is
+# worth about 9% to DuckDB on the curation fold. Parity on sorted canonical-text rows is checked
+# before any timing; a statement without it is never timed.
+#
+# A4's 65 statements were counted across every nest on the machine. This nest holds 22 of them,
+# and it is the only nest with both segments and SQL views of any weight: dips-nest (2 views,
+# 22 segments) is appended below; spookyswap-nest's one view file is comment-only.
+#
+# Tables declared in schema.json but never sealed (48 of 82) are registered EMPTY in both
+# engines, which is what nuthatch serves for them. Every table a view names is one or the other.
+#
+# Three AST rewrites, applied to DataFusion's side only and named per statement:
+#   hugeint    CAST(x AS HUGEINT) -> CAST(x AS DECIMAL(38,0))
+#   intdiv     a // b -> CAST((a - a % b) / b AS DECIMAL(38,0)); DataFusion's decimal `/` carries
+#              four extra digits and a plain cast back would round where DuckDB truncates
+#   tuple-cmp  (a, b) > (c, d) -> a > c OR (a = c AND b > d)
+#
+# What does not run, and why:
+#   ASOF JOIN (DuckDB syntax)          2 statements  sqlparser only knows Snowflake's MATCH_CONDITION form
+#   [expr FOR x IN list] + lambda      3 statements  no list comprehension in the parser; list_reduce
+#                                                    is not a DataFusion function even where it parses
+#   port_queue                         1 statement   DataFusion's ambiguity rule: ORDER BY s.net_signal
+#                                                    against a projected alias net_signal (nuthatch #996
+#                                                    found the same)
+#   cascades from the above            4 statements
+#
+# The DataFusion configuration is chosen and printed: ListingTable over one URL per file,
+# collect_statistics=false (DuckDB collects none at plan time either), a 1 GiB footer cache so the
+# working set fits. The DIAGNOSIS block then starts from DataFusion's own defaults (statistics on,
+# 50 MiB cache, as `register_parquet` would) and changes one thing per row. The breakdown columns
+# after plan+list are the plan's own metrics summed over partitions; file opens are async, so the
+# sums overlap and rank costs rather than add up.
+#
+# Timing fairness, corrected before publication: the first run timed DuckDB through the
+# parity path, which boxes, formats and sorts every cell, while DataFusion's time ended at Arrow
+# batches. 600k rows of client-side string work were charged to DuckDB alone and the ratio read
+# 0.60-0.64x. DuckDB is now timed through `query_arrow`, row count checked against the parity
+# pass, which is what the numbers below are.
+#
+# Findings, in short:
+#   - Under the chosen configuration DataFusion is 0.71x DuckDB time-weighted over the 11
+#     statements that reach parity (2,856 ms against 4,028), ahead on 7 of 11. It loses on the
+#     small-output statements (open_allocations 1.30x, epoch_boundaries 1.81x), where ~50 ms of
+#     per-query listing shows, and on lodestar_allocations (1.23x). It is not 3.6x; that figure is
+#     the synthetic fold through register_parquet, i.e. the defaults row below, and has not been
+#     re-measured with the remedies.
+#   - Under DataFusion's defaults the worst six are 2.06x DuckDB. Statistics collection reads every
+#     footer at plan time (stats off: -41%); the default 50 MiB footer cache is below a
+#     6-10k-segment table's working set and buys nothing over no cache at all (cache off: same);
+#     sized to fit, it cuts footer time again (-26%). ListingTable then still `head`s every file at
+#     plan time; a provider that already knows the file sizes removes that (-38%), landing the worst
+#     six at 0.55x DuckDB. Pre-parsed footers from Burrmill's morsel cut match DataFusion's own
+#     cache, so there is nothing left in footers. One file group and eight cost the same, so the
+#     open path does not parallelise. What remains is per-file open and decode.
+#
+# Reproduce: cargo run -p burrmill-bench --release -- df-views /path/to/nest
+# Measured 2026-09-16 on the MacBook, 8 threads, medians of 3 after a warm-up, one run per nest.
+
+/Users/pepe/Projects/graph-allocations-nest: 22 statements in 14 view files, 82 tables (34 sealed over 38428 segments, 48 declared and empty)
+duckdb v1.5.1: threads=8 parquet_metadata_cache=true, explicit file lists
+datafusion 55.0.0: target_partitions=8 collect_statistics=false metadata_cache=1024MiB (listing      stats=off cache=1G) enable_ident_normalization=false schema_force_view_types=true
+
+registered in 122 ms
+
+statement                          outcome    rewrites                rows  duck_ms    df_ms  ratio  dominant plan/list wall, footers/open/scan/agg+join/other summed ms
+deployment_signal                  parity     hugeint                13896      185      172   0.93  open     0/73/54/256/484/28/0
+open_allocations                   parity     -                       6779       57       74   1.30  scan     0/22/20/57/182/82/0
+port_queue                         plan fail  -                    Schema error: Schema contains qualified field name s.net_signal and unqualified field name
+lodestar_allocations               parity     hugeint,intdiv        248487      367      451   1.23  open     0/114/112/626/1407/1551/912
+epoch_boundaries                   parity     hugeint                  267       57      103   1.81  open     0/45/53/263/621/8/0
+lodestar_epochs                    parse fail                      ASOF JOIN: sql parser error: Expected: JOIN, found: LEFT at Line: 17, Column: 8
+lodestar_disputes                  parity     hugeint                    8        1        2   2.00  listing  0/0/0/0/0/1/0
+lodestar_escrow_transactions       parity     hugeint                73718      118       48   0.41  open     0/20/22/76/335/0/1
+lodestar_delegations               parity     hugeint               608457      628      296   0.47  open     0/139/152/431/4462/0/9
+lodestar_network_params            parse fail                      list comprehension: sql parser error: Expected: joined table, found: AS at Line: 4, Column: 31
+lodestar_indexer_ledger            parse fail                      ASOF JOIN: sql parser error: Expected: MATCH_CONDITION, found: ON at Line: 15, Column: 20
+lodestar_indexers                  cascade    hugeint,intdiv,tuple-cmp via lodestar_indexer_ledger
+lodestar_indexer_pool              cascade    hugeint              via lodestar_indexer_ledger
+lodestar_delegator_stakes          plan fail  hugeint,intdiv       Invalid function 'list_reduce'.
+lodestar_delegators                cascade    -                    via lodestar_delegator_stakes
+lodestar_curator_signals           parity     hugeint,intdiv         15054      750      508   0.68  open     0/214/177/862/2372/197/346
+lodestar_curators                  parity     hugeint                 1819      347      270   0.78  open     0/128/110/334/3346/18/1
+lodestar_provisions                parity     hugeint                   95      356      235   0.66  scan     0/58/43/185/528/1141/651
+lodestar_network                   parse fail                      list comprehension: sql parser error: Expected: ], found: FOR at Line: 80, Column: 13
+lodestar_deployments               parity     hugeint,intdiv         24757     1162      697   0.60  open     1/276/261/1160/3980/292/407
+lodestar_indexer_deployment_daily  parse fail                      list comprehension: sql parser error: Expected: ], found: FOR at Line: 4, Column: 23
+lodestar_indexer_daily             cascade    -                    via lodestar_indexer_deployment_daily
+
+11/22 statements run on DataFusion with parity; time-weighted ratio 0.71 (2856 ms DataFusion against 4028 ms DuckDB)
+outcomes: cascade=4 parity=11 parse fail=5 plan fail=2
+rewrite rules: hugeint=13 intdiv=5 tuple-cmp=1
+  hugeint    CAST(x AS HUGEINT) -> CAST(x AS DECIMAL(38,0)), the same 128-bit width
+  intdiv     a // b -> CAST((a - a % b) / b AS DECIMAL(38,0)), exact where decimal division would round
+  tuple-cmp  (a, b) > (c, d) -> a > c OR (a = c AND b > d)
+
+DIAGNOSIS: the 6 worst ratios (DuckDB >= 20 ms) under each remedy, median of 3 after a warm-up, df_ms per statement
+  DataFusion's defaults first (ListingTable, statistics on, 50 MiB footer cache); each row changes one thing.
+configuration                       reg_ms      epoch_boundaries      open_allocations  lodestar_allocations     deployment_signal     lodestar_curators lodestar_curator_sign  sum_ms  ratio
+duckdb                                                        57                    57                   367                   185                   347                   750    1763   1.00
+listing      stats=on  cache=50M       121                   160                   100                   860                   418                   699                  1397    3634   1.00
+  plan+list/footers/open/scan/rest               99/56/340/550/8       50/19/54/182/78 480/2084/2345/2280/2091    265/567/671/536/20 422/3486/3739/3322/20 722/3826/6779/3978/424
+listing      stats=off cache=50M       121                   118                    75                   583                   245                   389                   721    2131   0.59
+  plan+list/footers/open/scan/rest               56/58/273/675/9       22/20/57/187/81 143/1647/2088/1602/2379     78/619/795/533/27 117/3642/3862/3370/20 215/2886/3506/2618/595
+listing      stats=off cache=off       123                   168                    98                   572                   246                   394                   695    2173   0.60
+  plan+list/footers/open/scan/rest              53/752/925/840/9     24/179/212/219/77 136/1405/1868/1757/2450     83/518/696/588/26 123/3373/3607/3544/22 208/2503/3145/2916/591
+listing      stats=off cache=1G        122                   118                    76                   439                   170                   276                   503    1582   0.44
+  plan+list/footers/open/scan/rest               44/52/258/648/9       22/18/52/182/77 124/107/595/1426/2470      78/51/231/487/28   135/121/349/3363/20  190/185/896/2374/609
+listing      stats=on  cache=1G        122                   160                    98                   523                   226                   382                   687    2076   0.57
+  plan+list/footers/open/scan/rest              108/52/326/543/8       49/18/53/182/85 252/116/330/2176/2163     143/55/164/508/21   232/119/369/3267/19 386/198/1039/3290/383
+files/8g     stats=off cache=1G        216                    64                    50                   315                    91                   147                   307     974   0.27
+  plan+list/footers/open/scan/rest                4/49/191/714/9        1/18/50/184/79   9/105/465/1545/2511       2/55/213/509/26     4/111/322/3316/18   11/173/708/2464/590
+files/1g     stats=off cache=1G        216                    64                    50                   317                    90                   145                   304     970   0.27
+  plan+list/footers/open/scan/rest                4/49/188/713/8        0/17/49/185/78   7/100/452/1533/2455       2/48/193/492/24     4/107/316/3348/19   10/168/697/2463/530
+files/8g     stats=off cache=off       220                   170                   102                   559                   241                   391                   713    2176   0.60
+  plan+list/footers/open/scan/rest             4/1570/1683/901/7      0/371/399/249/79 8/2885/3201/1885/2476    2/1098/1222/665/24   3/6466/6682/3632/19  9/5148/5603/3128/557
+morsels/8g   stats=off cache=off       971                    63                    49                   317                    89                   143                   304     965   0.27
+  plan+list/footers/open/scan/rest                4/29/172/722/8        0/12/45/186/75    7/64/430/1553/2510       2/35/188/495/24      4/70/301/3414/20    9/111/670/2541/530
+
+ratio is against the first row; plan+list is wall, the rest are per-file elapsed summed over 8 partitions and overlap under async I/O
+
+# ---- dips-nest, the same command
+
+/Users/pepe/Projects/dips-nest: 2 statements in 1 view files, 56 tables (20 sealed over 22 segments, 36 declared and empty), _dec companions synthesised
+duckdb v1.5.1: threads=8 parquet_metadata_cache=true, explicit file lists
+datafusion 55.0.0: target_partitions=8 collect_statistics=false metadata_cache=1024MiB (listing      stats=off cache=1G) enable_ident_normalization=false schema_force_view_types=true
+
+registered in 3 ms
+
+statement                          outcome    rewrites                rows  duck_ms    df_ms  ratio  dominant plan/list wall, footers/open/scan/agg+join/other summed ms
+dips_timeline                      parity     -                          6        1        1   1.00  listing  0/0/0/0/0/0/0
+dips_current_allocation            parity     -                          1        0        1   1.00  listing  0/0/0/0/0/0/0
+
+2/2 statements run on DataFusion with parity; time-weighted ratio 2.00 (2 ms DataFusion against 1 ms DuckDB)
+outcomes: parity=2
+rewrite rules: none
+  hugeint    CAST(x AS HUGEINT) -> CAST(x AS DECIMAL(38,0)), the same 128-bit width
+  intdiv     a // b -> CAST((a - a % b) / b AS DECIMAL(38,0)), exact where decimal division would round
+  tuple-cmp  (a, b) > (c, d) -> a > c OR (a = c AND b > d)
