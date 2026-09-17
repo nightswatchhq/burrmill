@@ -1,10 +1,11 @@
 # Burrmill: a query engine-layer for sealed Parquet segments plus a live tip.
 #
-# Two members, and the split is load-bearing rather than tidy-minded. `burrmill` is the shipped
-# library and its dependency graph is **pure Rust** - no DuckDB, no DataFusion, no C++. `burrmill-bench`
-# is where the oracles live, and it is `publish = false` precisely so that the incumbent engines we
-# are measuring against can never reach the release graph. RFC-0042 §3a's binary rule, expressed as
-# a workspace layout rather than as a promise.
+# Two members, and the split is load-bearing rather than tidy-minded. `burrmill` default graph is
+# **pure Rust** - no DuckDB, no DataFusion, no C++. DataFusion enters only behind the optional
+# `datafusion` feature (roadmap 6.0 route C). `burrmill-bench` is where the oracles live, and it is
+# `publish = false` precisely so that the incumbent engines we are measuring against can never
+# reach the release graph. RFC-0042 §3a's binary rule, expressed as a workspace layout rather
+# than as a promise.
 [workspace]
 resolver = "2"
 members = ["crates/burrmill", "crates/burrmill-bench"]

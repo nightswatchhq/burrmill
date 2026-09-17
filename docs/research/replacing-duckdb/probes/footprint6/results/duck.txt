@@ -1,0 +1,17 @@
+host=pepe-thinkpad 32 cores rustc 1.98.1 (48a229cea 2026-09-01)
+variant=duck
+profile=line-tables-only CXXFLAGS=-g0 nuthatch-shaped 6 tests
+deps_normal=93
+test_clean_j32=77.1
+target_bytes=3269436609
+testbin_query_bytes=162163040
+testbin_noquery_bytes=7158576
+testbin_count=6
+incr_lib_test=1.1
+release_build_j32=120.7
+release_bin_bytes=40871928
+release_ldd=linux-vdso.so.1 libstdc++.so.6 libgcc_s.so.1 libm.so.6 libc.so.6 /lib64/ld-linux-x86-64.so.2
+release_glibcxx=GLIBCXX_3.4.29
+release_glibc=GLIBC_2.38
+release_run=90 parties; first = Some(("0x0000000000000000000000000000000000000001", "3185"))
+done=2026-09-17T21:48:11+03:00

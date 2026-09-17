@@ -1,0 +1,22 @@
+[package]
+name = "consumer_umbrella"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[lib]
+name = "consumer"
+path = "src/lib.rs"
+[[bin]]
+name = "consumer-bin"
+path = "src/main.rs"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[dependencies]
+datafusion = "=55.0.0"
+tokio = { version = "1", features = ["rt-multi-thread"] }

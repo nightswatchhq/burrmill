@@ -69,9 +69,10 @@ direction and the evidence.
 - **General SQL breadth.**
 - **The dialect.** Every existing nest's views are written in DuckDB's. The constructs with no
   DataFusion path are almost all in the Lodestar and qos views (01, 04).
-- **Build footprint, measured (05).** Through the umbrella `datafusion` crate, test binaries are
-  2.6x DuckDB's at `-g0`, and the release binary is 3x. The component-crate route is about even,
-  but it needs a Burrmill-owned physical planner and is unproven.
+- **Build footprint, measured (05, restated by 06).** Through the umbrella crate, querying test
+  binaries are 3.0× DuckDB in nuthatch's real profile. The component route with a working
+  planner is 2.75× (446 MB against 162), not "about even". 05's evenness was a link-only lower
+  bound at `debug = 0`. C works, C fails burrmill#1, C still beats U. See [06](06-footprint-spike.md).
 
 ## Investigations
 
@@ -85,6 +86,7 @@ top, followed by the agent's report verbatim. Probe code and scripts are kept in
 | 03 | Can DataFusion refuse on every overflow up to uint256, and at what cost | thinkpad, prototype | [03-exact-arithmetic.md](03-exact-arithmetic.md) |
 | 04 | The real authored statements on DataFusion against DuckDB, parity first, plus what the 3.6x at 10k segments consists of | this Mac, worktree | [04-real-views-on-datafusion.md](04-real-views-on-datafusion.md) |
 | 05 | Build footprint: bundled DuckDB against DataFusion, full and trimmed, and Burrmill today | thinkpad | [05-build-footprint.md](05-build-footprint.md) |
+| 06 | Phase 0 spike: component crates plus an owned planner, nuthatch's real profile, burrmill#1 | thinkpad | [06-footprint-spike.md](06-footprint-spike.md) |
 
 ## Findings (verified 2026-09-16)
 
@@ -147,3 +149,6 @@ top, followed by the agent's report verbatim. Probe code and scripts are kept in
   it.
 - If the component route fails the phase 0 spike: whether to accept the umbrella crate's footprint
   regression in exchange for the correctness and C++-free wins.
+  **The spike reported 2026-09-17:** C works, C is 2.75× DuckDB on querying test binaries (446 MB
+  against 162), C still beats the umbrella crate. The trade is C-shaped, not U-shaped. Phase 1
+  waits on an RFC-0042 amendment with those numbers.

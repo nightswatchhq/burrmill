@@ -1,0 +1,9 @@
+**/target-dev/
+**/target-release/
+**/target/
+components/src/generated/
+results/*.log
+Cargo.lock
+duck/Cargo.lock
+umbrella/Cargo.lock
+components/Cargo.lock

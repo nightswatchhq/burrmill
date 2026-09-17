@@ -4,6 +4,55 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.1 / 6.2 — NestCatalog and lockdown, behind a feature flag — 2026-09-17
+
+Phase 1 started on the C route. `burrmill` grows an optional `datafusion` feature:
+component crates plus the owned `DefaultPhysicalPlanner`, concrete `Engine` API
+(`sql` → `Vec<RecordBatch>`). Default `cargo tree -p burrmill` still has no
+DataFusion.
+
+`Engine::open_segments` / `open_nest` register nest tables from an explicit
+file list. Declared-but-unsealed tables are empty. `word16`/`word32` columns
+get a `_dec` companion. COPY, `CREATE EXTERNAL TABLE`, `read_csv`, and
+`FROM '/etc/passwd'` are refused. Eight tests on the thinkpad, all green.
+Default `cargo test -p burrmill` still green (edition bumped to 2024 for the
+planner's let-chains).
+
+Not in this slice: census function whitelist, `CheckedArithmetic`, JSON
+encoder, dialect rewrites, `FoldSubstitution`.
+
+---
+
+## 6.0 — the component planner works, and it still fails burrmill#1 — 2026-09-17
+
+Phase 0 of the swap, measured on the thinkpad, nuthatch's real profile
+(`line-tables-only`, `CXXFLAGS=-g0`, six test binaries, thin LTO). Report at
+`docs/research/replacing-duckdb/06-footprint-spike.md`.
+
+C is a working engine. `DefaultPhysicalPlanner` ported out of the umbrella
+crate (3,179 lines, `COPY` stubbed), component crates, concrete `net_balances`
+API. Same fixture as DuckDB and the umbrella crate; all three print
+`90 parties; first = (0x…0001, 3185)`.
+
+| | duck | umbrella | components |
+|---|---:|---:|---:|
+| querying test binary | 162 MB | 493 MB | **446 MB** |
+| non-querying test binary | 7.2 MB | 7.2 MB | 7.2 MB |
+| cold `test --no-run` target | 3.27 GB | 4.48 GB | 4.14 GB |
+| incremental after touch lib | 1.1 s | 1.9 s | 1.9 s |
+| release binary | 41 MB | 127 MB | 105 MB |
+
+C is 2.75× DuckDB on the binary that fills the disk, 2.6× on release. It is
+8–17% smaller than the umbrella crate, and 87 s to compile against DuckDB's 77.
+Investigation 05's "about even" was a lower bound that did not run the query
+and used `debug = 0`. Instantiating the operators is what it omitted.
+
+burrmill#1 fails. The plan's "otherwise U" fork is the worse of two failures;
+if the swap proceeds it proceeds on C, as a trade signed in an RFC-0042
+amendment, not as a footprint win. Phase 1 waits on that.
+
+---
+
 ## Replacing DuckDB — the direction changes, and three claims are corrected first — 2026-09-16
 
 Chief set the goal: swap DuckDB out of nuthatch for a Rust engine, with DataFusion or anything else

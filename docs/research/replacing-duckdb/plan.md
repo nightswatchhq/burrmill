@@ -105,6 +105,12 @@ RFC-0044 §12 says.
   regression is stated plainly, with numbers, in an RFC-0042 amendment Chief signs. The regression
   is not discovered later.
 
+**Measured 2026-09-17** (`06-footprint-spike.md`). C works (same 90-party answer as DuckDB).
+C fails burrmill#1: querying test binary 446 MB against 162, release 105 against 41, target
+4.14 GB against 3.27, incremental 1.9 s against 1.1. C still beats U on every size axis
+(U is 493 MB / 127 MB). The "otherwise U" fork is the worse failure. If the swap proceeds it
+proceeds on C, as a trade, after an RFC-0042 amendment with these numbers. Phase 1 waits on that.
+
 ### Phase 1: the engine inside Burrmill (weeks)
 
 1. **`NestCatalog`**: an explicit file list, known sizes, a footer cache sized to the working set,

@@ -7,9 +7,9 @@ to configure.**
 Status: **slice 1 of [RFC-0044](docs/rfc/RFC-0044-burrmill.md) gate passed; the seam, n-table folds
 and serving work have landed since** (see [ROADMAP.md](ROADMAP.md)). One owned operator family, the
 allowlist, a generated corpus against two oracles, and a head-to-head harness against both
-incumbents. Not yet usable as a general query engine. Replacing DuckDB inside nuthatch, renting
-DataFusion for what Burrmill does not own, is now under investigation in
-[docs/research/replacing-duckdb](docs/research/replacing-duckdb/README.md).
+incumbents. Not yet usable as a general query engine. Replacing DuckDB inside nuthatch is
+investigated in [docs/research/replacing-duckdb](docs/research/replacing-duckdb/README.md);
+phase 0 (footprint) measured 2026-09-17 and failed burrmill#1.
 
 The gate is "≤1.0x DuckDB at exact parity under 256 MB peak RSS", and both legs are met **at eight
 threads per query, with all three engines held to the same budget**: 0.38-0.87x across fourteen

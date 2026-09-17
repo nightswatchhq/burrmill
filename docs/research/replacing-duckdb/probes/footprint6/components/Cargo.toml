@@ -1,0 +1,47 @@
+[package]
+name = "consumer_components"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[lib]
+name = "consumer"
+path = "src/lib.rs"
+[[bin]]
+name = "consumer-bin"
+path = "src/main.rs"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+futures = "0.3"
+indexmap = "2"
+itertools = "0.14"
+log = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+arrow = { version = "59", default-features = false, features = ["chrono-tz"] }
+arrow-schema = { version = "59", default-features = false }
+datafusion-catalog = { version = "=55.0.0", default-features = false }
+datafusion-catalog-listing = { version = "=55.0.0", default-features = false }
+datafusion-common = { version = "=55.0.0", default-features = false }
+datafusion-datasource = { version = "=55.0.0", default-features = false }
+datafusion-datasource-parquet = { version = "=55.0.0", default-features = false }
+datafusion-execution = { version = "=55.0.0", default-features = false }
+datafusion-expr = { version = "=55.0.0", default-features = false }
+datafusion-functions = { version = "=55.0.0", default-features = false, features = ["datetime_expressions", "encoding_expressions", "math_expressions", "regex_expressions", "string_expressions", "unicode_expressions"] }
+datafusion-functions-aggregate = { version = "=55.0.0", default-features = false }
+datafusion-functions-window = { version = "=55.0.0", default-features = false }
+datafusion-optimizer = { version = "=55.0.0", default-features = false }
+datafusion-physical-expr = { version = "=55.0.0", default-features = false }
+datafusion-physical-optimizer = { version = "=55.0.0", default-features = false }
+datafusion-physical-plan = { version = "=55.0.0", default-features = false }
+datafusion-session = { version = "=55.0.0", default-features = false }
+datafusion-sql = { version = "=55.0.0", default-features = false }
+object_store = { version = "0.12", default-features = false }

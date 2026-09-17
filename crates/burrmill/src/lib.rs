@@ -52,6 +52,8 @@ pub mod limits;
 pub mod plan;
 pub mod seam;
 pub mod segment;
+#[cfg(feature = "datafusion")]
+pub mod df;
 
 pub use error::{BurrmillError, Result};
 pub use exec::agg::Rows;
@@ -61,6 +63,8 @@ pub use gate::Gate;
 pub use plan::{Plan, SignedFold};
 pub use seam::{HotRow, HotSnapshot, HotTip, MemoryTip};
 pub use segment::{Catalog, SealedSegments};
+#[cfg(feature = "datafusion")]
+pub use df::Engine;
 
 use std::path::Path;
 
