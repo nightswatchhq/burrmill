@@ -19,6 +19,7 @@
 //! - **`BREAK_PARITY=1`** drops a row from the candidate on purpose. The run must then refuse with no
 //!   RESULT line. A guard nobody has watched refuse is not a guard.
 
+mod df_views;
 mod fixture;
 mod generate;
 mod oracles;
@@ -85,6 +86,9 @@ async fn main() -> anyhow::Result<()> {
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: views <segments> <views>"))?,
             &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: views <segments> <views>"))?,
         ),
+        Some("df-views") => df_views::run(
+            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: df-views <nest-dir>"))?,
+        ).await,
         Some("shapes") => shapes::run(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some("slt") => slt_against_duckdb(),
         Some("duckdb-gaps") => duckdb_gaps(),
