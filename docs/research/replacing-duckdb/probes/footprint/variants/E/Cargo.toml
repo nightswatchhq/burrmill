@@ -1,0 +1,19 @@
+[package]
+name = "consumer_e"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[lib]
+name = "consumer"
+path = "src/lib.rs"
+[[bin]]
+name = "consumer-bin"
+path = "src/main.rs"
+[dependencies]
+datafusion-sql = { version = "=55.0.0", default-features = false }
+datafusion-expr = { version = "=55.0.0", default-features = false }
+datafusion-physical-plan = { version = "=55.0.0", default-features = false }
+datafusion-datasource-parquet = { version = "=55.0.0", default-features = false }
+datafusion-functions = { version = "=55.0.0", default-features = false }
+datafusion-functions-aggregate = { version = "=55.0.0", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread"] }

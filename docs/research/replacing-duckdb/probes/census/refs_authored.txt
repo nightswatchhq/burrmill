@@ -1,0 +1,296 @@
+
+### CAST(... AS <type>) targets  (regex: `\bAS\s+((?:HUGEINT|UHUGEINT|BIGINT|UBIGINT|INTEGER|INT|SMALLINT|DOUBLE|FLOAT|REAL|VARCHAR|TEXT|BOOLEAN|BOOL|DATE|TIMESTAMP\w*|DECIMAL\s*\([^)]*\)|NUMERIC\s*\([^)]*\)|BLOB|JSON)(?:\[\])?)\s*\)`)
+- HUGEINT: 307
+- BIGINT: 130
+- VARCHAR: 68
+- DOUBLE: 47
+- INTEGER: 18
+- DECIMAL(38, 0): 5
+- BOOLEAN: 1
+- DATE: 1
+
+### :: cast targets  (regex: `::\s*([A-Za-z_]+(?:\s*\([^)]*\))?)`)
+- VARCHAR: 21
+- DOUBLE: 20
+
+### json_* / list_* / array_* / struct_* / map_* / regexp_* / string fns by name  (regex: `\b((?:json|list|array|struct|map|regexp|str|string)_\w+)\s*\(`)
+- JSON_EXTRACT_STRING: 16
+- LIST_REDUCE: 8
+- STRING_SPLIT: 7
+- JSON_TYPE: 2
+- LIST_PREPEND: 1
+
+### all function-call names (lowercased, top 80)  (regex: `\b([a-z_][a-z0-9_]*)\s*\(`)
+- cast: 575
+- sum: 214
+- lower: 184
+- as: 143
+- coalesce: 112
+- count: 83
+- nullif: 73
+- from: 67
+- filter: 62
+- over: 33
+- max: 31
+- min: 26
+- arg_min: 17
+- row_number: 17
+- json_extract_string: 16
+- substr: 15
+- in: 13
+- greatest: 12
+- abs: 12
+- arg_max: 11
+- join: 9
+- values: 9
+- power: 9
+- select: 8
+- list_reduce: 8
+- t: 8
+- not: 8
+- strpos: 7
+- string_split: 7
+- decimal: 5
+- exists: 4
+- decode: 4
+- using: 4
+- unnest: 4
+- from_json: 4
+- or: 3
+- then: 3
+- to_timestamp: 3
+- try: 3
+- lead: 2
+- from_hex: 2
+- lateral: 2
+- date_trunc: 2
+- and: 2
+- try_cast: 2
+- unhex: 2
+- json_type: 2
+- dense_rank: 2
+- exact_starts: 1
+- lag: 1
+- list_prepend: 1
+- list: 1
+- least: 1
+- ref: 1
+- range: 1
+- distinct: 1
+
+### _dec companion column refs  (regex: `\b(\w+_dec)\b`)
+- amount_dec: 12
+- outputamount_dec: 4
+- assets_dec: 4
+- tokens_dec: 4
+- amountout_dec: 3
+- usdcdelivered_dec: 3
+- exposurecleared_dec: 3
+- toprotocol_dec: 3
+- thawendtimestamp_dec: 3
+- amountreceived_dec: 2
+- tolps_dec: 2
+- newselfmintingrate_dec: 2
+- actualamount_dec: 2
+- value_dec: 2
+- inputamount_dec: 1
+- feeamount_dec: 1
+- targetminout_dec: 1
+- sourcechainid_dec: 1
+- destinationchainid_dec: 1
+- newissuanceperblock_dec: 1
+- rate_dec: 1
+- self_minting_rate_dec: 1
+- newallocatormintingrate_dec: 1
+- allocator_minting_rate_dec: 1
+- totalamountthawing_dec: 1
+
+### block_* / timestamp column refs  (regex: `\b(block_number|block_timestamp|block_time|timestamp|tx_hash|transaction_hash|log_index|tx_index|evt_index|block_hash|contract_address|address|_meta\w*|_labels\w*)\b`)
+- block_number: 333
+- log_index: 163
+- block_timestamp: 120
+- tx_hash: 62
+- address: 44
+- timestamp: 18
+
+### table references in FROM/JOIN (regex `\b(?:FROM|JOIN)\s+"?([A-Za-z_][\w.]*)"?`), classified
+defined views: 88; distinct base-table names referenced: 128; view refs: 55; cte refs: 106
+
+**Base tables (not a CREATE VIEW name, not a CTE name):**
+- `staking__tokens_undelegated`: 12 refs, nests: graph-allocations-nest, graph-staking-nest
+- `staking_legacy__stake_delegated_locked`: 11 refs, nests: graph-allocations-nest
+- `subgraph_service__query_fees_collected`: 10 refs, nests: graph-allocations-nest
+- `staking_legacy__rebate_collected`: 10 refs, nests: graph-allocations-nest
+- `curation__signalled`: 10 refs, nests: graph-allocations-nest
+- `staking__tokens_delegated`: 10 refs, nests: graph-allocations-nest, graph-staking-nest
+- `staking_legacy__stake_delegated`: 9 refs, nests: graph-allocations-nest
+- `staking_legacy__allocation_collected`: 8 refs, nests: graph-allocations-nest
+- `curation__burned`: 8 refs, nests: graph-allocations-nest
+- `rewards__rewards_assigned`: 7 refs, nests: graph-allocations-nest
+- `staking__delegated_tokens_withdrawn`: 6 refs, nests: graph-allocations-nest, graph-staking-nest
+- `lbtc__transfer`: 6 refs, nests: nuthatch/obib-case2
+- `qos_indexer_payload`: 6 refs, nests: qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers
+- `qos_query_payload`: 6 refs, nests: qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers
+- `liquidity_vault__fast_filled`: 5 refs, nests: arcaidia-nest
+- `liquidity_vault__reimbursement_recorded`: 5 refs, nests: arcaidia-nest
+- `subgraph_service__indexing_rewards_collected`: 5 refs, nests: graph-allocations-nest
+- `rewards__horizon_rewards_assigned`: 5 refs, nests: graph-allocations-nest
+- `liquidity_vault__fees_accrued`: 4 refs, nests: arcaidia-nest
+- `staking_legacy__allocation_created`: 4 refs, nests: graph-allocations-nest
+- `coalesce`: 4 refs, nests: graph-allocations-nest
+- `staking_legacy__delegation_parameters_updated`: 4 refs, nests: graph-allocations-nest
+- `staking__horizon_stake_deposited`: 4 refs, nests: graph-allocations-nest
+- `staking__stake_delegated_withdrawn`: 4 refs, nests: graph-allocations-nest, graph-staking-nest
+- `staking__provision_created`: 4 refs, nests: graph-allocations-nest
+- `data_edge__call_submit_qo_s_payload`: 4 refs, nests: qos-reo-nest, qos-reo-nest-typed, qos-reo-nest-wt-peers
+- `qos_indexer_attempt_rows`: 4 refs, nests: qos-reo-nest-typed, qos-reo-nest-wt-peers
+- `qos_query_result_rows`: 4 refs, nests: qos-reo-nest-typed, qos-reo-nest-wt-peers
+- `vault_factory__vault_created`: 3 refs, nests: arcaidia-nest
+- `liquidity_vault__deposit`: 3 refs, nests: arcaidia-nest
+- `liquidity_vault__withdraw`: 3 refs, nests: arcaidia-nest
+- `intent_router__intent_created`: 3 refs, nests: arcaidia-nest
+- `issuance_allocator__target_allocation_updated`: 3 refs, nests: dips-nest
+- `subgraph_service__allocation_created`: 3 refs, nests: graph-allocations-nest
+- `curation__collected`: 3 refs, nests: graph-allocations-nest
+- `staking_legacy__stake_deposited`: 3 refs, nests: graph-allocations-nest
+- `staking_legacy__stake_withdrawn`: 3 refs, nests: graph-allocations-nest
+- `staking__horizon_stake_withdrawn`: 3 refs, nests: graph-allocations-nest
+- `staking__provision_slashed`: 3 refs, nests: graph-allocations-nest
+- `gns__subgraph_published`: 3 refs, nests: graph-allocations-nest, graph-gns-nest
+- `liquidity_vault__swap_fell_back`: 2 refs, nests: arcaidia-nest
+- `liquidity_vault__paused_set`: 2 refs, nests: arcaidia-nest
+- `subgraph_service__allocation_closed`: 2 refs, nests: graph-allocations-nest
+- `exact_starts`: 2 refs, nests: graph-allocations-nest
+- `escrow__deposit`: 2 refs, nests: graph-allocations-nest, graph-tap-escrow-nest
+- `escrow__thaw`: 2 refs, nests: graph-allocations-nest, graph-tap-escrow-nest
+- `escrow__cancel_thaw`: 2 refs, nests: graph-allocations-nest, graph-tap-escrow-nest
+- `escrow__withdraw`: 2 refs, nests: graph-allocations-nest, graph-tap-escrow-nest
+- `protocol_payment_cut`: 2 refs, nests: graph-allocations-nest
+- `staking_legacy__stake_slashed`: 2 refs, nests: graph-allocations-nest
+- `staking__delegation_fee_cut_set`: 2 refs, nests: graph-allocations-nest
+- `staking__provision_increased`: 2 refs, nests: graph-allocations-nest
+- `staking__tokens_deprovisioned`: 2 refs, nests: graph-allocations-nest
+- `gns__signal_minted`: 2 refs, nests: graph-allocations-nest
+- `gns__signal_burned`: 2 refs, nests: graph-allocations-nest
+- `gns__subgraph_deprecated`: 2 refs, nests: graph-allocations-nest, graph-gns-nest
+- `usdc__transfer`: 2 refs, nests: hackathon-nest
+- `the`: 2 refs, nests: qos-reo-nest-typed
+- `liquidity_vault__fee_policy_configured`: 1 refs, nests: arcaidia-nest
+- `liquidity_vault__fill_limits_configured`: 1 refs, nests: arcaidia-nest
+- `liquidity_vault__reserve_floor_configured`: 1 refs, nests: arcaidia-nest
+- `liquidity_vault__delivered_via_swap`: 1 refs, nests: arcaidia-nest
+- `settlement_receiver__settled_with_proof`: 1 refs, nests: arcaidia-nest
+- `settlement_receiver_2__settled_with_proof`: 1 refs, nests: arcaidia-nest
+- `settlement_receiver__lp_reimbursed`: 1 refs, nests: arcaidia-nest
+- `settlement_receiver__recipient_paid_by_fallback`: 1 refs, nests: arcaidia-nest
+- `settlement_receiver__held_for_vault`: 1 refs, nests: arcaidia-nest
+- `settlement_receiver_2__lp_reimbursed`: 1 refs, nests: arcaidia-nest
+- `settlement_receiver_2__recipient_paid_by_fallback`: 1 refs, nests: arcaidia-nest
+- `settlement_receiver_2__held_for_vault`: 1 refs, nests: arcaidia-nest
+- `issuance_allocator__issuance_per_block_updated`: 1 refs, nests: dips-nest
+- `issuance_allocator__default_target_updated`: 1 refs, nests: dips-nest
+- `recurring_agreement_manager__issuance_allocator_set`: 1 refs, nests: dips-nest
+- `recurring_agreement_manager__provider_eligibility_oracle_set`: 1 refs, nests: dips-nest
+- `recurring_collector__pause_guardian_set`: 1 refs, nests: dips-nest
+- `data_edge__log`: 1 refs, nests: epoch-block-oracle-nest
+- `i.delegator_shares`: 1 refs, nests: graph-allocations-nest
+- `i.delegated_tokens`: 1 refs, nests: graph-allocations-nest
+- `subgraph_service__allocation_resized`: 1 refs, nests: graph-allocations-nest
+- `disputes__indexing_dispute_created`: 1 refs, nests: graph-allocations-nest
+- `disputes__query_dispute_created`: 1 refs, nests: graph-allocations-nest
+- `disputes__dispute_accepted`: 1 refs, nests: graph-allocations-nest
+- `disputes__dispute_rejected`: 1 refs, nests: graph-allocations-nest
+- `disputes__dispute_drawn`: 1 refs, nests: graph-allocations-nest
+- `escrow__escrow_collected`: 1 refs, nests: graph-allocations-nest
+- `delegation_ratio`: 1 refs, nests: graph-allocations-nest
+- `curation_tax_percentage`: 1 refs, nests: graph-allocations-nest
+- `max_thawing_period`: 1 refs, nests: graph-allocations-nest
+- `epochs__epoch_length_update`: 1 refs, nests: graph-allocations-nest
+- `staking__tokens_to_delegation_pool_added`: 1 refs, nests: graph-allocations-nest
+- `staking__delegation_slashed`: 1 refs, nests: graph-allocations-nest
+- `staking_legacy__rebate_claimed`: 1 refs, nests: graph-allocations-nest
+- `staking_legacy__stake_locked`: 1 refs, nests: graph-allocations-nest
+- `staking__horizon_stake_locked`: 1 refs, nests: graph-allocations-nest
+- `staking_legacy__allocation_closed_7203`: 1 refs, nests: graph-allocations-nest
+- `staking_legacy__allocation_closed_f672`: 1 refs, nests: graph-allocations-nest
+- `subgraph_service__legacy_allocation_migrated`: 1 refs, nests: graph-allocations-nest
+- `service_registry__service_registered`: 1 refs, nests: graph-allocations-nest
+- `service_registry__service_unregistered`: 1 refs, nests: graph-allocations-nest
+- `subgraph_service__service_provider_registered`: 1 refs, nests: graph-allocations-nest
+- `staking__thaw_request_created`: 1 refs, nests: graph-allocations-nest
+- `staking__provision_thawed`: 1 refs, nests: graph-allocations-nest
+- `total_supply`: 1 refs, nests: graph-allocations-nest
+- `issuance_per_block`: 1 refs, nests: graph-allocations-nest
+- `graph_token__bridge_minted`: 1 refs, nests: graph-allocations-nest
+- `graph_token__bridge_burned`: 1 refs, nests: graph-allocations-nest
+- `gns__subgraph_version_updated`: 1 refs, nests: graph-gns-nest
+- `gns__subgraph_metadata_updated`: 1 refs, nests: graph-gns-nest
+- `gns__subgraph_received_from_l1`: 1 refs, nests: graph-gns-nest
+- `gns__set_default_name`: 1 refs, nests: graph-gns-nest
+- `escrow__redeem`: 1 refs, nests: graph-tap-escrow-nest
+- `escrow__authorize_signer`: 1 refs, nests: graph-tap-escrow-nest
+- `escrow__revoke_authorized_signer`: 1 refs, nests: graph-tap-escrow-nest
+- `escrow__thaw_signer`: 1 refs, nests: graph-tap-escrow-nest
+- `escrow__cancel_thaw_signer`: 1 refs, nests: graph-tap-escrow-nest
+- `oracle__oracle_vote`: 1 refs, nests: nests-mvp/subgraph-availability-oracle
+- `perpl__contract_added_v2`: 1 refs, nests: perpl-nest
+- `perpl__contract_added`: 1 refs, nests: perpl-nest
+- `perpl__maker_order_filled_v2`: 1 refs, nests: perpl-nest
+- `perpl__maker_order_filled`: 1 refs, nests: perpl-nest
+- `perpl__funding_event_completed`: 1 refs, nests: perpl-nest
+- `perpl__position_liquidated`: 1 refs, nests: perpl-nest
+- `t.newest_bucket_start`: 1 refs, nests: qos-reo-nest-typed
+- `nest.query_count`: 1 refs, nests: qos-reo-nest-typed
+- `nest.num_200`: 1 refs, nests: qos-reo-nest-typed
+- `nest.buckets`: 1 refs, nests: qos-reo-nest-typed
+- `nest.bad_buckets`: 1 refs, nests: qos-reo-nest-typed
+- `nest.worst_bucket_start`: 1 refs, nests: qos-reo-nest-typed
+
+**Views referenced by other views/checks:** qos_published_call(8), qos_settings(8), epoch_boundaries(6), qos_indexer_deployment_lag(6), lodestar_allocations(5), qos_publisher(5), qos_allocation_bucket(5), qos_indexer_attempt(4), qos_query_result(4), qos_indexer_attempt_raw(4), qos_query_result_raw(4), qos_allocation_daily(4), vault_policy(3), fills(3), settlements(3), deployment_signal(3), lodestar_indexer_ledger(3), subgraph_publications(3), delegation_events(3), perpl_markets(3), qos_chain_block_time(3), qos_seconds_behind(3), qos_posting(3), lodestar_indexer_deployment_daily(2), lodestar_indexer_pool(2), lodestar_indexers(2), open_allocations(2), subgraph_versions(2), escrow_movements(2), qos_day_resolution(2), qos_stored_document(2), qos_day_bounds(2), qos_document_sender(2), vault_flows(1), intents(1), vaults(1), lodestar_indexer_daily(1), port_queue(1), lodestar_delegator_stakes(1), lodestar_curator_signals(1), developer_activity_weekly(1), subgraph_current(1), indexer_delegation_activity(1), escrow_account_balances(1), escrow_thaw_requests(1), deployment_votes(1), perpl_fills(1), qos_freshness(1), qos_indexer_daily(1), qos_indexer_attempt_first_document(1), qos_query_result_first_document(1), qos_indexer_bucket(1), qos_deployment_lag_floor(1), qos_indexer_payload_published(1), qos_query_payload_published(1)
+
+**Base-table naming shapes:**
+- <contract>__<event> (double underscore): 107
+- plain name: 13
+- dotted (schema.table): 8
+
+### per-nest stats (files, lines, top-level statements = column-0 CREATE/SELECT/WITH/... keywords, CREATE VIEW count)
+| nest | files | lines | top-level stmts | CREATE VIEW |
+|---|---|---|---|---|
+| arcaidia-nest | 10 | 313 | 10 | 10 |
+| dips-nest | 1 | 48 | 2 | 2 |
+| epoch-block-oracle-nest | 1 | 10 | 3 | 1 |
+| graph-allocations-nest | 18 | 1842 | 106 | 22 |
+| graph-gns-nest | 5 | 128 | 27 | 7 |
+| graph-staking-nest | 4 | 57 | 19 | 3 |
+| graph-tap-escrow-nest | 5 | 110 | 29 | 4 |
+| hackathon-nest | 2 | 22 | 2 | 2 |
+| nests-mvp/aave-v3-arbitrum | 1 | 16 | 0 | 0 |
+| nests-mvp/aerodrome | 1 | 16 | 0 | 0 |
+| nests-mvp/compound | 1 | 16 | 0 | 0 |
+| nests-mvp/conditional-tokens-gnosis | 1 | 16 | 0 | 0 |
+| nests-mvp/eigenlayer | 1 | 16 | 0 | 0 |
+| nests-mvp/forsage-bsc | 1 | 16 | 0 | 0 |
+| nests-mvp/gmx | 1 | 16 | 0 | 0 |
+| nests-mvp/graph-network | 1 | 16 | 0 | 0 |
+| nests-mvp/lido | 1 | 16 | 0 | 0 |
+| nests-mvp/makerdao-dai | 1 | 16 | 0 | 0 |
+| nests-mvp/omen-gnosis | 1 | 16 | 0 | 0 |
+| nests-mvp/pancakeswap-v3-bsc | 1 | 16 | 0 | 0 |
+| nests-mvp/request-payments | 1 | 16 | 0 | 0 |
+| nests-mvp/rewards-eligibility-oracle | 1 | 16 | 0 | 0 |
+| nests-mvp/seaport | 1 | 16 | 0 | 0 |
+| nests-mvp/subgraph-availability-oracle | 2 | 47 | 6 | 2 |
+| nests-mvp/uniswap-v2-arbitrum | 1 | 16 | 0 | 0 |
+| nuthatch/demo-usdc | 1 | 16 | 0 | 0 |
+| nuthatch/evaluation-2026-08-23 | 4 | 64 | 0 | 0 |
+| nuthatch/obib-case2 | 2 | 51 | 6 | 2 |
+| nuthatch/obib-case3 | 1 | 16 | 0 | 0 |
+| opolis-nest | 1 | 16 | 0 | 0 |
+| peeranha-nest | 1 | 16 | 0 | 0 |
+| perpl-nest | 2 | 127 | 17 | 5 |
+| qos-reo-nest | 3 | 186 | 35 | 11 |
+| qos-reo-nest-typed | 11 | 532 | 86 | 24 |
+| qos-reo-nest-wt-peers | 5 | 346 | 57 | 19 |
+| qos-reo-nest-wt-range | 1 | 56 | 12 | 4 |
+| spookyswap-nest | 1 | 16 | 0 | 0 |
+| **total** | 97 | 4275 | 417 | 118 |

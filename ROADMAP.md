@@ -63,7 +63,7 @@ Owning execution means owning the bugs, and nineteen hand-written refusals are n
 | ~~2.1b~~ | ~~Decide whether refusal should be order-independent~~ **· DECIDED AND DONE: yes** | Refusal fires when an intermediate partial sum leaves `i128`, not when the answer does: `MAX, +1, -1` sums to exactly `MAX` and is declined. DuckDB does it too, in both directions. Fixing it means accumulating wider than `i128`, which costs 16 bytes per group — against a memory gate already being missed. `tests/generated_folds.rs` pins today's behaviour so a fix inverts a test deliberately |
 | ~~2.2~~ | ~~Overflow reached by generation~~ | **DONE.** 86 of 180 generated cases in the library test reach the refusal path, against a benchmark fixture that topped out at 1e20 and could never have reached it at all |
 | ~~2.3~~ | ~~`sqllogictest-rs` corpus~~ | **DONE 2026-08-31.** Hand-computed expectations in `crates/burrmill/tests/slt/`, run against Burrmill on every `cargo test` at three segment layouts, and against DuckDB via `burrmill-bench slt`. Both green. Mutation-checked. Choosing the standard format paid immediately: pointing the same files at DuckDB is what turned up 2.3a |
-| 2.3a | **Report the DuckDB wrap upstream** · drafted at `docs/upstream/duckdb-hugeint-parallel-wrap.md`, not sent | With ≥2 threads and ≥2 files, `SUM(HUGEINT)` returns `i128::MIN` where the true sum is `i128::MAX + 1` — a silently wrapped balance. Refuses correctly at 1 thread or 1 file, so the check is missing from the partial-aggregate combine. Reproduced by `burrmill-bench duckdb-gaps` on libduckdb-sys 1.10501.0. Outward-facing, so Chief's call |
+| 2.3a | ~~Report the DuckDB wrap upstream~~ **· ALREADY REPORTED: duckdb#24081, fixed on `main` by #24168, not in 1.5.x** | With ≥2 threads and ≥2 files, `SUM(HUGEINT)` returns `i128::MIN` where the true sum is `i128::MAX + 1`: a silently wrapped balance. Reproduced by `burrmill-bench duckdb-gaps` on libduckdb-sys 1.10501.0, and on the 1.5.5 CLI on 2026-09-16. Viktor Leis filed it on 2026-07-23 and the Combine fix merged on 2026-07-28, after 1.5.5 was cut, with no backport to `v1.5-variegata`. The remaining action is a backport request, and it is Chief's call. See `docs/upstream/duckdb-hugeint-parallel-wrap.md` |
 
 ---
 
@@ -102,6 +102,7 @@ publishing that honestly from the start is what stops "hybrid now, own more late
 | 4.2 | ~~The remaining heavy folds~~ **· MEASURED on the real authored views, and the claim was false until it was fixed** | The headline had only ever been checked on a **synthetic** fixture. On the real nest's own views: **1.20x, 1.16x, 1.38x — 0/3 at or under 1.0x**. Cause: a real nest table is 6,000-10,000 tiny segments and 57-93 ms of every query went into re-reading immutable footers. Caching the cut morsels: **0.80x, 0.95x, 1.01x, 2/3 passing**. `docs/bench/real-views.txt` |
 | 4.2a | The third fold, at 1.01x | `curation + gns`, four tables and 9,745 segments, scan-bound at 321 ms of 323. Nothing left to cache; this one is the per-morsel cost of ten thousand files, which is 4.2b territory |
 | 4.2b | Per-morsel cost on many-tiny-segment tables | Each morsel opens its file and builds a reader. At 9,745 morsels that is 9,745 opens per query. Worth measuring against a reader cache or a coalesced read before assuming |
+| 4.2c | **The 4.2 comparison caches footers on one side only** | `views.rs` warms Burrmill's morsel cache in the untimed parity run but opens DuckDB with only `SET threads`, and `parquet_metadata_cache` is off by default. Measured on the 1.5.5 CLI on 2026-09-16 over the curation fold (6,004 files, 8 threads, two rounds each): **151 ms off, 138 ms on**, about 9%. Extrapolated onto the table above, curation stays ahead at ~0.9x and staking lands near 1.0x. That is an estimate. Set the cache in `views.rs` and `serve.rs` and re-run before quoting 4.2 again |
 | 4.3 | Publish the coverage ratio per release, monotonic | It may not go down |
 
 ---
@@ -127,6 +128,38 @@ work is not now sitting on an assumption.
 | ~~5.4~~ | ~~Why Burrmill is still 0.65x DuckDB at 16+ clients~~ **· DIAGNOSED, and partly closed** | **Not fixed cost — utilisation.** The fold is 53 ms at one thread against DuckDB's implied ~48 ms, so the work is comparable; but eight threads give only **3.3x**, and a share split into coarse groups idles workers on the tail. Splitting each share twice recovers it: at 32 clients **100 → 112 qps**, p99 **478 → 410 ms**, fairness **0.94 → 0.89**. At 4 clients Burrmill now leads clearly, **123 qps against 109** |
 | ~~5.5~~ | ~~The last of the throughput gap~~ **· no scheduler needed; the flush size was tuned at the wrong operating point** | Single-query scaling depends on query **size** — a 181 ms fold gets 7.9x from eight threads, a 48 ms one gets 4x — and the cause is contention on the aggregate's 64 partition locks, which bites small queries because they flush proportionally more often. `FLUSH_ROWS` 4096→16384 takes a 500k-row scan from **18 ms to 11** with the serial cost unchanged. Serving: **123 → 133-143 qps** at 4 clients, 112 → 115-124 at 32. Memory gate unchanged at 218 MB. The constant had been swept at 1M groups on 32 threads, where memory binds and contention does not |
 | 5.6 | A scheduler, if it is still worth it | Burrmill now leads DuckDB below eight clients and trails above it (135 vs 160 at sixteen). The remaining gap is genuinely scheduling — work-stealing across queries rather than nested rayon pools. Cost it against 5.1 (streaming) before starting; it may no longer be the best next thing |
+
+---
+
+## Stage 6 — replacing DuckDB in nuthatch · **PLANNED 2026-09-16**
+
+Chief's direction, RFC-0044 Amendment 2. The design, gates and risks are in
+`docs/research/replacing-duckdb/plan.md`. The evidence is investigations 01-05 in the same
+directory. Nothing in nuthatch changes until Chief says so.
+
+| # | Work | Done when |
+|---|---|---|
+| 6.0 | **Footprint spike: DataFusion component crates plus an owned physical planner** | burrmill#1's four figures are measured in nuthatch's real profile (`line-tables-only`, about six test binaries) and decide between the component route and the umbrella crate. The umbrella crate's regression (test binaries 2.6x, release 3x at `-g0`) is either avoided or signed off in an RFC-0042 amendment |
+| 6.1 | `NestCatalog` provider | explicit file lists with known sizes, a footer cache sized to fit, statistics off, by-name union, empty tables for declared-but-unsealed, `_dec` columns. `df-views` already prototypes most of this (`SegmentTable`) |
+| 6.2 | Lockdown | `SQLOptions` all false, no table factories, no `file://`, and a function allowlist from the census. Each shipped nuthatch escape has a test proving it is refused |
+| 6.3 | `CheckedArithmetic`, hardened from the investigation 03 prototype | per-type accumulator, whitelist rule, literal and `TRY_CAST` handling. RSS at 1M groups within 256 MB at 8 threads |
+| 6.4 | Nuthatch result encoder and error mapping | byte-identical JSON on the checks fixtures and the tests the census names |
+| 6.5 | Dialect layer and the silent differences | the three rewrites, `UBIGINT`, `information_schema`. `/`, identifier case and TIMESTAMPTZ are reproduced or refused |
+| 6.6 | `FoldSubstitution` | the owned signed fold runs inside DataFusion-planned statements, visible in EXPLAIN, parity held |
+| 6.7 | Parser role | a sqlparser AST walk answers reachability, table-function use and canonical form, at least as strictly as `json_serialize_sql` |
+| 6.8 | DataFusion-path `serve` sweep, and the synthetic sweep under the remedied configuration | concurrency and the README's 3.6x, both re-measured |
+
+**Gate 1:**
+
+- every authored statement reaches parity once the Lodestar and qos views are rewritten (plan
+  phase 1b, a nuthatch change);
+- ≤1.0x DuckDB time-weighted, and ≤1.5x per statement;
+- the overflow corpus refuses correctly;
+- 256 MB at 1M groups;
+- the footprint figures from 6.0 hold.
+
+Phases 2 (engine trait, shadow mode) and 3 (cutover and removal) happen in nuthatch and are listed
+in the plan.
 
 ---
 

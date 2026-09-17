@@ -1,0 +1,14 @@
+[package]
+name = "consumer_c"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[lib]
+name = "consumer"
+path = "src/lib.rs"
+[[bin]]
+name = "consumer-bin"
+path = "src/main.rs"
+[dependencies]
+datafusion = { version = "=55.0.0", default-features = false, features = ["parquet", "sql"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

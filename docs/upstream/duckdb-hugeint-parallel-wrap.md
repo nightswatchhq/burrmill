@@ -1,7 +1,26 @@
 # DuckDB: `SUM(HUGEINT)` silently wraps when the aggregate runs in parallel
 
-**Status: drafted, not sent.** Reporting this is outward-facing and goes under Chief's name, so it
-waits for him. Everything below is reproducible from this repo.
+**Status: do not file. Already reported upstream and fixed on `main`, but not in any 1.5 release.**
+
+Checked 2026-09-16:
+
+- [duckdb#24081](https://github.com/duckdb/duckdb/issues/24081), filed by Viktor Leis on
+  2026-07-23, describes this defect: "The problem occurs in the Combine step."
+- [duckdb#24168](https://github.com/duckdb/duckdb/pull/24168) fixed it on `main` on 2026-07-28, six
+  days after v1.5.5 was tagged. The fix makes Combine use `Hugeint::Add`.
+- `v1.5-variegata` carries no backport. The merge commit `22c9d7f` has diverged from that branch,
+  and no commit on it since 2026-07-22 mentions the fix, although the branch already has v1.5.6
+  storage added.
+- **Reproduced on the DuckDB 1.5.5 CLI** (macOS arm64) with the query below:
+  - one thread over two files: `Out of Range Error`;
+  - two and four threads over two files: `i128::MIN`.
+- Nuthatch pins `libduckdb-sys 1.10504.0` (DuckDB 1.5.4), so its oracle has the defect today.
+
+The useful action is a backport request on #24081, not a new issue. That is outward-facing and
+Chief's call. The claim "DuckDB is not watertight" applies to 1.5.x. It stops being true once the
+release carrying #24168 ships.
+
+The original draft follows, kept as the record of what the corpus found independently.
 
 ## Summary
 

@@ -1,0 +1,13 @@
+[package]
+name = "consumer_d"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[lib]
+name = "consumer"
+path = "src/lib.rs"
+[[bin]]
+name = "consumer-bin"
+path = "src/main.rs"
+[dependencies]
+burrmill = { path = "../burrmill/crates/burrmill" }

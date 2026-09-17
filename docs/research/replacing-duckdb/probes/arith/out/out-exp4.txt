@@ -1,0 +1,265 @@
+=== 4. Checked prototype through the analyzer rule (DataFusion 55.0.0) ===
+--- rule on, target_partitions = 1: experiment 1 cases ---
+[SUM i64_over (true 2^63)] EXEC ERROR: Execution error: checked_sum overflow: exact result 9223372036854775808 does not fit Int64
+[SUM i64_partial (true MAX-1)] OK:
++---------------------+
+| sum(i64_partial.v)  |
++---------------------+
+| 9223372036854775806 |
++---------------------+
+[SUM i64_one] EXEC ERROR: Execution error: checked_sum overflow: exact result 9223372036854775808 does not fit Int64
+[SUM grouped] EXEC ERROR: Execution error: checked_sum overflow: exact result 9223372036854775808 does not fit Int64
+--- rule on, target_partitions = 1: experiment 2 cases ---
+[SUM d38_over] EXEC ERROR: Execution error: checked_sum overflow: exact result 100000000000000000000000000000000000000 does not fit Decimal128(38, 0)
+[SUM d38_i128] EXEC ERROR: Execution error: checked_sum overflow: exact result 199999999999999999999999999999999999998 does not fit Decimal128(38, 0)
+[SUM d38_partial] OK:
++----------------------------------------+
+| sum(d38_partial.v)                     |
++----------------------------------------+
+| 99999999999999999999999999999999999999 |
++----------------------------------------+
+[SUM d76_over] EXEC ERROR: Execution error: checked_sum overflow: exact result 10000000000000000000000000000000000000000000000000000000000000000000000000000 does not fit Decimal256(76, 0)
+[SUM d76_i256] EXEC ERROR: Execution error: checked_sum overflow: exact result 59999999999999999999999999999999999999999999999999999999999999999999999999994 does not fit Decimal256(76, 0)
+[SUM d76_partial] OK:
++------------------------------------------------------------------------------+
+| sum(d76_partial.v)                                                           |
++------------------------------------------------------------------------------+
+| 9999999999999999999999999999999999999999999999999999999999999999999999999999 |
++------------------------------------------------------------------------------+
+[AVG d38_i128] EXEC ERROR: Execution error: checked_avg overflow: exact result 999999999999999999999999999999999999990000 does not fit Decimal128(38, 4)
+[AVG d38_partial] EXEC ERROR: Execution error: checked_avg overflow: exact result 333333333333333333333333333333333333330000 does not fit Decimal128(38, 4)
+[AVG d76_i256] EXEC ERROR: Execution error: checked_avg overflow: exact result 99999999999999999999999999999999999999999999999999999999999999999999999999990000 does not fit Decimal256(76, 4)
+[AVG d76_partial] EXEC ERROR: Execution error: checked_avg overflow: exact result 9090909090909090909090909090909090909090909090909090909090909090909090909090000 does not fit Decimal256(76, 4)
+--- rule on, target_partitions = 1: experiment 3 cases ---
+[UNION ALL CAST 76] EXEC ERROR: Arrow error: Cast error: Cannot cast string '115792089237316195423570985008687907853269984665640564039457584007913129639935' to value of Decimal256(76, 10) type
+[UNION ALL TRY_CAST 76] EXEC ERROR: Execution error: checked_sum overflow: exact result 59999999999999999999999999999999999999999999999999999999999999999999999999994 does not fit Decimal256(76, 0)
+[nuthatch today 38] OK:
++--------------+---------+-----------+
+| party        | balance | _overflow |
++--------------+---------+-----------+
+| final_over   |         | 1         |
+| final_over2  |         | 1         |
+| fits76       | 0       | 1         |
+| max          |         | 1         |
+| neg          | -2      | 0         |
+| p255         | 1       | 1         |
+| p255m1       |         | 1         |
+| partial_over | 0       | 1         |
+| small        | 2       | 0         |
++--------------+---------+-----------+
+[SUM over VARCHAR] PLAN ERROR: Error during planning: Internal error: Function 'sum' failed to match any signature, errors: Error during planning: Function 'sum' requires Decimal, but received String (DataType: Utf8View).,Error during planning: Function 'sum' r...
+--- rule on, target_partitions = 6: experiment 1 cases ---
+[SUM i64_over (true 2^63)] EXEC ERROR: Execution error: checked_sum overflow: exact result 9223372036854775808 does not fit Int64
+[SUM i64_partial (true MAX-1)] OK:
++---------------------+
+| sum(i64_partial.v)  |
++---------------------+
+| 9223372036854775806 |
++---------------------+
+[SUM i64_one] EXEC ERROR: Execution error: checked_sum overflow: exact result 9223372036854775808 does not fit Int64
+[SUM grouped] EXEC ERROR: Execution error: checked_sum overflow: exact result 9223372036854775808 does not fit Int64
+--- rule on, target_partitions = 6: experiment 2 cases ---
+[SUM d38_over] EXEC ERROR: Execution error: checked_sum overflow: exact result 100000000000000000000000000000000000000 does not fit Decimal128(38, 0)
+[SUM d38_i128] EXEC ERROR: Execution error: checked_sum overflow: exact result 199999999999999999999999999999999999998 does not fit Decimal128(38, 0)
+[SUM d38_partial] OK:
++----------------------------------------+
+| sum(d38_partial.v)                     |
++----------------------------------------+
+| 99999999999999999999999999999999999999 |
++----------------------------------------+
+[SUM d76_over] EXEC ERROR: Execution error: checked_sum overflow: exact result 10000000000000000000000000000000000000000000000000000000000000000000000000000 does not fit Decimal256(76, 0)
+[SUM d76_i256] EXEC ERROR: Execution error: checked_sum overflow: exact result 59999999999999999999999999999999999999999999999999999999999999999999999999994 does not fit Decimal256(76, 0)
+[SUM d76_partial] OK:
++------------------------------------------------------------------------------+
+| sum(d76_partial.v)                                                           |
++------------------------------------------------------------------------------+
+| 9999999999999999999999999999999999999999999999999999999999999999999999999999 |
++------------------------------------------------------------------------------+
+[AVG d38_i128] EXEC ERROR: Execution error: checked_avg overflow: exact result 999999999999999999999999999999999999990000 does not fit Decimal128(38, 4)
+[AVG d38_partial] EXEC ERROR: Execution error: checked_avg overflow: exact result 333333333333333333333333333333333333330000 does not fit Decimal128(38, 4)
+[AVG d76_i256] EXEC ERROR: Execution error: checked_avg overflow: exact result 99999999999999999999999999999999999999999999999999999999999999999999999999990000 does not fit Decimal256(76, 4)
+[AVG d76_partial] EXEC ERROR: Execution error: checked_avg overflow: exact result 9090909090909090909090909090909090909090909090909090909090909090909090909090000 does not fit Decimal256(76, 4)
+--- rule on, target_partitions = 6: experiment 3 cases ---
+[UNION ALL CAST 76] EXEC ERROR: Arrow error: Invalid argument error: 57896044618658097711785492504343953926634992332820282019728792003956564819967 is too large to store in a Decimal256 of precision 76. Max is 99999999999999999999999999999999999999999999999999999...
+[UNION ALL TRY_CAST 76] EXEC ERROR: Execution error: checked_sum overflow: exact result 59999999999999999999999999999999999999999999999999999999999999999999999999994 does not fit Decimal256(76, 0)
+[nuthatch today 38] OK:
++--------------+---------+-----------+
+| party        | balance | _overflow |
++--------------+---------+-----------+
+| final_over   |         | 1         |
+| final_over2  |         | 1         |
+| fits76       | 0       | 1         |
+| max          |         | 1         |
+| neg          | -2      | 0         |
+| p255         | 1       | 1         |
+| p255m1       |         | 1         |
+| partial_over | 0       | 1         |
+| small        | 2       | 0         |
++--------------+---------+-----------+
+[SUM over VARCHAR] PLAN ERROR: Error during planning: Internal error: Function 'sum' failed to match any signature, errors: Error during planning: Function 'sum' requires Decimal, but received String (DataType: Utf8View).,Error during planning: Function 'sum' r...
+--- rule on: scalars ---
+[fold +] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 + 1
+[fold *] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: 10000000000 * 10000000000
+[fold neg] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: - -9223372036854775808
+[fold ok] OK:
++---------------------------------------+--------------------------------+
+| Int64(9223372036854775806) + Int64(1) | Int64(3) * Int64(4) - Int64(5) |
++---------------------------------------+--------------------------------+
+| 9223372036854775807                   | 7                              |
++---------------------------------------+--------------------------------+
+[runtime v + 1] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 + 1
+[runtime v * v] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 * 9223372036854775807
+[runtime -v MIN] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: - -9223372036854775808
+[runtime v + 1 in WHERE] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 + 1
+[runtime ok] OK:
++-----------------------+-----------------------+-----------------------+
+| i64_over.v + Int64(1) | i64_over.v * Int64(2) | i64_over.v - Int64(3) |
++-----------------------+-----------------------+-----------------------+
+| 1                     | 0                     | -3                    |
++-----------------------+-----------------------+-----------------------+
+[d38 a + b] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: 99999999999999999999999999999999999999 + 99999999999999999999999999999999999999
+[d38 a * 10 (39 digits, fits i128)] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: 99999999999999999999999999999999999999 * 10
+[d38 a + 1] EXEC ERROR: Arrow error: Invalid argument error: 100000000000000000000000000000000000000 is too large to store in a Decimal128 of precision 38. Max is 99999999999999999999999999999999999999
+[d38 a - 1 (fits)] OK:
++----------------------------------------+
+| a - Int64(1)                           |
++----------------------------------------+
+| 99999999999999999999999999999999999998 |
++----------------------------------------+
+[d76 a + b] EXEC ERROR: Arrow error: Invalid argument error: 19999999999999999999999999999999999999999999999999999999999999999999999999998 is too large to store in a Decimal256 of precision 76. Max is 99999999999999999999999999999999999999999999999999999...
+[d76 a * 6] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: 9999999999999999999999999999999999999999999999999999999999999999999999999999 * 6
+[fold d38 + 1] OK:
++-------------------------------------------------------------+
+| Float64(100000000000000000000000000000000000000) + Int64(1) |
++-------------------------------------------------------------+
+| 1e38                                                        |
++-------------------------------------------------------------+
+[fold d38 * d38] OK:
++-----------------------------------------------------------------------------------------------------+
+| Float64(100000000000000000000000000000000000000) * Float64(100000000000000000000000000000000000000) |
++-----------------------------------------------------------------------------------------------------+
+| 9.999999999999999e75                                                                                |
++-----------------------------------------------------------------------------------------------------+
+[float untouched] OK:
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------+
+| Float64(100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000) * Int64(10) | Float64(1.5) + Float64(2.5) |
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------+
+| inf                                                                                                                                                                                                                                                                                                                                        | 4.0                         |
++--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------+
+[date arithmetic untouched] OK:
++----------------------------------------------------------------------------------------------------------+
+| Utf8("2024-01-01") + IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 1, nanoseconds: 0 }") |
++----------------------------------------------------------------------------------------------------------+
+| 2024-01-02                                                                                               |
++----------------------------------------------------------------------------------------------------------+
+--- rule on: through a CTE and a join ---
+[CTE sum] EXEC ERROR: Execution error: checked_sum overflow: exact result 19999999999999999999999999999999999999999999999999999999999999999999999999998 does not fit Decimal256(76, 0)
+[CTE sum, fits] EXEC ERROR: Arrow error: Invalid argument error: 10000000000000000000000000000000000000000000000000000000000000000000000000000 is too large to store in a Decimal256 of precision 76. Max is 99999999999999999999999999999999999999999999999999999...
+[join sum - sum] OK:
++--------+-----+
+| party  | bal |
++--------+-----+
+| fits76 | 0   |
+| neg    | -2  |
+| small  | -6  |
++--------+-----+
+[join sum in subquery] EXEC ERROR: Execution error: checked_sum overflow: exact result 299999999999999999999999999999999999999999999999999999999999999999999999999970 does not fit Decimal256(76, 0)
+[window sum] EXEC ERROR: Execution error: checked_sum overflow: exact result 9223372036854775808 does not fit Int64
+[scalar subquery] EXEC ERROR: Execution error: checked_sum overflow: exact result 9223372036854775808 does not fit Int64
+[HAVING] EXEC ERROR: Arrow error: Cast error: Cannot cast string '115792089237316195423570985008687907853269984665640564039457584007913129639935' to value of Decimal256(76, 10) type
+[logical plan after rule]
+    logical_plan  | Projection: c.party, checked_sub(sum(c.amount), sum(d.amount)) AS bal
+    |   Aggregate: groupBy=[[c.party]], aggr=[[checked_sum(CAST(c.amount AS Decimal256(76, 0))) AS sum(c.amount), checked_sum(CAST(d.amount AS Decimal256(76, 0))) AS sum(d.amount)]]
+--- rule on: refusals ---
+[SUM DISTINCT] EXEC ERROR: checked_arithmetic caused by Error during planning: refusing plan: sum(DISTINCT ...) has no checked form
+[SUM float] EXEC ERROR: checked_arithmetic caused by Error during planning: refusing plan: sum(Float64) has no checked form
+[AVG float] EXEC ERROR: checked_arithmetic caused by Error during planning: refusing plan: avg(Float64) has no checked form
+--- checked_sum / checked_sum_text called directly on VARCHAR (the Nuthatch fix) ---
+[checked_sum(text) -> Decimal256, per party, 1p] EXEC ERROR: Execution error: checked_sum overflow: exact result 115792089237316195423570985008687907853269984665640564039457584007913129639935 does not fit Decimal256(76, 0)
+[checked_sum(text) excluding the two that cannot fit, 1p] OK:
++--------------+------------------------------------------------------------------------------+-----------------------------------+
+| party        | bal                                                                          | arrow_typeof(checked_sum(amount)) |
++--------------+------------------------------------------------------------------------------+-----------------------------------+
+| fits76       | 0                                                                            | Decimal256(76, 0)                 |
+| neg          | -2                                                                           | Decimal256(76, 0)                 |
+| partial_over | 9999999999999999999999999999999999999999999999999999999999999999999999999999 | Decimal256(76, 0)                 |
+| small        | 2                                                                            | Decimal256(76, 0)                 |
++--------------+------------------------------------------------------------------------------+-----------------------------------+
+[checked_sum_text(text) -> exact text, all parties, 1p] OK:
++--------------+--------------------------------------------------------------------------------+
+| party        | bal                                                                            |
++--------------+--------------------------------------------------------------------------------+
+| final_over   | 19999999999999999999999999999999999999999999999999999999999999999999999999998  |
+| final_over2  | 59999999999999999999999999999999999999999999999999999999999999999999999999994  |
+| fits76       | 0                                                                              |
+| max          | 115792089237316195423570985008687907853269984665640564039457584007913129639935 |
+| neg          | -2                                                                             |
+| p255         | 57896044618658097711785492504343953926634992332820282019728792003956564819968  |
+| p255m1       | 57896044618658097711785492504343953926634992332820282019728792003956564819967  |
+| partial_over | 9999999999999999999999999999999999999999999999999999999999999999999999999999   |
+| small        | 2                                                                              |
++--------------+--------------------------------------------------------------------------------+
+[checked_avg(text), 1p] EXEC ERROR: Execution error: checked_avg overflow: exact result 99999999999999999999999999999999999999999999999999999999999999999999999999990000 does not fit Decimal256(76, 4)
+[checked_sum(text) -> Decimal256, per party, 4p] EXEC ERROR: Execution error: checked_sum overflow: exact result 57896044618658097711785492504343953926634992332820282019728792003956564819967 does not fit Decimal256(76, 0)
+[checked_sum(text) excluding the two that cannot fit, 4p] OK:
++--------------+------------------------------------------------------------------------------+-----------------------------------+
+| party        | bal                                                                          | arrow_typeof(checked_sum(amount)) |
++--------------+------------------------------------------------------------------------------+-----------------------------------+
+| fits76       | 0                                                                            | Decimal256(76, 0)                 |
+| neg          | -2                                                                           | Decimal256(76, 0)                 |
+| partial_over | 9999999999999999999999999999999999999999999999999999999999999999999999999999 | Decimal256(76, 0)                 |
+| small        | 2                                                                            | Decimal256(76, 0)                 |
++--------------+------------------------------------------------------------------------------+-----------------------------------+
+[checked_sum_text(text) -> exact text, all parties, 4p] OK:
++--------------+--------------------------------------------------------------------------------+
+| party        | bal                                                                            |
++--------------+--------------------------------------------------------------------------------+
+| final_over   | 19999999999999999999999999999999999999999999999999999999999999999999999999998  |
+| final_over2  | 59999999999999999999999999999999999999999999999999999999999999999999999999994  |
+| fits76       | 0                                                                              |
+| max          | 115792089237316195423570985008687907853269984665640564039457584007913129639935 |
+| neg          | -2                                                                             |
+| p255         | 57896044618658097711785492504343953926634992332820282019728792003956564819968  |
+| p255m1       | 57896044618658097711785492504343953926634992332820282019728792003956564819967  |
+| partial_over | 9999999999999999999999999999999999999999999999999999999999999999999999999999   |
+| small        | 2                                                                              |
++--------------+--------------------------------------------------------------------------------+
+[checked_avg(text), 4p] EXEC ERROR: Execution error: checked_avg overflow: exact result 99999999999999999999999999999999999999999999999999999999999999999999999999990000 does not fit Decimal256(76, 4)
+[checked_sum on non-canonical text] EXEC ERROR: Execution error: checked aggregate: not a canonical decimal integer: " 7"
+[checked_sum on canonical subset] OK:
++-------+------------------------------+
+| party | checked_sum(noncanon.amount) |
++-------+------------------------------+
+| a     | 7                            |
++-------+------------------------------+
+[checked_sum with FILTER] OK:
++--------------------------------------------------------------------------------+
+| checked_sum(i64_over.v) FILTER (WHERE i64_over.v < Int64(9223372036854775807)) |
++--------------------------------------------------------------------------------+
+| 1                                                                              |
++--------------------------------------------------------------------------------+
+[checked_sum on Int64, fits] OK:
++----------------------------+
+| checked_sum(i64_partial.v) |
++----------------------------+
+| 9223372036854775806        |
++----------------------------+
+[checked_sum on Int64, overflows] EXEC ERROR: Execution error: checked_sum overflow: exact result 9223372036854775808 does not fit Int64
+[checked_sum_text on Int64, overflows] OK:
++------------------------------+
+| checked_sum_text(i64_over.v) |
++------------------------------+
+| 9223372036854775808          |
++------------------------------+
+[checked_sum_text on Decimal256 beyond i256] OK:
++-------------------------------------------------------------------------------+
+| checked_sum_text(d76_i256.v)                                                  |
++-------------------------------------------------------------------------------+
+| 59999999999999999999999999999999999999999999999999999999999999999999999999994 |
++-------------------------------------------------------------------------------+
+[checked_sum on empty input] OK:
++-------------------------+
+| checked_sum(i64_over.v) |
++-------------------------+
+|                         |
++-------------------------+

@@ -1,0 +1,23 @@
+.bail off
+.mode box
+SET threads=32;
+-- HUGEINT through a native table, not parquet (DuckDB writes HUGEINT parquet as DOUBLE)
+CREATE TABLE h AS SELECT 170141183460469231731687303715884105727::HUGEINT AS v UNION ALL SELECT 1::HUGEINT;
+SELECT 'HUGEINT MAX+1 native 32t' AS c, SUM(v), typeof(SUM(v)) FROM h;
+SET threads=1;
+SELECT 'HUGEINT MAX+1 native 1t' AS c, SUM(v) FROM h;
+SET threads=32;
+-- BIGNUM: does DuckDB 1.5 have an exact path?
+SELECT 'typeof BIGNUM' AS c, typeof('115792089237316195423570985008687907853269984665640564039457584007913129639935'::BIGNUM);
+SELECT 'BIGNUM uint256 max + 1' AS c, '115792089237316195423570985008687907853269984665640564039457584007913129639935'::BIGNUM + 1::BIGNUM;
+CREATE VIEW credits AS SELECT * FROM 'data/credits/*.parquet';
+CREATE VIEW debits AS SELECT * FROM 'data/debits/*.parquet';
+WITH m AS (
+  SELECT party, amount::BIGNUM AS c, 0::BIGNUM AS d FROM credits
+  UNION ALL
+  SELECT party, 0::BIGNUM, amount::BIGNUM FROM debits
+)
+SELECT 'BIGNUM balance 32t' AS c, party, SUM(c) - SUM(d) AS balance, typeof(SUM(c)) AS t FROM m GROUP BY party ORDER BY party;
+SELECT 'BIGNUM d38_i128 32t' AS c, SUM(v::BIGNUM) FROM 'data/d38_i128/*.parquet';
+SELECT 'BIGNUM non-canonical' AS c, ' 7'::BIGNUM, '007'::BIGNUM, '7.9'::BIGNUM;
+SELECT 'BIGNUM 1e3' AS c, '1e3'::BIGNUM;

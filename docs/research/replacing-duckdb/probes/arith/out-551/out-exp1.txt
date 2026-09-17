@@ -1,0 +1,154 @@
+=== 1. Integers (DataFusion 55.1.0) ===
+i64::MAX = 9223372036854775807, true SUM(i64_over) = 9223372036854775808, true SUM(i64_partial) = 9223372036854775806
+--- target_partitions = 1 ---
+[SUM 4 files, 1p] OK:
++----------------------+
+| sum(i64_over.v)      |
++----------------------+
+| -9223372036854775808 |
++----------------------+
+[SUM partial-over-final-fits 2 files, 1p] OK:
++---------------------+
+| sum(i64_partial.v)  |
++---------------------+
+| 9223372036854775806 |
++---------------------+
+[SUM 1 file 4 row groups, 1p] OK:
++----------------------+
+| sum(i64_one.v)       |
++----------------------+
+| -9223372036854775808 |
++----------------------+
+[SUM grouped, 1p] OK:
++-------+----------------------+
+| k     | sum(i64_over.v)      |
++-------+----------------------+
+| false | 0                    |
+| true  | -9223372036854775808 |
++-------+----------------------+
+--- target_partitions = 4 ---
+[SUM 4 files, 4p] OK:
++----------------------+
+| sum(i64_over.v)      |
++----------------------+
+| -9223372036854775808 |
++----------------------+
+[SUM 4 files] physical plan:
+    physical_plan | AggregateExec: mode=Final, gby=[], aggr=[sum(i64_over.v)]
+    |   CoalescePartitionsExec
+    |     AggregateExec: mode=Partial, gby=[], aggr=[sum(i64_over.v)]
+    |       DataSourceExec: file_groups={4 groups: [[home/pepe/scratch/burrmill-arith-551/data/i64_over/part0.parquet], [home/pepe/scratch/burrmill-arith-551/data/i64_over/part1.parquet], [home/pepe/scratch/burrmill-arith-551/data/i64_over/part2.parquet], [home/pepe/scratch/burrmill-arith-551/data/i64_over/part3.parquet]]}, projection=[v], file_type=parquet
+[SUM partial-over-final-fits 2 files, 4p] OK:
++---------------------+
+| sum(i64_partial.v)  |
++---------------------+
+| 9223372036854775806 |
++---------------------+
+[SUM 1 file 4 row groups, 4p] OK:
++----------------------+
+| sum(i64_one.v)       |
++----------------------+
+| -9223372036854775808 |
++----------------------+
+[SUM 1 file] physical plan:
+    physical_plan | AggregateExec: mode=Single, gby=[], aggr=[sum(i64_one.v)]
+    |   DataSourceExec: file_groups={1 group: [[home/pepe/scratch/burrmill-arith-551/data/i64_one/part0.parquet]]}, projection=[v], file_type=parquet
+[SUM grouped, 4p] OK:
++-------+----------------------+
+| k     | sum(i64_over.v)      |
++-------+----------------------+
+| false | 0                    |
+| true  | -9223372036854775808 |
++-------+----------------------+
+--- scalar, constant folded ---
+[fold +] OK:
++---------------------------------------+
+| Int64(9223372036854775807) + Int64(1) |
++---------------------------------------+
+| -9223372036854775808                  |
++---------------------------------------+
+[fold *] OK:
++-----------------------------------------+
+| Int64(10000000000) * Int64(10000000000) |
++-----------------------------------------+
+| 7766279631452241920                     |
++-----------------------------------------+
+[fold -] OK:
++----------------------------------------+
+| Int64(-9223372036854775807) - Int64(2) |
++----------------------------------------+
+| 9223372036854775807                    |
++----------------------------------------+
+[fold neg] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: - -9223372036854775808
+[fold % (for contrast)] OK:
++----------------------------------------------------+
+| Int64(-9223372036854775807) - Int64(1) % Int64(-1) |
++----------------------------------------------------+
+| 0                                                  |
++----------------------------------------------------+
+[fold / (for contrast)] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: -9223372036854775808 / -1
+[fold + is folded? (no plan lines means yes)] physical plan:
+    | logical_plan  | Projection: Int64(-9223372036854775808) AS Int64(9223372036854775807) + Int64(1)     |
+    | physical_plan | ProjectionExec: expr=[-9223372036854775808 as Int64(9223372036854775807) + Int64(1)] |
+--- scalar, runtime on a column ---
+[runtime v + 1] OK:
++-----------------------+
+| i64_over.v + Int64(1) |
++-----------------------+
+| -9223372036854775808  |
+| 2                     |
++-----------------------+
+[runtime v * 2] OK:
++-----------------------+
+| i64_over.v * Int64(2) |
++-----------------------+
+| -2                    |
+| 2                     |
++-----------------------+
+[runtime v - (-1)] OK:
++------------------------+
+| i64_over.v - Int64(-1) |
++------------------------+
+| -9223372036854775808   |
+| 2                      |
++------------------------+
+[runtime -v on MIN] EXEC ERROR: Arrow error: Arithmetic overflow: Overflow happened on: - -9223372036854775808
+[runtime abs(MIN)] EXEC ERROR: Arrow error: Compute error: Int64Array overflow on abs(-9223372036854775808)
+[runtime v * v] OK:
++-------------------------+
+| i64_over.v * i64_over.v |
++-------------------------+
+| 1                       |
+| 1                       |
++-------------------------+
+--- CAST ---
+[CAST fold i64->i32] EXEC ERROR: Optimizer rule 'simplify_expressions' failed caused by Arrow error: Cast error: Can't cast value 9223372036854775807 to type Int32
+[TRY_CAST fold i64->i32] OK:
++----------------------------+
+| Int64(9223372036854775807) |
++----------------------------+
+|                            |
++----------------------------+
+[arrow_cast fold i64->i32] EXEC ERROR: Optimizer rule 'simplify_expressions' failed caused by Arrow error: Cast error: Can't cast value 9223372036854775807 to type Int32
+[CAST runtime i64->i32] EXEC ERROR: Arrow error: Cast error: Can't cast value 9223372036854775807 to type Int32
+[TRY_CAST runtime i64->i32] OK:
++------------+
+| i64_over.v |
++------------+
+|            |
+| 1          |
++------------+
+[CAST text->i64 over] EXEC ERROR: Optimizer rule 'simplify_expressions' failed caused by Arrow error: Cast error: Cannot cast string '9223372036854775808' to value of Int64 type
+[TRY_CAST text->i64 over] OK:
++-----------------------------+
+| Utf8("9223372036854775808") |
++-----------------------------+
+|                             |
++-----------------------------+
+[CAST literal 2^63 -> BIGINT] EXEC ERROR: Optimizer rule 'simplify_expressions' failed caused by Arrow error: Cast error: Can't cast value 9223372036854775808 to type Int64
+[CAST 1e19 double -> BIGINT] EXEC ERROR: Optimizer rule 'simplify_expressions' failed caused by Arrow error: Cast error: Can't cast value 1e19 to type Int64
+[CAST -1 -> BIGINT UNSIGNED] EXEC ERROR: Optimizer rule 'simplify_expressions' failed caused by Arrow error: Cast error: Can't cast value -1 to type UInt64
+[CAST runtime i64 -> i16] EXEC ERROR: Arrow error: Cast error: Can't cast value 9223372036854775807 to type Int16
+[config: any overflow knob?] OK:
+++
+++
