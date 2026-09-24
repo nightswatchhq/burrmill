@@ -4,6 +4,45 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.8 — concurrency on the DataFusion path, on real views — 2026-09-24
+
+Two sweeps on the thinkpad, 8 threads per query, worst client's own p99 and fairness
+(slowest client's count over the fastest's), as in 5.2.
+Transcripts: `docs/bench/serve-engine-thinkpad.txt`, `docs/bench/serve-views-thinkpad.txt`.
+
+**First run, and a starvation found.** `Engine` had no admission gate. At 32 clients sharing one
+runtime, one client was served nothing, and the worst p99 was 2.9 s. This is 5.3's bug on the new
+path. The engine now takes the same FIFO `Gate`, half the thread budget wide, around execution
+only (planning stays outside).
+
+**The synthetic fold** (2M rows, 10k parties, 64 segments; parity 9,896 parties across all arms):
+the engine now matches the owned fold. Fairness is 0.91 at 16 clients and 0.83 at 32, and the
+worst p99 is 664 and 1,147 ms, level with DuckDB's own 577 and 1,128. DuckDB with a connection
+per client gets more throughput (48-50 qps against 29-32) by being unfair (0.30-0.46), the trade
+5.2 recorded.
+
+**nuthatch's real views** (the 12 graph-allocations views both engines answer identically; each
+client cycles through them). DuckDB is at its best here, one connection per client; Burrmill is
+one shared `Engine`:
+
+| clients | DuckDB qps | Burrmill qps | DuckDB worst p99 | Burrmill worst p99 | fairness D / B |
+|---:|---:|---:|---:|---:|---|
+| 1 | 7.2 | **14.7** | 507 ms | **255 ms** | 1.00 / 1.00 |
+| 4 | 14.8 | **34.6** | 1,414 ms | **527 ms** | 0.88 / 0.97 |
+| 16 | 17.0 | **32.7** | 5,236 ms | **1,109 ms** | 0.58 / 0.89 |
+| 32 | 15.1 | **32.9** | 7,424 ms | **1,350 ms** | 0.00 (one starved) / 0.90 |
+
+- **At 32 clients, DuckDB fails** under the default `ulimit -n` of 1,024: `Too many open files`,
+  from 32 connections each opening segments. The 32-client row is with 65,536 for both engines.
+- **Peak RSS, one engine per process, 32 clients: DuckDB 15.4 GB, Burrmill 3.9 GB.** Each process
+  also ran the one-time parity pass on both engines, which the gap swamps.
+
+On the workload nuthatch actually serves, the DataFusion path with the owned rules is about twice
+DuckDB's throughput at every client count, with a quarter to a fifth of its tail latency and a
+quarter of its memory at 32 clients.
+
+---
+
 ## Gate 1 speed — repeated subqueries computed once, and the floor found — 2026-09-24
 
 - **`ShareRepeats`** (`src/df/sharing.rs`). An aliased subquery that occurs more than once and

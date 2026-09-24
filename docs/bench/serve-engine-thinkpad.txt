@@ -1,0 +1,25 @@
+## commit c40f5fc, fixture ROWS=2000000 ADDRS=10000 SEGMENTS=64, 2026-09-24T20:38:34Z, 32 cores
+parity:  verified on 9896 parties, 5s per point, 8 threads per query
+
+clients  engine            qps   p50_ms   worstp99    fair  queries per client: min..max
+1        duck_shared      23.1     41.8       63.2    1.00  116..116
+1        duck_multi       23.4     42.2       45.5    1.00  117..117
+1        burrmill         30.2     31.6       53.6    1.00  151..151
+1        engine           28.6     34.3       40.0    1.00  144..144
+
+4        duck_shared      21.8     42.5       62.5    0.00  0..113  STARVED (slowest warm-up 5178 ms of a 5179 ms window)
+4        duck_multi       35.5     98.9      221.4    0.72  36..50
+4        burrmill         37.4     97.5      340.1    0.88  44..50
+4        engine           34.5    109.4      222.0    0.98  43..44
+
+16       duck_shared      20.7     42.1       44.9    0.00  0..118  STARVED (slowest warm-up 5708 ms of a 5709 ms window)
+16       duck_multi       48.3    309.4      576.9    0.30  9..30
+16       burrmill         36.0    399.0      764.6    0.85  11..13
+16       engine           31.6    458.6      663.8    0.91  10..11
+
+32       duck_shared      18.0     42.2       45.1    0.00  0..117  STARVED (slowest warm-up 6495 ms of a 6497 ms window)
+32       duck_multi       50.1    547.3     1127.6    0.46  6..13
+32       burrmill         30.5    865.1     1263.6    0.83  5..6
+32       engine           29.0    932.2     1146.8    0.83  5..6
+
+peak_rss_mb=605

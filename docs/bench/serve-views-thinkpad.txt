@@ -1,0 +1,108 @@
+## commit c40f5fc, graph-allocations-nest-next (1,925 segments), 2026-09-24T20:40:09Z, 32 cores
+views:   12 answered identically by both, 8s per point
+
+clients  engine            qps   p50_ms   worstp99    fair  queries per client: min..max
+1        duck_multi        7.2     34.1      507.4    1.00  59..59
+1        engine           14.7     32.4      254.5    1.00  119..119
+
+4        duck_multi       14.8     91.0     1413.7    0.88  29..33
+4        engine           34.6     51.4      526.7    0.97  69..71
+
+16       duck_multi       17.0    212.2     5236.2    0.58  7..12
+16       engine           32.7    420.1     1109.4    0.89  17..19
+
+
+thread '<unnamed>' (1214369) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/curation__collected-5d99bffe9c25d5f808856847b35c367b4e9882dd47f781d25d87724d30bbb389.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread '<unnamed>' (1214398) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/rewards__rewards_assigned-530f9b186748c4d7b0cbbc4102424289ae021ec53b149e3f79eae4e4fea99159.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214386) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/subgraph_service__allocation_closed-ed170f0bf3f1e65989818928233eb1553cd0ddf5301ea39d4762d2b695db1180.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214376) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/subgraph_service__indexing_rewards_collected-dded7f7f251be71cdc48f4457c7278c7f9fae00a566124bda7802ea087419427.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214384) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/subgraph_service__allocation_closed-b319b87386c5dc2452502bb1d683d3f508d43b9ee27efb1c119fcd1c9122d444.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214388) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/subgraph_service__query_fees_collected-6bede99ba555f2980d9925424205a44f219da2f8a5f40dd9343883314a2f8574.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214373) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/subgraph_service__query_fees_collected-c671b22868fb901a3a6675f532b1fa71cdd4f2a577d134bc2b6fc3be85aacba1.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214383) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/subgraph_service__allocation_closed-14a1a4f5dadee530fdd1a320e80f5d7fffd11df221eb441d8ca9a0642861495c.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214375) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/rewards__rewards_assigned-1128d9334575ab6b7524b3148cacfb36d909d938acaa392320bafae59900c32b.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214399) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/curation__collected-8a3ad4cb73d0f48b97c7eef212f70cc27613899439921bbccb03a334262fd70c.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214374) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/curation__collected-fb1d0510e9bf0942f17a0d0b58ffd877d384278c603e4247aa73416309e4240d.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214385) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/curation__signalled-939df908deaa173970415cc756ad7e6dbc937b437d873f59705e00b1d8970ce5.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214387) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/staking_legacy__rebate_collected-f9bbde90a5eec9009bb2e8daf62e2dd5ffbbbeb3dd52487e6048259d90ebd0dc.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread '<unnamed>' (1214377) panicked at crates/burrmill-bench/src/serve.rs:124:35:
+a client query must not fail mid-sweep: IO Error: Cannot open file "/home/pepe/1165-corpus/graph-allocations-nest-next/segments/curation__signalled-2c656b73460bfd154d96527bbfa444370633d4dbc7a3c665be79d5ab00d3270e.parquet": Too many open files
+
+Caused by:
+    Error code 1: Unknown error code
+
+thread 'main' (1212622) panicked at crates/burrmill-bench/src/serve.rs:135:47:
+client thread panicked: Any { .. }
+## 32 clients with ulimit -n 65536 (the default 1024 made DuckDB fail: Too many open files)
+32       duck_multi       15.1    670.3     7018.1    0.10  1..10
+32       engine           31.3    901.3     1487.1    0.80  8..10
+peak_rss_mb=15682
+## one engine per process, 32 clients, ulimit -n 65536
+32       duck_multi       15.1    725.6     7423.9    0.00  0..10  STARVED (slowest warm-up 9906 ms of a 10654 ms window) peak_rss_mb=15363 
+32       engine           32.9    846.2     1349.9    0.90  9..10 peak_rss_mb=3890 
