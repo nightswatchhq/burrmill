@@ -4,6 +4,36 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Gate 1 speed — the text-to-HUGEINT cast, and where it stops — 2026-09-24
+
+The two small shapes, profiled. `epoch_boundaries` was not its window. It was four scans of about
+30 ms each: two tables read twice, because DataFusion inlines a CTE referenced twice, and nearly
+all of each scan was `CAST(text AS DECIMAL(38,0))` in Arrow's general string parser.
+**`FastTextCasts`** (`src/df/fastcast.rs`) parses text that is plainly an integer (optional `-`, at
+most `p` significant digits) straight to i128. Everything else, errors included, goes to Arrow's
+own cast for that value, so the answer is Arrow's by construction. It leaves `TRY_CAST` alone,
+because the checked arithmetic rule finds lossy values by it, and it runs after the rules that
+match `CAST`. The views cast text to HUGEINT at 305 sites, so the gain is broad.
+
+Real nest, warm medians of 5, **still 12/12 byte-identical**: **0.55x DuckDB time-weighted**
+(840 ms against 1,536). `lodestar_allocations` 242 against 298, `epoch_boundaries` 34 against 18,
+and `deployment_signal` is now within 1.5x (1.38).
+
+Per statement, **8 of 12 within 1.5x**. Still over:
+
+- `open_allocations`, 1.62x: a null-aware anti-join from `NOT IN`, whose hash table DataFusion
+  builds on one thread;
+- `port_queue`, 1.73x: built on it;
+- `epoch_boundaries`, 1.89x: the CTE read twice;
+- `lodestar_disputes`: 11 ms against 4, which is noise at that size.
+
+`NOT IN` was left as it is. A parallel anti-join keeps DuckDB's answer only with NULL and
+empty-subquery guards, which add two more scans of the subquery. That is not clearly a win against
+a 15 ms gap, and it is a correctness risk bought for speed. Materialising a CTE referenced twice is
+the other candidate. It is DataFusion's to do, or Burrmill's with a shared scan.
+
+---
+
 ## Gate 1 speed — two plan shapes owned, and the time-weighted leg passes — 2026-09-24
 
 Profiled rather than guessed (`burrmill-bench engine-analyze`, `EXPLAIN ANALYZE` through `Engine`).

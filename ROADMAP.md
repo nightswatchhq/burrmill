@@ -152,8 +152,8 @@ directory. Nothing in nuthatch changes until Chief says so.
 **Gate 1, measured 2026-09-24 on the thinkpad's 1,925-segment graph-allocations copy:** parity
 12/12 portable views (7 are DuckDB-only syntax, phase 1b); checks agree with DuckDB; speed
 was 1.54x DuckDB (stock DataFusion 1.81-1.87x), and **two owned plan shapes (`TopPerGroup`,
-`DistinctSplit`) bring it to 0.60x time-weighted, a pass.** Per statement, 8/12 within 1.5x; the four
-over are all under 60 ms and owed. See the progress log.
+`DistinctSplit`) bring it to 0.60x time-weighted, and `FastTextCasts` to **0.55x**, a pass.** Per statement, 8/12 within
+1.5x; the four over are 11-52 ms (a null-aware anti-join, a CTE read twice) and owed. See the progress log.
 
 **Gate 1:**
 
