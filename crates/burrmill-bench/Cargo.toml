@@ -11,7 +11,8 @@ publish = false
 # licence audit, not for the build-time numbers, and not for the C++-free claim. `publish = false`
 # plus a separate member is that rule expressed as a manifest rather than as a note in a README.
 [dependencies]
-burrmill = { path = "../burrmill" }
+# `datafusion` for `df-fold`, the 6.3 memory gate on the hosted path.
+burrmill = { path = "../burrmill", features = ["datafusion"] }
 arrow.workspace = true
 parquet.workspace = true
 datafusion = "55"

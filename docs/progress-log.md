@@ -4,6 +4,50 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.3 — CheckedArithmetic lands; the memory gate fails, and not because of it — 2026-09-24
+
+The 03 prototype, hardened, in `src/df/{wide,checked,rule}.rs`, as an analyzer rule between two
+`TypeCoercion` passes. Every case in 03's table answers exactly or refuses, on the MacBook, in
+`tests/df_checked.rs` (14 tests).
+
+- **Per-type accumulator.** `Wide<N>` limbs: 2 for integers, 3 for Decimal128, 5 for Decimal256
+  and text. Refusal stays order-independent: `MAX, +1, -1` answers.
+- **Integer sums widen to `Decimal128(38,0)`**, as DuckDB's widen to HUGEINT. DataFusion's own
+  `SUM(Int64)` and `SUM(UInt64)` wrap.
+- **Whitelist.** Any function, aggregate or window producing an integer or decimal that is not on
+  a named list is refused. So are shifts, and `+ - *` with one exact operand.
+- **Literals** wider than u64 are refused at the surface, before they become Float64.
+- **`TRY_CAST` is tracked as lossy.** Columns derived from one are tainted through projections,
+  aliases, filters, joins and unions. `SUM`/`AVG` of one is rewritten to sum the source exactly:
+  the rule threads the source up to the aggregate as a 320-bit value, negation included, so the
+  signed fold over `TRY_CAST` (nuthatch's shape, and `_dec`) is exact. Any other aggregate over a
+  tainted value is refused. DuckDB drops those rows.
+- `checked_sum_text` is registered for exact uint256 totals as text.
+
+One defect found by its own test: threading dropped the sign of a negated `TRY_CAST` branch, and
+the signed fold answered +22 for -22.
+
+**Memory, at 989,690 groups, 8 threads, 64 segments, MacBook** (`burrmill-bench df-fold`, one
+mode per process, parity digest identical across all three):
+
+| | median | peak RSS |
+|---|---:|---:|
+| stock DataFusion (wraps) | 100 ms | 589-593 MB |
+| checked, `CAST` | 107 ms | 606-647 MB |
+| checked, `TRY_CAST` (exact text sum) | 101-103 ms | 731-745 MB |
+
+The checked cost is +17-57 MB on Decimal128, half of 03's +130 MB, and +145 MB on text, where the
+state is 320-bit because a uint256 credit and its debit must be able to cancel. **The gate fails
+by 2.3x before any of it**: stock DataFusion's two-phase aggregate is 590 MB here. A 192 MB
+`FairSpillPool` with skip-partial reaches 339 / 360 MB at 2.2-2.8x the latency; smaller pools die
+in the final sort. The owned fold reads 292 MB on this machine against 210 on the thinkpad, so the
+absolute figures want repeating there.
+
+Owed: the gate on the thinkpad; the authored views through the rule (the `df-views` harness
+uses the umbrella crate, not `Engine`); the census function allowlist of 6.2.
+
+---
+
 ## 6.1 / 6.2 — NestCatalog and lockdown, behind a feature flag — 2026-09-17
 
 Phase 1 started on the C route. `burrmill` grows an optional `datafusion` feature:

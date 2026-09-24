@@ -30,13 +30,17 @@ use datafusion_expr::{
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_optimizer::analyzer::Analyzer;
+use datafusion_optimizer::analyzer::resolve_grouping_function::ResolveGroupingFunction;
+use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::optimizer::{Optimizer, OptimizerConfig};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use datafusion_session::{PhysicalOptimizerRule, PhysicalPlanner, QueryPlanner};
 
+use super::checked::{CheckedAgg, Mode};
 use super::physical_planner::DefaultPhysicalPlanner;
+use super::rule::CheckedArithmetic;
 
 pub struct MiniSession {
     session_id: String,
@@ -85,6 +89,8 @@ impl MiniSession {
         for f in datafusion_functions_aggregate::all_default_aggregate_functions() {
             aggregate.insert(f.name().to_string(), f);
         }
+        let exact_text = CheckedAgg::udaf(Mode::SumText, None);
+        aggregate.insert(exact_text.name().to_string(), exact_text);
         let mut window = HashMap::new();
         for f in datafusion_functions_window::all_default_window_functions() {
             window.insert(f.name().to_string(), f);
@@ -112,7 +118,13 @@ impl MiniSession {
             window,
             expr_planners,
             tables: HashMap::new(),
-            analyzer: Analyzer::new(),
+            // Checked sums change their output type, so coercion runs again after the rule.
+            analyzer: Analyzer::with_rules(vec![
+                Arc::new(ResolveGroupingFunction::new()),
+                Arc::new(TypeCoercion::new()),
+                Arc::new(CheckedArithmetic::default()),
+                Arc::new(TypeCoercion::new()),
+            ]),
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new().rules,
             execution_props: ExecutionProps::new(),

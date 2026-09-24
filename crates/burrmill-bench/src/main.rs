@@ -30,6 +30,7 @@ mod views;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use fixture::FixtureSpec;
 
 fn env_usize(key: &str, default: usize) -> usize {
@@ -78,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
         Some("inspect") => inspect(),
         Some("explain") => explain(),
         Some("fold") => fold_only(),
+        Some("df-fold") => df_fold().await,
         Some("nest") => nest(),
         Some("gen") => generated(),
         Some("cast") => cast_table(),
@@ -245,6 +247,83 @@ async fn bench() -> anyhow::Result<()> {
     println!("df_all={f_all:?}");
     println!("burrmill_all={b_all:?}");
     Ok(())
+}
+
+/// The 6.3 memory gate: the signed fold on the DataFusion path, one mode per process so peak RSS
+/// belongs to that mode. `MODE=cast` sums `CAST(text AS DECIMAL(38,0))` through the checked sum,
+/// `try` the `TRY_CAST` form that becomes an exact text sum, and `stock` is DataFusion unhosted,
+/// whose sum wraps: the baseline the checked state is paid against.
+async fn df_fold() -> anyhow::Result<()> {
+    let dir = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: df-fold <dir>"))?;
+    let mode = std::env::var("MODE").unwrap_or_else(|_| "cast".into());
+    let repeats = env_usize("REPEATS", 3).max(1);
+    let cast = if mode == "try" { "TRY_CAST" } else { "CAST" };
+    let sql = format!(
+        "SELECT addr, SUM(d) AS net FROM (\
+           SELECT \"to\" AS addr, {cast}(\"value\" AS DECIMAL(38,0)) AS d FROM t \
+           UNION ALL \
+           SELECT \"from\" AS addr, -{cast}(\"value\" AS DECIMAL(38,0)) AS d FROM t\
+         ) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr"
+    );
+    let mut all = Vec::new();
+    let mut rows = 0usize;
+    let mut digest = None;
+    if mode == "stock" {
+        let threads = burrmill::Limits::default().max_threads;
+        let ctx = SessionContext::new_with_config(SessionConfig::new().with_target_partitions(threads));
+        ctx.register_parquet("t", &dir, ParquetReadOptions::default()).await?;
+        for _ in 0..repeats {
+            let t = Instant::now();
+            let b = ctx.sql(&sql).await?.collect().await?;
+            all.push(t.elapsed().as_millis());
+            rows = b.iter().map(|b| b.num_rows()).sum();
+            digest = parity_digest(&b)?;
+        }
+    } else {
+        // The engine owns a runtime, and this function is already inside one.
+        (all, rows, digest) = std::thread::scope(|s| {
+            s.spawn(|| -> anyhow::Result<_> {
+                let engine = burrmill::Engine::open_segments(Path::new(&dir))?;
+                let (mut all, mut rows, mut digest) = (Vec::new(), 0, None);
+                for _ in 0..repeats {
+                    let t = Instant::now();
+                    let b = engine.sql(&sql)?;
+                    all.push(t.elapsed().as_millis());
+                    rows = b.iter().map(|b| b.num_rows()).sum();
+                    digest = parity_digest(&b)?;
+                }
+                Ok((all, rows, digest))
+            })
+            .join()
+            .expect("df-fold thread")
+        })?;
+    }
+    all.sort_unstable();
+    println!(
+        "DFFOLD\tmode={mode}\tgroups={rows}\tmedian_ms={}\tall={all:?}\tpeak_rss_mb={}\tdigest={}",
+        all[all.len() / 2],
+        rss_mb(),
+        digest.map_or("-".into(), |d: u64| format!("{d:016x}"))
+    );
+    Ok(())
+}
+
+/// With `PARITY=1`, an order-sensitive hash of every cell as text; off by default because the
+/// copy it makes would sit inside the RSS figure it is printed next to.
+fn parity_digest(batches: &[datafusion::arrow::record_batch::RecordBatch]) -> anyhow::Result<Option<u64>> {
+    use std::hash::{Hash, Hasher};
+    if !env_flag("PARITY") {
+        return Ok(None);
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for b in batches {
+        for c in b.columns() {
+            let s = datafusion::arrow::compute::cast(c, &datafusion::arrow::datatypes::DataType::Utf8)?;
+            let s = s.as_any().downcast_ref::<datafusion::arrow::array::StringArray>().unwrap();
+            s.iter().for_each(|v| v.hash(&mut h));
+        }
+    }
+    Ok(Some(h.finish()))
 }
 
 /// Burrmill alone against an existing fixture, so peak RSS is the *operator's* and not a process

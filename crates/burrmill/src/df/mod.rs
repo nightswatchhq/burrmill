@@ -17,7 +17,10 @@ use crate::error::{BurrmillError, Result};
 use crate::limits::Limits;
 
 mod catalog;
+mod checked;
+mod rule;
 mod session;
+mod wide;
 
 #[path = "generated/schema_equivalence.rs"]
 mod schema_equivalence;
@@ -114,6 +117,7 @@ fn plan_query(session: &MiniSession, sql: &str) -> Result<datafusion_expr::Logic
         return Err(BurrmillError::Parse("empty statement".into()));
     };
     refuse_df_statement(&stmt)?;
+    refuse_wide_literals(&stmt)?;
     let planner = SqlToRel::new(session);
     planner.statement_to_plan(stmt).map_err(df_err)
 }
@@ -153,6 +157,31 @@ fn refuse_df_statement(stmt: &DfStatement) -> Result<()> {
         DfStatement::Reset(_) => {
             Err(BurrmillError::NotAllowed("RESET is not in the grammar we expose".into()))
         }
+    }
+}
+
+/// An integer literal past u64 parses as Float64 before any plan rule can see it, and a float
+/// cannot hold it exactly.
+fn refuse_wide_literals(stmt: &DfStatement) -> Result<()> {
+    use sqlparser::ast::{Expr as SqlExpr, Value, visit_expressions};
+    use std::ops::ControlFlow;
+    let DfStatement::Statement(s) = stmt else { return Ok(()) };
+    let found = visit_expressions(s.as_ref(), |e| {
+        if let SqlExpr::Value(v) = e
+            && let Value::Number(n, _) = &v.value
+            && n.bytes().all(|b| b.is_ascii_digit())
+            && n.parse::<u64>().is_err()
+        {
+            return ControlFlow::Break(n.clone());
+        }
+        ControlFlow::Continue(())
+    });
+    match found {
+        ControlFlow::Break(n) => Err(BurrmillError::NotAllowed(format!(
+            "integer literal {n} is wider than 64 bits and would be read as a float; \
+             write CAST('{n}' AS DECIMAL(38,0))"
+        ))),
+        ControlFlow::Continue(()) => Ok(()),
     }
 }
 

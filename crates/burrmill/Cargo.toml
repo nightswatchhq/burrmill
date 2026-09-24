@@ -98,3 +98,8 @@ sqllogictest = "0.28"
 name = "df_engine"
 path = "tests/df_engine.rs"
 required-features = ["datafusion"]
+
+[[test]]
+name = "df_checked"
+path = "tests/df_checked.rs"
+required-features = ["datafusion"]
