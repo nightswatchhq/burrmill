@@ -53,3 +53,15 @@ bare fold: 227 222 216 227
 now: median_ms=157
 5.5: median_ms=158
 now: median_ms=161
+== MALLOC_TRIM_THRESHOLD_=131072, one fold per process
+streamed cast: 217 216 218 215 
+streamed try: 218 216 218 215 
+bare fold: 188 184 184 183 
+== latency, streamed cast, trim on (REPEATS=5)
+median_ms=261
+median_ms=259
+== trim threshold sweep, streamed cast: RSS x3 one-fold, then latency median of 5
+T=1048576 rss: 217 217 219  ms: 264
+T=8388608 rss: 223 221 223  ms: 254
+T=33554432 rss: 222 219 222  ms: 254
+no trim ms: 205

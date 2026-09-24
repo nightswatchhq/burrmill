@@ -36,8 +36,13 @@ Checked on the way:
 - **glibc's arenas are real but not a remedy.** `MALLOC_ARENA_MAX=2` takes the hosted fold to
   289-305 MB and the bare one to 240-248 even with five folds retained, at 40-80% more latency.
 
-What would close the last 20-40 MB is not yet measured. Candidates: the DataFusion session and
-runtime's own resident set; the chunk conversion; the `CacheManager`'s metadata cache.
+**Most of the last 20-40 MB is memory glibc has freed and not returned.** Any explicit
+`MALLOC_TRIM_THRESHOLD_` (128 KiB to 32 MiB, all alike) takes the hosted fold to **215-223 MB**, a
+pass with over 30 MB spare, and the bare fold to 183-188. It costs latency: 254-264 ms against 205,
+because setting the threshold at all switches off glibc's dynamic mmap threshold, so large buffers
+are mapped and faulted in again on every fold. That is a setting for the host process, and the
+library does not reach into the host's allocator (see 1.2a), so whether nuthatch sets it is a
+nuthatch decision. Without it, the gate is straddled.
 
 ---
 
