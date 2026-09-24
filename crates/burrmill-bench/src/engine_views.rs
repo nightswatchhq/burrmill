@@ -157,6 +157,24 @@ pub fn run(root: &str) -> anyhow::Result<()> {
                         })
                         .join()
                         .expect("engine thread");
+                        if std::env::var("PROFILE").is_ok() {
+                            let e4 = std::sync::Arc::clone(&engine);
+                            let q = format!("EXPLAIN {sql}");
+                            let plan_ms = std::thread::spawn(move || {
+                                let mut v: Vec<u128> = (0..n)
+                                    .map(|_| {
+                                        let t = Instant::now();
+                                        let _ = e4.sql(&q);
+                                        t.elapsed().as_millis()
+                                    })
+                                    .collect();
+                                v.sort_unstable();
+                                v[v.len() / 2]
+                            })
+                            .join()
+                            .expect("engine thread");
+                            println!("      {} planning (EXPLAIN) median {plan_ms} ms", v.name);
+                        }
                         (median(d), median(b))
                     }
                     _ => (duck_ms, bm_ms),
