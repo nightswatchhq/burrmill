@@ -277,9 +277,12 @@ async fn df_fold() -> anyhow::Result<()> {
         let conn = duckdb::Connection::open_in_memory()?;
         conn.execute_batch(&format!("SET threads TO {};", burrmill::Limits::default().max_threads))?;
         conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{dir}/*.parquet');"))?;
+        // In DuckDB's idiom, as the views write it: its text-to-DECIMAL(38,0) cast is ~15x slower
+        // than to HUGEINT on this fold, which would make the incumbent look worse than it is.
+        let duck_sql = sql.replace("DECIMAL(38,0)", "HUGEINT");
         for _ in 0..repeats {
             let t = Instant::now();
-            let mut stmt = conn.prepare(&sql)?;
+            let mut stmt = conn.prepare(&duck_sql)?;
             let mut h = std::collections::hash_map::DefaultHasher::new();
             rows = 0;
             for b in stmt.query_arrow([])? {
