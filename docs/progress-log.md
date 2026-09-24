@@ -4,6 +4,35 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.6c — against DuckDB itself; the allocator setting is declined — 2026-09-24
+
+The gate is Burrmill's own bar. What justifies the swap is the incumbent, so `df-fold` gained
+`MODE=duck`: DuckDB embedded as nuthatch embeds it, same 8-thread budget, batches dropped as they
+arrive, and the same parity digest as every other mode. Thinkpad, one fold per process for RSS,
+median of 5 for latency:
+
+| | peak RSS | median |
+|---|---:|---:|
+| DuckDB 1.5 (`HUGEINT`) | 572-598 MB | 187-206 ms |
+| **hosted Burrmill, streamed** | **240-262 MB** | **201-206 ms** |
+| both with `MALLOC_TRIM_THRESHOLD_` | 474-480 / 215-223 MB | — / 254-264 ms |
+
+**Same answer, same speed, 2.3x less memory, no tuning.**
+
+**Decision: no allocator setting.** The trim threshold passes 256 MB, but its ~25% latency puts
+Burrmill near 1.3x DuckDB, which fails gate 1's own "≤1.0x time-weighted". It is also no edge of
+Burrmill's, because DuckDB benefits from it as well. The 256 MB gate stands as written, and the
+last 5-20 MB are owed from inside the engine. Tokio's worker count is not where they are: 245-262
+MB at 32, 8 and 2 workers.
+
+Found on the way: **DuckDB's text-to-`DECIMAL(38,0)` cast is ~15x slower than to `HUGEINT`** on
+this fold (1,440 ms against 92 on the MacBook, 11.1 s against 0.19 on the thinkpad). The first
+`duck` run used `DECIMAL(38,0)` and made the incumbent look 55x slower; it now runs in its own
+idiom. It bears on nuthatch as it stands: `_dec` is `TRY_CAST(... AS DECIMAL(38,0))`, so every
+`SUM(x_dec)` in production pays that cast today.
+
+---
+
 ## 6.6b — the thinkpad, and every RSS figure from today measured wrong first — 2026-09-24
 
 **Correction first.** The 6.3, 6.6 and 6.6a memory figures below this entry came from 3-5 folds in
