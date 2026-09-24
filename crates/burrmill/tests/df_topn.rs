@@ -189,3 +189,22 @@ fn distinct_count_beside_other_aggregates() {
         &DataType::Int64
     );
 }
+
+// ShareRepeats: a CTE used twice is computed once.
+#[test]
+fn a_repeated_aggregate_subquery_is_computed_once() {
+    let (_t, e) = engine();
+    let sql = "WITH per AS (SELECT id, MIN(block_number) AS lo, MAX(block_number) AS hi FROM ev GROUP BY id)
+               SELECT a.id, a.lo, b.hi FROM per a JOIN per b ON a.id = b.id";
+    let reference = "WITH per AS (SELECT id, MIN(block_number) AS lo, MAX(block_number) AS hi FROM ev GROUP BY id),
+                          per2 AS (SELECT id, MIN(block_number) AS lo, MAX(block_number) AS hi FROM ev GROUP BY id HAVING count(*) > 0)
+                     SELECT a.id, a.lo, b.hi FROM per a JOIN per2 b ON a.id = b.id";
+    assert_eq!(text(&e, sql), text(&e, reference));
+    let plan = text(&e, &format!("EXPLAIN {sql}")).join("\n");
+    assert_eq!(plan.matches("SharedExec").count(), 2, "{plan}");
+    assert!(
+        !text(&e, &format!("EXPLAIN {reference}"))
+            .join("\n")
+            .contains("SharedExec")
+    );
+}

@@ -140,6 +140,7 @@ impl MiniSession {
                 Arc::new(super::topn::TopPerGroup),
                 Arc::new(super::distinct::DistinctSplit),
                 Arc::new(super::fastcast::FastTextCasts),
+                Arc::new(super::sharing::ShareRepeats),
                 Arc::new(TypeCoercion::new()),
             ]),
             optimizer: Optimizer::new(),
@@ -254,7 +255,10 @@ impl QueryPlanner for MiniQueryPlanner {
         logical_plan: &LogicalPlan,
         session: &dyn Session,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(OwnedFoldPlanner)])
+        DefaultPhysicalPlanner::with_extension_planners(vec![
+            Arc::new(OwnedFoldPlanner),
+            Arc::new(super::sharing::SharedPlanner),
+        ])
             .create_physical_plan(logical_plan, session)
             .await
     }

@@ -27,6 +27,7 @@ mod fold;
 mod names;
 mod rule;
 mod session;
+mod sharing;
 mod topn;
 mod wide;
 
