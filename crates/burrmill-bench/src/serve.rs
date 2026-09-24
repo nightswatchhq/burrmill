@@ -185,6 +185,17 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
         }
     };
     let ours = db.query(SQL, burrmill::Limits::default())?.rows().len();
+    // The DataFusion path: one Engine shared by every client, as a server would hold it.
+    let path = dir.to_string();
+    let engine = std::thread::spawn(move || burrmill::Engine::open_segments(std::path::Path::new(&path)))
+        .join()
+        .expect("engine open")?;
+    let engine = Arc::new(engine);
+    let df_rows = |e: &burrmill::Engine| -> anyhow::Result<usize> {
+        Ok(e.sql(SQL)?.iter().map(|b| b.num_rows()).sum())
+    };
+    let hosted = df_rows(&engine)?;
+    anyhow::ensure!(hosted == ours, "PARITY FAILED: Engine {hosted} rows against the fold's {ours}");
     let theirs = duck_query(&duck_conn(dir)?)?;
     anyhow::ensure!(
         ours == theirs,
@@ -225,9 +236,79 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
             })
             .collect();
         report(n, "burrmill", &drive(secs, runners));
+
+        let runners: Vec<Runner> = (0..n)
+            .map(|_| {
+                let e = Arc::clone(&engine);
+                Box::new(move || df_rows(&e)) as Runner
+            })
+            .collect();
+        report(n, "engine", &drive(secs, runners));
         println!();
     }
     println!("peak_rss_mb={}", crate::rss_mb());
+    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+    Ok(())
+}
+
+/// `serve-views <nest>`: the concurrency sweep over nuthatch's real authored views. Each client
+/// cycles through every view that both engines answer identically, starting at its own offset.
+/// DuckDB is its fair best here, one connection per client; Burrmill is one shared `Engine`.
+pub fn run_views(root: &str) -> anyhow::Result<()> {
+    let secs: f64 = std::env::var("SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(5.0);
+    let counts: Vec<usize> = std::env::var("CLIENTS")
+        .unwrap_or_else(|_| "1,2,4,8,16,32".into())
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let (conn, engine, views) = crate::engine_views::both_engines(root)?;
+    let engine = Arc::new(engine);
+    let views = Arc::new(views);
+    println!("views:   {} answered identically by both, {secs}s per point\n", views.len());
+    println!(
+        "{:<8} {:<12} {:>8} {:>8} {:>10} {:>7}  queries per client: min..max",
+        "clients", "engine", "qps", "p50_ms", "worstp99", "fair"
+    );
+    for &n in &counts {
+        let mut runners: Vec<Runner> = Vec::with_capacity(n);
+        for c in 0..n {
+            let conn = conn.try_clone()?;
+            let views = Arc::clone(&views);
+            let mut i = c;
+            runners.push(Box::new(move || {
+                let sql = format!("SELECT * FROM \"{}\"", views[i % views.len()]);
+                i += 1;
+                let mut stmt = conn.prepare(&sql)?;
+                let mut n = 0;
+                for b in stmt.query_arrow([])? {
+                    n += b.num_rows();
+                }
+                Ok(n)
+            }));
+        }
+        report(n, "duck_multi", &drive(secs, runners));
+        let runners: Vec<Runner> = (0..n)
+            .map(|c| {
+                let e = Arc::clone(&engine);
+                let views = Arc::clone(&views);
+                let mut i = c;
+                Box::new(move || {
+                    let sql = format!("SELECT * FROM \"{}\"", views[i % views.len()]);
+                    i += 1;
+                    let mut n = 0;
+                    e.sql_for_each(&sql, |b| {
+                        n += b.num_rows();
+                        Ok(())
+                    })?;
+                    Ok(n)
+                }) as Runner
+            })
+            .collect();
+        report(n, "engine", &drive(secs, runners));
+        println!();
+    }
+    println!("peak_rss_mb={}", crate::rss_mb());
+    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
     Ok(())
 }
 

@@ -95,6 +95,9 @@ async fn main() -> anyhow::Result<()> {
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-sql <nest> <file>..."))?,
             &std::env::args().skip(3).collect::<Vec<_>>(),
         ),
+        Some("serve-views") => serve::run_views(
+            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: serve-views <nest>"))?,
+        ),
         Some("engine-views") => engine_views::run(
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-views <nest>"))?,
         ),

@@ -351,3 +351,52 @@ pub fn sql_files(root: &str, files: &[String]) -> anyhow::Result<()> {
     std::thread::spawn(move || drop(engine)).join().expect("drop");
     Ok(())
 }
+
+/// DuckDB set up as nuthatch sets it up and an `Engine` over the same nest, both with every
+/// authored view, and the names of the views both answer identically.
+pub fn both_engines(root: &str) -> anyhow::Result<(duckdb::Connection, burrmill::Engine, Vec<String>)> {
+    let nest = load_nest(Path::new(root))?;
+    let conn = duck(&nest)?;
+    let mut ok = Vec::new();
+    for v in &nest.views {
+        if conn.execute_batch(&v.text).is_ok() {
+            ok.push(v.name.clone());
+        }
+    }
+    let root_owned = Path::new(root).to_path_buf();
+    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let (engine, registered) = std::thread::spawn(move || -> anyhow::Result<_> {
+        let mut e = burrmill::Engine::open_nest(&root_owned)?;
+        let mut reg = Vec::new();
+        for (n, b) in &views {
+            if e.register_view(n, b).is_ok() {
+                reg.push(n.clone());
+            }
+        }
+        Ok((e, reg))
+    })
+    .join()
+    .expect("engine")?;
+    let mut same = Vec::new();
+    for name in ok.into_iter().filter(|n| registered.contains(n)) {
+        let sql = format!("SELECT * FROM \"{name}\"");
+        let want = crate::encode_parity::nuthatch_rows(&conn, &sql).map(sorted_rows).ok();
+        let got = std::thread::scope(|s| {
+            s.spawn(|| {
+                engine.sql(&sql).ok().map(|bs| {
+                    let mut r = Vec::new();
+                    for b in &bs {
+                        r.extend(burrmill::df::encode::rows(b).unwrap_or_default());
+                    }
+                    sorted_rows(Value::Array(r))
+                })
+            })
+            .join()
+            .expect("engine")
+        });
+        if want.is_some() && want == got {
+            same.push(name);
+        }
+    }
+    Ok((conn, engine, same))
+}
