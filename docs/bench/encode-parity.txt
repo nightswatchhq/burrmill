@@ -1,0 +1,18 @@
+OK        105 bytes  SELECT 1::TINYINT a, -2::SMALLINT b, 3::INTEGER c, (-92233720368547758
+OK        131 bytes  SELECT 0.1::FLOAT a, 0.1::DOUBLE b, 'nan'::DOUBLE c, 'inf'::DOUBLE d, 
+OK        85 bytes  SELECT true a, false b, NULL::BOOLEAN c, NULL::INTEGER d, NULL::VARCHA
+OK        77 bytes  SELECT 'héllo' a, '' b, 'with "quotes" and \ back' c, chr(10) d, '🦉' e
+OK        158 bytes  SELECT (-170141183460469231731687303715884105728)::HUGEINT a, 17014118
+OK        145 bytes  SELECT 1.5::DECIMAL(10,4) a, (-0.05)::DECIMAL(3,2) b, 0::DECIMAL(5,3) 
+OK        274 bytes  SELECT TIMESTAMP '2024-01-02 03:04:05.678901' a, TIMESTAMP_S '2024-01-
+OK        189 bytes  SELECT DATE '2024-01-02' a, DATE '1960-06-30' b, TIME '03:04:05.123456
+OK        62 bytes  SELECT '\x01\x02'::BLOB a, 'abc'::BLOB b, ''::BLOB c
+OK        43 bytes  SELECT sum(x) s, avg(x) a, count(*) c, min(x) mn, max(x)::HUGEINT mx F
+OK        33 bytes  SELECT sum(x::DECIMAL(38,0)) s, sum(x::DECIMAL(20,3)) d, avg(x::DECIMA
+OK        324983 bytes  SELECT x, x::HUGEINT * 1000000000000000000000 big, x::VARCHAR s, x % 3
+OK        115 bytes  SELECT (-0.05)::DECIMAL(2,2) a, 0::DECIMAL(3,3) b, 0.123::DECIMAL(3,3)
+OK        15 bytes  SELECT 1 a, 2 a, 3 "A"
+OK        53 bytes  SELECT * FROM (VALUES (1, 'x'), (NULL, NULL), (3, 'z')) v(k, s) ORDER 
+REFUSED   SELECT [1, 2] l: not in the admitted subset: result column `l` is List(Int32, field: 'l'), which has no nuthatch JSON encoding
+REFUSED   SELECT {'a': 1} s: not in the admitted subset: result column `s` is Struct("a": Int32), which has no nuthatch JSON encoding
+ENCODE	queries=17	failed=0

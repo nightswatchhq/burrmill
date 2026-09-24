@@ -17,6 +17,8 @@ use crate::error::{BurrmillError, Result};
 use crate::limits::Limits;
 
 mod catalog;
+pub mod encode;
+mod errors;
 mod checked;
 mod fold;
 mod rule;
@@ -115,8 +117,9 @@ impl Engine {
 
     /// Run a query. DDL, DML, COPY, and table functions are refused before they plan.
     pub fn sql(&self, sql: &str) -> Result<Vec<RecordBatch>> {
-        refuse_non_query(sql)?;
+        // Parsed first, so malformed SQL is a syntax error as DuckDB reports it, not a refusal.
         let logical = plan_query(&self.session, sql)?;
+        refuse_non_query(sql)?;
         self.rt.block_on(async {
             let physical = self.session.create_physical_plan(&logical).await.map_err(df_err)?;
             collect(physical, self.session.task_ctx()).await.map_err(df_err)
@@ -135,8 +138,9 @@ impl Engine {
         mut f: impl FnMut(RecordBatch) -> Result<()>,
     ) -> Result<()> {
         use futures::StreamExt;
-        refuse_non_query(sql)?;
+        // Parsed first, so malformed SQL is a syntax error as DuckDB reports it, not a refusal.
         let logical = plan_query(&self.session, sql)?;
+        refuse_non_query(sql)?;
         self.rt.block_on(async {
             let physical = self.session.create_physical_plan(&logical).await.map_err(df_err)?;
             let mut stream = datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
@@ -237,7 +241,7 @@ fn stmt_kind(s: &SqlStatement) -> &'static str {
 }
 
 fn df_err(e: datafusion_common::DataFusionError) -> BurrmillError {
-    let s = e.to_string();
+    let s = errors::restate(e.to_string());
     if s.contains("not yet implemented") || s.contains("Table Functions are not supported") {
         BurrmillError::NotAllowed(s)
     } else if s.contains("no table") {

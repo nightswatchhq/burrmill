@@ -20,6 +20,8 @@
 //!   RESULT line. A guard nobody has watched refuse is not a guard.
 
 mod df_views;
+mod encode_parity;
+mod error_parity;
 mod fixture;
 mod generate;
 mod oracles;
@@ -80,6 +82,8 @@ async fn main() -> anyhow::Result<()> {
         Some("explain") => explain(),
         Some("fold") => fold_only(),
         Some("df-fold") => df_fold().await,
+        Some("encode-parity") => encode_parity::run(),
+        Some("error-parity") => error_parity::run(),
         Some("nest") => nest(),
         Some("gen") => generated(),
         Some("cast") => cast_table(),

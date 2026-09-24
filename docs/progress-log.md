@@ -4,6 +4,49 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.4 — nuthatch's JSON and nuthatch's error classes, checked against nuthatch's own code — 2026-09-24
+
+**Encoder** (`src/df/encode.rs`). nuthatch encodes a cell as duckdb-rs's `ValueRef`, which
+duckdb-rs derives from the Arrow type alone, and then `value_to_json`. So the encoding is a
+function of the Arrow type, and this ports it: numbers for every integer width, float numbers,
+digit strings for scale-0 decimals, and `Debug` text for timestamps, dates, times, intervals and
+blobs. Scaled decimals are DuckDB's own VARCHAR cast, since nuthatch now casts them before encoding
+(#1433). That cast has a quirk: with precision equal to scale, DuckDB writes no integer digit
+(`.5`, `-.05`). The first differential run found it, and nobody would have guessed it.
+`Utf8View` encodes as text. Nested types are refused, because their `Debug` prints the whole Arrow
+column rather than the value.
+
+`burrmill-bench encode-parity` runs a 17-query typed corpus. nuthatch's side is its own code:
+`value_to_json` copied verbatim at 5513498, plus the #1433 rewrite. Burrmill's side takes DuckDB's
+own Arrow batches through IPC and encodes them. Both sides use duckdb-rs `=1.10504.0`, the version
+nuthatch pins (the bench moved from 1.10501). **17/17 byte-identical**, including 325 KB of
+`HUGEINT` arithmetic, signed zero, NaN, a 38-digit scaled decimal and an owl. Transcript:
+`docs/bench/encode-parity.txt`.
+
+**Errors** (`src/df/errors.rs`). DataFusion's text is restated in DuckDB's words, and the original
+is kept below. That covers unknown table, unknown column (bare and qualified), syntax errors (the
+engine now parses before its textual guard, so `SELEC 1` is a syntax error, not a refusal),
+functions over `VARCHAR`, `bool_and(VARCHAR)`, `VARCHAR`/`BOOLEAN` mixes in `CASE` and `COALESCE`,
+and out-of-memory. The kept text must not trip a class of its own ahead of the restated one, and
+one did: DataFusion's own "No function matches" stole `COALESCE`'s class.
+`burrmill-bench error-parity` runs each bad query on both engines through nuthatch's extractors,
+and **11/14 land in the same class with the same extracted name**. The other three are not
+wording, and each names its owner:
+
+- quoted identifiers are case-insensitive in DuckDB (6.5);
+- DuckDB casts `VARCHAR` to `BOOLEAN` implicitly (6.5);
+- `SELECT from FROM t` is a syntax error to DuckDB, but sqlparser reads `from` as a table name (6.7).
+
+A vanished segment already carries the path and the OS's wording (tested).
+
+**Not done, and why.** The census's `checks/expected/*.json` no longer exist in nuthatch. The
+encoder is proven against nuthatch's code on DuckDB's own batches. Byte identity at the engine
+level also needs DataFusion to produce DuckDB's types (`/` as `DOUBLE`, microsecond timestamps),
+which is 6.5. Corrupt-segment errors are unmapped, since this engine reads footers at open, not at
+query time.
+
+---
+
 ## 6.6c — against DuckDB itself; the allocator setting is declined — 2026-09-24
 
 The gate is Burrmill's own bar. What justifies the swap is the incumbent, so `df-fold` gained

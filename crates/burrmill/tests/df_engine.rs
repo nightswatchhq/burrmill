@@ -190,3 +190,15 @@ fn replacement_scan_is_refused() {
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
+
+// nuthatch's `segment_vanished` keys on the segment path plus the OS's own wording.
+#[test]
+fn a_vanished_segment_names_its_path_and_the_os_error() {
+    let (tmp, engine) = nest_with_transfer();
+    let segs = tmp.path().join("segments");
+    let file = std::fs::read_dir(&segs).unwrap().next().unwrap().unwrap().path();
+    std::fs::remove_file(&file).unwrap();
+    let err = engine.sql("SELECT count(*) FROM token__transfer").unwrap_err().to_string();
+    assert!(err.contains("No such file or directory"), "{err}");
+    assert!(err.contains(segs.to_str().unwrap()), "{err}");
+}
