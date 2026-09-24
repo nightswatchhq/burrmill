@@ -443,6 +443,11 @@ fn signed_fold_over_try_cast() {
 
     // A uint256 credit and its debit: DuckDB drops both rows; the exact fold refuses both parties.
     let (_t, e) = transfers(&[&[("a", "5"), ("a", U256_MAX)]]);
+    // Refused either way: by the checked sum, or, where the owned fold is substituted, on reading.
     let m = refused(&e, &fold("TRY_CAST"));
-    assert!(m.contains("does not fit Decimal128(38, 0)"), "{m}");
+    assert!(
+        m.contains("does not fit Decimal128(38, 0)")
+            || m.contains("refuses it rather than dropping"),
+        "{m}"
+    );
 }

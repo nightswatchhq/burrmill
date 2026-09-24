@@ -287,6 +287,25 @@ async fn df_fold() -> anyhow::Result<()> {
                 let (mut all, mut rows, mut digest) = (Vec::new(), 0, None);
                 for _ in 0..repeats {
                     let t = Instant::now();
+                    if env_flag("STREAM") {
+                        // Nothing held: the peak is the operator's, as `fold` measures it.
+                        use std::hash::Hasher;
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        let parity = env_flag("PARITY");
+                        rows = 0;
+                        engine.sql_for_each(&sql, |b| {
+                            rows += b.num_rows();
+                            if parity {
+                                digest_batch(&mut h, &b).map_err(|e| {
+                                    burrmill::BurrmillError::Substrate(e.to_string())
+                                })?;
+                            }
+                            Ok(())
+                        })?;
+                        all.push(t.elapsed().as_millis());
+                        digest = parity.then(|| h.finish());
+                        continue;
+                    }
                     let b = engine.sql(&sql)?;
                     all.push(t.elapsed().as_millis());
                     rows = b.iter().map(|b| b.num_rows()).sum();
@@ -311,19 +330,34 @@ async fn df_fold() -> anyhow::Result<()> {
 /// With `PARITY=1`, an order-sensitive hash of every cell as text; off by default because the
 /// copy it makes would sit inside the RSS figure it is printed next to.
 fn parity_digest(batches: &[datafusion::arrow::record_batch::RecordBatch]) -> anyhow::Result<Option<u64>> {
-    use std::hash::{Hash, Hasher};
+    use std::hash::Hasher;
     if !env_flag("PARITY") {
         return Ok(None);
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for b in batches {
-        for c in b.columns() {
-            let s = datafusion::arrow::compute::cast(c, &datafusion::arrow::datatypes::DataType::Utf8)?;
-            let s = s.as_any().downcast_ref::<datafusion::arrow::array::StringArray>().unwrap();
-            s.iter().for_each(|v| v.hash(&mut h));
-        }
+        digest_batch(&mut h, b)?;
     }
     Ok(Some(h.finish()))
+}
+
+/// Row by row, so a digest built one streamed batch at a time equals one over the collected answer.
+fn digest_batch(
+    h: &mut std::collections::hash_map::DefaultHasher,
+    b: &datafusion::arrow::record_batch::RecordBatch,
+) -> anyhow::Result<()> {
+    use datafusion::arrow::array::{Array, StringArray};
+    use std::hash::Hash;
+    let cols: Vec<_> = b
+        .columns()
+        .iter()
+        .map(|c| datafusion::arrow::compute::cast(c, &datafusion::arrow::datatypes::DataType::Utf8))
+        .collect::<Result<_, _>>()?;
+    let cols: Vec<&StringArray> = cols.iter().map(|c| c.as_any().downcast_ref().unwrap()).collect();
+    for i in 0..b.num_rows() {
+        cols.iter().for_each(|c| c.is_valid(i).then(|| c.value(i)).hash(h));
+    }
+    Ok(())
 }
 
 /// Burrmill alone against an existing fixture, so peak RSS is the *operator's* and not a process

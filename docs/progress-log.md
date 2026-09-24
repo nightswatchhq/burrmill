@@ -4,6 +4,33 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.6a — streaming, and composite keys; the hosted fold within 20 MB of the bare one — 2026-09-24
+
+- **`Engine::sql_for_each`** hands each batch to the caller and keeps none of them. The substituted
+  fold now emits in 8,192-row chunks rather than one batch. Every sum is checked against 38 digits
+  before the first chunk, so nothing downstream sees part of an answer and then a refusal. Its
+  declared order holds across chunks (tested).
+- **Keys built with `||` or `concat`** are recognised: literal tags, text casts (integers included)
+  and `lower`/`upper`, as the curation views write them. A bare literal key such as `'sink'` counts
+  too, which moved one 6.3 test onto the owned fold. It still refuses, now while reading the value,
+  and the message no longer claims `TRY_CAST` was `CAST`.
+- `df-fold` gains `STREAM=1`. The parity digest is now row-order, so a streamed digest and a
+  collected one can be compared.
+
+Same fixture, `STREAM=1`, MacBook, and the same digest from stock, 6.3 and 6.6 in both modes:
+
+| | median | peak RSS |
+|---|---:|---:|
+| 6.6 collected | 124 ms | 381-404 MB |
+| **6.6 streamed, `CAST` / `TRY_CAST`** | **118 / 119 ms** | **309-314 / 308-311 MB** |
+| owned fold alone (`fold`) | 97 ms | 292 MB |
+
+Hosting now costs about 20 MB and 21 ms over the bare operator. The gate is 256 MB, and the bare
+fold measured 210 on the thinkpad, so the hosted path probably passes there. That is an inference
+until it is measured on the thinkpad.
+
+---
+
 ## 6.6 — the owned fold inside DataFusion plans; memory down a third, still over the gate — 2026-09-24
 
 Moved ahead of 6.4/6.5 because 6.3 showed the gate failing on DataFusion's aggregate, and the

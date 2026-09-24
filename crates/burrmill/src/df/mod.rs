@@ -124,6 +124,31 @@ impl Engine {
     }
 }
 
+impl Engine {
+    /// Run a query and hand each batch to `f` as it is produced, holding none of them.
+    ///
+    /// `sql` collects; a million-row answer is then a million rows live at once, which is the
+    /// caller's memory and not the engine's. An encoder writing to a socket wants this instead.
+    pub fn sql_for_each(
+        &self,
+        sql: &str,
+        mut f: impl FnMut(RecordBatch) -> Result<()>,
+    ) -> Result<()> {
+        use futures::StreamExt;
+        refuse_non_query(sql)?;
+        let logical = plan_query(&self.session, sql)?;
+        self.rt.block_on(async {
+            let physical = self.session.create_physical_plan(&logical).await.map_err(df_err)?;
+            let mut stream = datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
+                .map_err(df_err)?;
+            while let Some(b) = stream.next().await {
+                f(b.map_err(df_err)?)?;
+            }
+            Ok(())
+        })
+    }
+}
+
 fn plan_query(session: &MiniSession, sql: &str) -> Result<datafusion_expr::LogicalPlan> {
     let stmts = DFParser::parse_sql(sql).map_err(df_err)?;
     let Some(stmt) = stmts.into_iter().next() else {

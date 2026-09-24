@@ -250,3 +250,84 @@ fn refusals_carry_over() {
     );
 }
 
+#[test]
+fn a_large_answer_streams_in_chunks_and_matches_the_collected_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let segs = tmp.path().join("segments");
+    std::fs::create_dir(&segs).unwrap();
+    let addrs: Vec<String> = (0..20_000).map(|i| format!("0x{i:08x}")).collect();
+    let from: Vec<Option<&str>> = addrs.iter().map(|a| Some(a.as_str())).collect();
+    let to: Vec<Option<&str>> = addrs.iter().rev().map(|a| Some(a.as_str())).collect();
+    let values: Vec<String> = (0..addrs.len()).map(|i| (i + 1).to_string()).collect();
+    let value: Vec<Option<&str>> = values.iter().map(|v| Some(v.as_str())).collect();
+    write(
+        &segs,
+        "transfer",
+        0,
+        &[("from", from), ("to", to), ("value", value)],
+    );
+    let e = Engine::open_segments(&segs).unwrap();
+    let sql = fold("");
+    assert!(explain(&e, &sql).contains("OwnedSignedFold"));
+
+    let mut streamed = Vec::new();
+    let mut batches = 0;
+    e.sql_for_each(&sql, |b| {
+        batches += 1;
+        let a = arrow::compute::cast(b.column(0), &DataType::Utf8).unwrap();
+        let s = a.as_any().downcast_ref::<StringArray>().unwrap();
+        streamed.extend(s.iter().map(|v| v.unwrap().to_string()));
+        Ok(())
+    })
+    .unwrap();
+    let collected: Vec<String> = rows(&e, &sql).into_iter().map(|r| r[0].clone()).collect();
+    assert!(batches > 1, "one batch of {} rows", streamed.len());
+    assert_eq!(streamed, collected);
+    assert!(
+        streamed.windows(2).all(|w| w[0] < w[1]),
+        "declared order must hold across chunks"
+    );
+}
+
+// Real curation views tag an id with its namespace so two tables' "7"s stay two parties.
+#[test]
+fn a_composite_key_with_a_literal_tag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let segs = tmp.path().join("segments");
+    std::fs::create_dir(&segs).unwrap();
+    for (t, v) in [("version_signal", "100"), ("name_signal", "5")] {
+        write(
+            &segs,
+            t,
+            0,
+            &[
+                ("curator", vec![Some("0xaa"), Some("0xbb")]),
+                ("id", vec![Some("7"), Some("7")]),
+                ("signal", vec![Some(v), Some("1")]),
+            ],
+        );
+    }
+    let e = Engine::open_segments(&segs).unwrap();
+    let sql = |w: &str| {
+        format!(
+            r#"SELECT curator, position, SUM(sig) AS net FROM (
+                 SELECT curator, 'v:' || CAST(id AS VARCHAR) AS position,
+                        CAST(signal AS DECIMAL(38,0)) AS sig FROM version_signal {w}
+                 UNION ALL
+                 SELECT curator, 'n:' || CAST(id AS VARCHAR) AS position,
+                        -CAST(signal AS DECIMAL(38,0)) AS sig FROM name_signal
+               ) GROUP BY curator, position HAVING SUM(sig) <> 0 ORDER BY curator, position"#
+        )
+    };
+    let got = substituted(&e, &sql(""), &sql("WHERE 1 = 1"));
+    let want: Vec<Vec<String>> = [
+        ("0xaa", "n:7", "-5"),
+        ("0xaa", "v:7", "100"),
+        ("0xbb", "n:7", "-1"),
+        ("0xbb", "v:7", "1"),
+    ]
+    .iter()
+    .map(|(a, b, c)| vec![a.to_string(), b.to_string(), c.to_string()])
+    .collect();
+    assert_eq!(got, want);
+}

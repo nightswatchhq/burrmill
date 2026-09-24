@@ -42,8 +42,10 @@ use datafusion_physical_plan::{
     SendableRecordBatchStream,
 };
 use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
+use futures::TryStreamExt;
 
 use crate::exec::SignedFoldExec;
+use crate::exec::agg::Rows;
 use crate::limits::Limits;
 use crate::plan::{FoldBranch, FoldValue, KeyCol, KeyFn, KeyPart, Plan, SignedFold};
 use crate::segment::SealedSegments;
@@ -202,6 +204,55 @@ fn branch_column(input: &LogicalPlan, e: &Expr) -> Option<Base> {
     base_column(input, input.schema().index_of_column(c).ok()?)
 }
 
+/// A group key as the fold builds it: literals and columns concatenated, the columns optionally
+/// case-folded. `||` and `concat` differ on NULL, which the fold refuses in either.
+fn key_parts(
+    e: &Expr,
+    input: &LogicalPlan,
+    out: &mut Vec<KeyPart>,
+    same_table: &mut impl FnMut(String) -> bool,
+) -> Option<()> {
+    match strip_text_casts(e) {
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::StringConcat,
+            right,
+        }) => {
+            key_parts(left, input, out, same_table)?;
+            key_parts(right, input, out, same_table)
+        }
+        Expr::ScalarFunction(f) if f.func.name() == "concat" => f
+            .args
+            .iter()
+            .try_for_each(|a| key_parts(a, input, out, same_table)),
+        Expr::Literal(
+            ScalarValue::Utf8(Some(l))
+            | ScalarValue::Utf8View(Some(l))
+            | ScalarValue::LargeUtf8(Some(l)),
+            _,
+        ) => {
+            out.push(KeyPart::Literal(l.clone()));
+            Some(())
+        }
+        e => {
+            let (e, key_fn) = match strip_text_casts(e) {
+                Expr::ScalarFunction(f) if f.args.len() == 1 => match f.func.name() {
+                    "lower" => (strip_text_casts(&f.args[0]), Some(KeyFn::Lower)),
+                    "upper" => (strip_text_casts(&f.args[0]), Some(KeyFn::Upper)),
+                    _ => return None,
+                },
+                e => (e, None),
+            };
+            let (t, name, _, ty) = branch_column(input, e)?;
+            if !same_table(t) || !(is_text(&ty) || ty.is_integer()) {
+                return None;
+            }
+            out.push(KeyPart::Column { name, key_fn });
+            Some(())
+        }
+    }
+}
+
 /// A three-arm `UNION ALL` analyses as `Union(Union(a, b), c)`; arms match by position.
 fn flatten_union<'a>(inputs: &'a [Arc<LogicalPlan>], out: &mut Vec<&'a LogicalPlan>) {
     for i in inputs {
@@ -244,9 +295,12 @@ fn strip_text_casts(e: &Expr) -> &Expr {
     match e {
         Expr::Alias(a) => strip_text_casts(&a.expr),
         Expr::Cast(Cast { expr, field }) if is_text(field.data_type()) => match expr.as_ref() {
-            Expr::Column(_) | Expr::ScalarFunction(_) | Expr::Cast(_) | Expr::Alias(_) => {
-                strip_text_casts(expr)
-            }
+            Expr::Column(_)
+            | Expr::ScalarFunction(_)
+            | Expr::Cast(_)
+            | Expr::Alias(_)
+            | Expr::Literal(..)
+            | Expr::BinaryExpr(_) => strip_text_casts(expr),
             _ => e,
         },
         e => e,
@@ -325,21 +379,9 @@ impl FoldSubstitution {
             let mut key = Vec::with_capacity(keys.len());
             for &k in &keys {
                 let (e, input) = defining(arm, k)?;
-                let (e, key_fn) = match strip_text_casts(e) {
-                    Expr::ScalarFunction(f) if f.args.len() == 1 => match f.func.name() {
-                        "lower" => (strip_text_casts(&f.args[0]), Some(KeyFn::Lower)),
-                        "upper" => (strip_text_casts(&f.args[0]), Some(KeyFn::Upper)),
-                        _ => return None,
-                    },
-                    e => (e, None),
-                };
-                let (t, name, _, ty) = branch_column(input, e)?;
-                if !same_table(t) || !is_text(&ty) {
-                    return None;
-                }
-                key.push(KeyCol {
-                    parts: vec![KeyPart::Column { name, key_fn }],
-                });
+                let mut parts = Vec::new();
+                key_parts(e, input, &mut parts, &mut same_table)?;
+                key.push(KeyCol { parts });
             }
 
             let (e, input) = defining(arm, sum)?;
@@ -544,17 +586,45 @@ impl ExecutionPlan for OwnedFoldExec {
             self.tables.clone(),
         );
         let out = Arc::clone(&schema);
+        // One chunk at a time, so what is live is the fold's own rows plus a chunk, not the rows
+        // plus a copy of the whole answer.
         let stream = futures::stream::once(async move {
-            tokio::task::spawn_blocking(move || run(&fold, &out, &tables))
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-        });
+            let rows = tokio::task::spawn_blocking(move || {
+                let rows = fold_rows(&fold, &tables)?;
+                Ok::<_, DataFusionError>((Arc::new(rows), fold))
+            })
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))??;
+            Ok::<_, DataFusionError>(rows)
+        })
+        .map_ok(move |(rows, fold)| {
+            let n = rows.len();
+            let out = Arc::clone(&out);
+            futures::stream::iter(
+                (0..n)
+                    .step_by(CHUNK)
+                    .map(move |start| to_batch(&rows, start..(start + CHUNK).min(n), &fold, &out)),
+            )
+        })
+        .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 }
 
-fn run(fold: &SignedFold, schema: &SchemaRef, tables: &FoldTables) -> Result<RecordBatch> {
-    let ext = |e: crate::BurrmillError| DataFusionError::External(Box::new(e));
+const CHUNK: usize = 8192;
+
+/// Runs the fold and checks every sum against 38 digits before a single row is emitted, so a
+/// consumer never sees part of an answer followed by a refusal.
+fn fold_rows(fold: &SignedFold, tables: &FoldTables) -> Result<Rows> {
+    // Every value here is read strictly, `TRY_CAST` included, so the owned fold's "the query used
+    // CAST" would be wrong about half of them.
+    let ext = |e: crate::BurrmillError| {
+        let m = e.to_string().replace(
+            ". The query used CAST, which errors; TRY_CAST would skip it",
+            "; a substituted fold refuses it rather than dropping the row",
+        );
+        DataFusionError::Execution(m)
+    };
     let segments: Vec<&SealedSegments> = fold
         .branches
         .iter()
@@ -564,8 +634,24 @@ fn run(fold: &SignedFold, schema: &SchemaRef, tables: &FoldTables) -> Result<Rec
         .pool
         .install(|| SignedFoldExec::new(fold, &segments, Limits::default()).run())
         .map_err(ext)?;
+    for i in 0..rows.len() {
+        let v = rows.sum(i);
+        if !Decimal128Type::is_valid_decimal_precision(v, 38) {
+            return Err(DataFusionError::Execution(format!(
+                "checked_sum overflow: exact result {v} does not fit Decimal128(38, 0)"
+            )));
+        }
+    }
+    Ok(rows)
+}
 
-    let n = rows.len();
+fn to_batch(
+    rows: &Rows,
+    range: std::ops::Range<usize>,
+    fold: &SignedFold,
+    schema: &SchemaRef,
+) -> Result<RecordBatch> {
+    let n = range.len();
     let mut columns: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
     for k in 0..fold.key_aliases.len() {
         // `key_parts` yields nothing for a single empty key, so a single key reads whole.
@@ -581,21 +667,13 @@ fn run(fold: &SignedFold, schema: &SchemaRef, tables: &FoldTables) -> Result<Rec
         let want = schema.field(k).data_type();
         columns.push(if *want == DataType::Utf8View {
             let mut b = StringViewBuilder::with_capacity(n);
-            (0..n).for_each(|i| b.append_value(key(i)));
+            range.clone().for_each(|i| b.append_value(key(i)));
             Arc::new(b.finish())
         } else {
-            arrow::compute::cast(&StringArray::from_iter_values((0..n).map(key)), want)?
+            arrow::compute::cast(&StringArray::from_iter_values(range.clone().map(key)), want)?
         });
     }
-    for i in 0..n {
-        let v = rows.sum(i);
-        if !Decimal128Type::is_valid_decimal_precision(v, 38) {
-            return Err(DataFusionError::Execution(format!(
-                "checked_sum overflow: exact result {v} does not fit Decimal128(38, 0)"
-            )));
-        }
-    }
-    let sums = Decimal128Array::from_iter_values((0..n).map(|i| rows.sum(i)))
+    let sums = Decimal128Array::from_iter_values(range.map(|i| rows.sum(i)))
         .with_precision_and_scale(38, 0)?;
     let sums: ArrayRef = Arc::new(sums);
     let want = schema.field(fold.key_aliases.len()).data_type();
