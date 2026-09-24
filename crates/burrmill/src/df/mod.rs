@@ -43,6 +43,9 @@ use session::MiniSession;
 pub struct Engine {
     rt: tokio::runtime::Runtime,
     session: MiniSession,
+    /// First-come-first-served admission, as on the owned path (roadmap 5.3). Without it, 32
+    /// clients sharing one runtime starved one of them outright (roadmap 6.8).
+    gate: crate::gate::Gate,
 }
 
 impl Engine {
@@ -123,7 +126,8 @@ impl Engine {
         session
             .build_information_schema(|n| n.ends_with("__raw"))
             .map_err(df_err)?;
-        Ok(Self { rt, session })
+        let gate = crate::gate::Gate::new(crate::default_width(threads.max(1)));
+        Ok(Self { rt, session, gate })
     }
 
     /// Define a view over the nest's tables and earlier views, as nuthatch defines its authored
@@ -146,6 +150,7 @@ impl Engine {
         // Parsed first, so malformed SQL is a syntax error as DuckDB reports it, not a refusal.
         let logical = plan_query(&self.session, sql)?;
         refuse_non_query(sql)?;
+        let _pass = self.gate.enter();
         self.rt.block_on(async {
             let physical = self.session.create_physical_plan(&logical).await.map_err(df_err)?;
             let batches = collect(physical, self.session.task_ctx()).await.map_err(df_err)?;
@@ -168,6 +173,7 @@ impl Engine {
         // Parsed first, so malformed SQL is a syntax error as DuckDB reports it, not a refusal.
         let logical = plan_query(&self.session, sql)?;
         refuse_non_query(sql)?;
+        let _pass = self.gate.enter();
         self.rt.block_on(async {
             let physical = self.session.create_physical_plan(&logical).await.map_err(df_err)?;
             let mut stream = datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
