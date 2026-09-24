@@ -138,6 +138,7 @@ impl MiniSession {
                 Arc::new(FoldSubstitution(fold)),
                 Arc::new(CheckedArithmetic::default()),
                 Arc::new(super::topn::TopPerGroup),
+                Arc::new(super::distinct::DistinctSplit),
                 Arc::new(TypeCoercion::new()),
             ]),
             optimizer: Optimizer::new(),

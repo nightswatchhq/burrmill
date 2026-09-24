@@ -160,3 +160,32 @@ fn other_windows_leave_the_plan_alone() {
     assert!(!plan.contains("first_value"), "{plan}");
     same_as_unrewritten(&e, sql);
 }
+
+// DistinctSplit: COUNT(DISTINCT x) beside other aggregates, in two levels.
+#[test]
+fn distinct_count_beside_other_aggregates() {
+    let (_t, e) = engine();
+    let sql = "SELECT id, COUNT(DISTINCT poi) AS pois, COUNT(*) AS n, COUNT(amount) AS amounts,
+                      SUM(CAST(amount AS HUGEINT)) AS total, MIN(block_number) AS first, MAX(poi) AS top
+               FROM ev GROUP BY id";
+    let reference = sql.replace("COUNT(*) AS n", "COUNT(*) FILTER (WHERE true) AS n");
+    let got = text(&e, sql);
+    assert_eq!(got, text(&e, &reference));
+    assert_eq!(
+        got,
+        vec![
+            "NULL|2|2|2|7|1|n2",
+            "a|2|3|3|16|1|p2",
+            "b|1|1|1|7|1|q1",
+            "c|1|1|0|NULL|5|r1"
+        ]
+    );
+    let plan = text(&e, &format!("EXPLAIN {sql}")).join("\n");
+    assert!(plan.contains("__distinct"), "{plan}");
+    // Types are kept: a count stays a BIGINT.
+    let b = e.sql(sql).unwrap();
+    assert_eq!(
+        b[0].schema().field_with_name("n").unwrap().data_type(),
+        &DataType::Int64
+    );
+}

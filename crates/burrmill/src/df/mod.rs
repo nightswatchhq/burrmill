@@ -21,6 +21,7 @@ pub mod encode;
 mod errors;
 mod checked;
 mod dialect;
+mod distinct;
 mod fold;
 mod names;
 mod rule;
