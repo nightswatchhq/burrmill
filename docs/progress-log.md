@@ -4,6 +4,47 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Gate 1 speed — two plan shapes owned, and the time-weighted leg passes — 2026-09-24
+
+Profiled rather than guessed (`burrmill-bench engine-analyze`, `EXPLAIN ANALYZE` through `Engine`).
+The loss was concentrated, not spread.
+
+**1. The latest row per key.** `ROW_NUMBER() OVER (PARTITION BY k ORDER BY o) = 1` beside
+`SUM(x) OVER (PARTITION BY k)`, over a 768,900-row union, was 1.4-2.2 s of window compute in each
+of three views. DataFusion's window operators are slow on many small partitions, and Burrmill's
+checked window sum is not the cause (native: 754 ms against 807). By hand, the same 758,271 rows
+took 628 ms as windows and 178 ms as a `GROUP BY` with `first_value(... ORDER BY o)`, against
+DuckDB's 191 ms, with the same digest. **`TopPerGroup`** (`src/df/topn.rs`) plans it that way:
+the filter `rn = 1` directly or under an alias, `ROW_NUMBER` plus partition-wide aggregates on the
+same keys, columns only above. Anything else is left alone.
+
+**2. `COUNT(DISTINCT x)` beside other aggregates**, which DataFusion keeps as per-group sets in
+both phases. **`DistinctSplit`** (`src/df/distinct.rs`) groups by `(k, x)` and then by `k`, keeping
+names and types. My hand version first re-summed a `COUNT(*)` into a HUGEINT, which nuthatch prints
+as a string, and the digest caught it. The rule casts counts back.
+
+Also fixed on the way: `EXPLAIN` of DuckDB-dialect SQL skipped the rewrites, because DataFusion
+parses `EXPLAIN` into its own statement type.
+
+Real nest, warm medians of 5, 8 threads, **still 12/12 byte-identical**:
+
+| view | before | after | DuckDB |
+|---|---:|---:|---:|
+| lodestar_allocations | 845 | **277** | 304 |
+| lodestar_deployments | 396 | **151** | 485 |
+| lodestar_provisions | 549 | **148** | 243 |
+| lodestar_curator_signals | 349 | **124** | 255 |
+| deployment_signal | 33 | **12** | 8 |
+| open_allocations | 68 | **41** | 22 |
+
+**Time-weighted: 1.54x → 0.60x DuckDB. That leg of gate 1 passes.** Per statement, 8 of 12 are
+within 1.5x. The other four are all under 60 ms: `open_allocations` 1.86x (an anti-join from
+`NOT IN`), `epoch_boundaries` 2.63x (a `LAG` over a small join), `port_queue` 1.58x (built on
+both), and `lodestar_disputes`, 7 ms against 3. Each is its own shape and is owed separately.
+Transcript: `docs/bench/engine-views-thinkpad.txt`.
+
+---
+
 ## Gate 1 on real data — parity holds, and the speed claim does not — 2026-09-24
 
 `burrmill-bench engine-views <nest>` runs every authored view of a real nest through `Engine`,

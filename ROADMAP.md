@@ -150,9 +150,10 @@ directory. Nothing in nuthatch changes until Chief says so.
 | 6.8 | DataFusion-path `serve` sweep, and the synthetic sweep under the remedied configuration | concurrency and the README's 3.6x, both re-measured |
 
 **Gate 1, measured 2026-09-24 on the thinkpad's 1,925-segment graph-allocations copy:** parity
-12/12 portable views (7 are DuckDB-only syntax, phase 1b); checks agree with DuckDB; **speed
-fails: 1.54x DuckDB time-weighted, stock DataFusion 1.81-1.87x on the same nest.** Investigation
-04's 0.71x was a 38,428-segment copy. See the progress log.
+12/12 portable views (7 are DuckDB-only syntax, phase 1b); checks agree with DuckDB; speed
+was 1.54x DuckDB (stock DataFusion 1.81-1.87x), and **two owned plan shapes (`TopPerGroup`,
+`DistinctSplit`) bring it to 0.60x time-weighted, a pass.** Per statement, 8/12 within 1.5x; the four
+over are all under 60 ms and owed. See the progress log.
 
 **Gate 1:**
 

@@ -1,34 +1,22 @@
-      deployment_signal planning (EXPLAIN) median 3 ms
-SAME  deployment_signal                  rows=14654   duck_ms=7      burrmill_ms=32     ratio=4.57
-      open_allocations planning (EXPLAIN) median 3 ms
-SAME  open_allocations                   rows=6812    duck_ms=24     burrmill_ms=63     ratio=2.62
-      port_queue planning (EXPLAIN) median 7 ms
-SAME  port_queue                         rows=3943    duck_ms=32     burrmill_ms=67     ratio=2.09
-      lodestar_allocations planning (EXPLAIN) median 18 ms
-SAME  lodestar_allocations               rows=260828  duck_ms=300    burrmill_ms=793    ratio=2.64
-      epoch_boundaries planning (EXPLAIN) median 14 ms
-SAME  epoch_boundaries                   rows=269     duck_ms=18     burrmill_ms=47     ratio=2.61
+SAME  deployment_signal                  rows=14654   duck_ms=8      burrmill_ms=12     ratio=1.50
+SAME  open_allocations                   rows=6812    duck_ms=22     burrmill_ms=41     ratio=1.86
+SAME  port_queue                         rows=3943    duck_ms=31     burrmill_ms=49     ratio=1.58
+SAME  lodestar_allocations               rows=260828  duck_ms=304    burrmill_ms=277    ratio=0.91
+SAME  epoch_boundaries                   rows=269     duck_ms=19     burrmill_ms=50     ratio=2.63
 REGISTER-FAIL lodestar_epochs                    parse error: Parser Error: syntax error at or near "LEFT"
-      lodestar_disputes planning (EXPLAIN) median 6 ms
-SAME  lodestar_disputes                  rows=8       duck_ms=4      burrmill_ms=8      ratio=2.00
-      lodestar_escrow_transactions planning (EXPLAIN) median 5 ms
-SAME  lodestar_escrow_transactions       rows=77941   duck_ms=24     burrmill_ms=10     ratio=0.42
-      lodestar_delegations planning (EXPLAIN) median 6 ms
-SAME  lodestar_delegations               rows=608700  duck_ms=121    burrmill_ms=40     ratio=0.33
+SAME  lodestar_disputes                  rows=8       duck_ms=3      burrmill_ms=7      ratio=2.33
+SAME  lodestar_escrow_transactions       rows=77941   duck_ms=23     burrmill_ms=10     ratio=0.43
+SAME  lodestar_delegations               rows=608700  duck_ms=119    burrmill_ms=38     ratio=0.32
 REGISTER-FAIL lodestar_network_params            parse error: Parser Error: syntax error at or near "AS"
 REGISTER-FAIL lodestar_indexer_ledger            parse error: Parser Error: syntax error at or near "ON"
 REGISTER-FAIL lodestar_indexers                  no segments: Catalog Error: Table with name lodestar_indexer_ledger does not exist!
 REGISTER-FAIL lodestar_delegator_stakes          substrate error: Error during planning: Invalid function 'list_reduce'.
 REGISTER-FAIL lodestar_delegators                no segments: Catalog Error: Table with name lodestar_delegator_stakes does not exist!
-      lodestar_curator_signals planning (EXPLAIN) median 26 ms
-SAME  lodestar_curator_signals           rows=15821   duck_ms=257    burrmill_ms=364    ratio=1.42
-      lodestar_curators planning (EXPLAIN) median 7 ms
-SAME  lodestar_curators                  rows=1825    duck_ms=13     burrmill_ms=15     ratio=1.15
-      lodestar_provisions planning (EXPLAIN) median 32 ms
-SAME  lodestar_provisions                rows=95      duck_ms=270    burrmill_ms=576    ratio=2.13
+SAME  lodestar_curator_signals           rows=15821   duck_ms=255    burrmill_ms=124    ratio=0.49
+SAME  lodestar_curators                  rows=1825    duck_ms=14     burrmill_ms=15     ratio=1.07
+SAME  lodestar_provisions                rows=95      duck_ms=243    burrmill_ms=148    ratio=0.61
 REGISTER-FAIL lodestar_network                   parse error: Parser Error: syntax error at or near "FOR"
-      lodestar_deployments planning (EXPLAIN) median 50 ms
-SAME  lodestar_deployments               rows=24833   duck_ms=478    burrmill_ms=384    ratio=0.80
+SAME  lodestar_deployments               rows=24833   duck_ms=485    burrmill_ms=151    ratio=0.31
 CHECK populations    burrmill=Ok(Array [Object {"deployments_ever_signalled": Number(14654), "still_signalled": Number(8382), "deployments_with_open_alloc": Number(6812)}]) duckdb=Ok(Array [Object {"deployments_ever_signalled": Number(14654), "still_signalled": Number(8382), "deployments_with_open_alloc": Number(6812)}])
 CHECK port-queue     burrmill=Ok(Array [Object {"unserved_signalled": Number(3943), "unserved_over_1000": Number(65), "largest_net_signal": Number(54336)}]) duckdb=Ok(Array [Object {"unserved_signalled": Number(3943), "unserved_over_1000": Number(65), "largest_net_signal": Number(54336)}])
 VIEWS	views=19	same=12	differing=0	failing=7	checks=0/2
