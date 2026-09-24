@@ -25,6 +25,7 @@ mod fold;
 mod names;
 mod rule;
 mod session;
+mod topn;
 mod wide;
 
 #[path = "generated/schema_equivalence.rs"]

@@ -108,3 +108,8 @@ required-features = ["datafusion"]
 name = "df_fold"
 path = "tests/df_fold.rs"
 required-features = ["datafusion"]
+
+[[test]]
+name = "df_topn"
+path = "tests/df_topn.rs"
+required-features = ["datafusion"]

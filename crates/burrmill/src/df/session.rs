@@ -137,6 +137,7 @@ impl MiniSession {
                 // Before the checked rewrite, which would hide the shape it matches.
                 Arc::new(FoldSubstitution(fold)),
                 Arc::new(CheckedArithmetic::default()),
+                Arc::new(super::topn::TopPerGroup),
                 Arc::new(TypeCoercion::new()),
             ]),
             optimizer: Optimizer::new(),

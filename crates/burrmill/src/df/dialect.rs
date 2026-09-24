@@ -48,19 +48,7 @@ pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String
         },
         _ => vec![],
     };
-    if let DfStatement::Statement(s) = &mut stmt {
-        let mut known = known.clone();
-        let _ = sq::Visit::visit(s.as_ref(), &mut Aliases(&mut known));
-        let _ = sq::VisitMut::visit(s.as_mut(), &mut CaseFix(&known));
-        if let sq::Statement::Query(q) = s.as_mut() {
-            dedupe_output_names(q, &mut names);
-        }
-        let mut rw = Rewriter { refused: None };
-        let _ = sq::VisitMut::visit(s.as_mut(), &mut rw);
-        if let Some(why) = rw.refused {
-            return Err(BurrmillError::NotAllowed(why));
-        }
-    }
+    rewrite(&mut stmt, known, &mut names)?;
     Ok((stmt, names))
 }
 
@@ -261,6 +249,27 @@ pub fn strip_dup_suffix(b: arrow::record_batch::RecordBatch) -> arrow::record_ba
         .collect();
     let schema = Arc::new(arrow::datatypes::Schema::new(fields));
     arrow::record_batch::RecordBatch::try_new(schema, b.columns().to_vec()).expect("same columns")
+}
+
+/// The rewrites, on a statement or on the one an `EXPLAIN` wraps.
+fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) -> Result<()> {
+    let s = match stmt {
+        DfStatement::Statement(s) => s,
+        DfStatement::Explain(e) => return rewrite(e.statement.as_mut(), known, &mut []),
+        _ => return Ok(()),
+    };
+    let mut known = known.clone();
+    let _ = sq::Visit::visit(s.as_ref(), &mut Aliases(&mut known));
+    let _ = sq::VisitMut::visit(s.as_mut(), &mut CaseFix(&known));
+    if let sq::Statement::Query(q) = s.as_mut() {
+        dedupe_output_names(q, names);
+    }
+    let mut rw = Rewriter { refused: None };
+    let _ = sq::VisitMut::visit(s.as_mut(), &mut rw);
+    match rw.refused {
+        Some(why) => Err(BurrmillError::NotAllowed(why)),
+        None => Ok(()),
+    }
 }
 
 struct Rewriter {
