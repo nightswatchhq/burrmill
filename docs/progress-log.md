@@ -4,6 +4,43 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.6b — the thinkpad, and every RSS figure from today measured wrong first — 2026-09-24
+
+**Correction first.** The 6.3, 6.6 and 6.6a memory figures below this entry came from 3-5 folds in
+one process. This log already recorded (1.2) that allocator retention builds up across folds, and
+that only one fold per process gives the operator's peak. I repeated that defect in a new harness.
+`df-fold` now defaults to `REPEATS=1`. The latencies in those entries stand; the RSS columns do not.
+Transcript: `docs/bench/df-fold-thinkpad-2026-09-24.txt`.
+
+Same fixture (2M rows, 989,690 groups, 64 segments, 8 threads), one fold per process, four runs
+each, commit `e2ff35a`. Latency is the median of 5, in separate runs:
+
+| | thinkpad RSS | thinkpad ms | MacBook RSS | MacBook ms |
+|---|---:|---:|---:|---:|
+| stock DataFusion (wraps) | 491-525 | 200 | 534-545 | 100 |
+| hosted fold, collected | 265-287 | 203-249 | 288-307 | 124 |
+| **hosted fold, streamed** | **249-261** | **195-217** | 284-298 | 118 |
+| bare fold (`fold`) | 208-227 | 157-161 | 269-280 | 97 |
+
+**The hosted fold straddles the 256 MB gate on the thinkpad**: 249, 251, 260, 261 for `CAST`, and
+250-257 for `TRY_CAST`. That is not a pass. It is 20-40 MB over the bare operator, and it is a third
+of what stock DataFusion needs for the same answer.
+
+Checked on the way:
+
+- **The bare fold has not regressed.** Commit `fce2763` (5.5) built on the same box and interleaved
+  with this one reads 200-220 MB against 208-225, at 155-158 ms against 157-161. That is noise, or
+  at most under 10 MB.
+- **Segment layout is not it**: one segment gives the same bare figure.
+- **Tokio's 32 workers are not it**: 8 changes nothing.
+- **glibc's arenas are real but not a remedy.** `MALLOC_ARENA_MAX=2` takes the hosted fold to
+  289-305 MB and the bare one to 240-248 even with five folds retained, at 40-80% more latency.
+
+What would close the last 20-40 MB is not yet measured. Candidates: the DataFusion session and
+runtime's own resident set; the chunk conversion; the `CacheManager`'s metadata cache.
+
+---
+
 ## 6.6a — streaming, and composite keys; the hosted fold within 20 MB of the bare one — 2026-09-24
 
 - **`Engine::sql_for_each`** hands each batch to the caller and keeps none of them. The substituted

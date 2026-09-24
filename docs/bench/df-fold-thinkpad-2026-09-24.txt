@@ -1,0 +1,55 @@
+commit e2ff35a  2026-09-24T17:38:54Z  32 cores
+RESULT	rows=2000000	segments=64	addrs=1000000	repeats=1	order=duck_first	duck_ms=366	df_ms=201	burrmill_ms=182	df_ratio=0.55	burrmill_ratio=0.50	parity=verified	groups=989690	rss_mb=1714
+== parity
+mode=stock	groups=989690	digest=9994171edcecd427
+mode=cast	groups=989690	digest=9994171edcecd427
+mode=try	groups=989690	digest=9994171edcecd427
+mode=cast	groups=989690	digest=9994171edcecd427
+mode=try	groups=989690	digest=9994171edcecd427
+== collected
+mode=stock	median_ms=201	all=[194, 199, 201, 202, 246]	peak_rss_mb=750
+mode=cast	median_ms=249	all=[218, 221, 249, 251, 253]	peak_rss_mb=660
+mode=try	median_ms=201	all=[186, 187, 201, 218, 253]	peak_rss_mb=559
+mode=stock	median_ms=200	all=[196, 199, 200, 205, 230]	peak_rss_mb=747
+mode=cast	median_ms=203	all=[194, 202, 203, 218, 238]	peak_rss_mb=601
+mode=try	median_ms=205	all=[197, 198, 205, 227, 249]	peak_rss_mb=607
+== streamed
+mode=cast	median_ms=197	all=[187, 189, 197, 198, 225]	peak_rss_mb=451
+mode=try	median_ms=202	all=[192, 195, 202, 218, 237]	peak_rss_mb=506
+mode=cast	median_ms=195	all=[188, 192, 195, 226, 229]	peak_rss_mb=460
+mode=try	median_ms=217	all=[207, 208, 217, 218, 233]	peak_rss_mb=520
+== bare fold
+groups=989690 median_ms=171 all=[170, 171, 180] peak_rss_mb=342 
+groups=989690 median_ms=161 all=[158, 161, 176] peak_rss_mb=295 
+rows=2000000	segments=1	addrs=1000000
+== bare fold, 1 segment
+median_ms=163 peak_rss_mb=362 
+median_ms=161 peak_rss_mb=299 
+== 64 seg, streamed cast, tokio workers / arenas
+TOKIO_WORKER_THREADS=8: median_ms=217	peak_rss_mb=464
+TOKIO_WORKER_THREADS=8: median_ms=201	peak_rss_mb=451
+MALLOC_ARENA_MAX=2: median_ms=305	peak_rss_mb=305
+MALLOC_ARENA_MAX=2: median_ms=310	peak_rss_mb=289
+TOKIO_WORKER_THREADS=8 MALLOC_ARENA_MAX=2: median_ms=289	peak_rss_mb=295
+TOKIO_WORKER_THREADS=8 MALLOC_ARENA_MAX=2: median_ms=278	peak_rss_mb=303
+== bare fold, 64 seg, MALLOC_ARENA_MAX=2
+median_ms=232 peak_rss_mb=248 
+median_ms=301 peak_rss_mb=240 
+== RSS, one fold per process (e2ff35a)
+collected stock: 491 525 508 505 
+collected cast: 265 279 276 275 
+collected try: 273 274 287 269 
+streamed cast: 260 249 261 251 
+streamed try: 257 255 250 251 
+bare fold: 227 222 216 227 
+== bare fold, one per process, interleaved: 5.5 (fce2763) vs e2ff35a
+5.5=202  now=225
+5.5=200  now=225
+5.5=206  now=208
+5.5=220  now=214
+5.5=218  now=215
+== latency medians, REPEATS=5
+5.5: median_ms=155
+now: median_ms=157
+5.5: median_ms=158
+now: median_ms=161

@@ -256,7 +256,9 @@ async fn bench() -> anyhow::Result<()> {
 async fn df_fold() -> anyhow::Result<()> {
     let dir = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: df-fold <dir>"))?;
     let mode = std::env::var("MODE").unwrap_or_else(|_| "cast".into());
-    let repeats = env_usize("REPEATS", 3).max(1);
+    // One fold by default: allocator retention builds across folds in a process, so the peak of
+    // five is not the peak of one. Take latency medians with REPEATS=5 in a separate run.
+    let repeats = env_usize("REPEATS", 1).max(1);
     let cast = if mode == "try" { "TRY_CAST" } else { "CAST" };
     let sql = format!(
         "SELECT addr, SUM(d) AS net FROM (\
