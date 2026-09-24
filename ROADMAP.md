@@ -149,6 +149,11 @@ directory. Nothing in nuthatch changes until Chief says so.
 | 6.7 | Parser role | a sqlparser AST walk answers reachability, table-function use and canonical form, at least as strictly as `json_serialize_sql` |
 | 6.8 | DataFusion-path `serve` sweep, and the synthetic sweep under the remedied configuration | concurrency and the README's 3.6x, both re-measured |
 
+**Gate 1, measured 2026-09-24 on the thinkpad's 1,925-segment graph-allocations copy:** parity
+12/12 portable views (7 are DuckDB-only syntax, phase 1b); checks agree with DuckDB; **speed
+fails: 1.54x DuckDB time-weighted, stock DataFusion 1.81-1.87x on the same nest.** Investigation
+04's 0.71x was a 38,428-segment copy. See the progress log.
+
 **Gate 1:**
 
 - every authored statement reaches parity once the Lodestar and qos views are rewritten (plan

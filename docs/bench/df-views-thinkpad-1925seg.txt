@@ -1,0 +1,58 @@
+/home/pepe/1165-corpus/graph-allocations-nest-next: 19 statements in 12 view files, 81 tables (71 sealed over 1924 segments, 10 declared and empty)
+duckdb v1.5.4: threads=8 parquet_metadata_cache=true, explicit file lists
+datafusion 55.0.0: target_partitions=8 collect_statistics=false metadata_cache=1024MiB (listing      stats=off cache=1G) enable_ident_normalization=false schema_force_view_types=true
+
+registered in 9 ms
+
+statement                          outcome    rewrites                rows  duck_ms    df_ms  ratio  dominant plan/list wall, footers/open/scan/agg+join/other summed ms
+deployment_signal                  parity     hugeint                14654        7       10   1.43  scan     0/1/0/3/18/19/0
+open_allocations                   parity     -                       6812       20       68   3.40  scan     0/2/3/9/78/70/0
+port_queue                         plan fail  -                    Schema error: Schema contains qualified field name s.net_signal and unqualified field name
+lodestar_allocations               parity     hugeint,intdiv        260828      297      776   2.61  scan     2/17/17/82/976/7243/4173
+epoch_boundaries                   parity     hugeint                  269       13       27   2.08  open     1/9/7/36/167/10/1
+lodestar_epochs                    parse fail                      ASOF JOIN: sql parser error: Expected: JOIN, found: LEFT at Line: 17, Column: 8
+lodestar_disputes                  parity     hugeint                    8        3        4   1.33  listing  0/2/0/0/0/0/0
+lodestar_escrow_transactions       parity     hugeint                77941       20        9   0.45  scan     0/2/1/5/42/0/1
+lodestar_delegations               parity     hugeint               608700      117       36   0.31  scan     0/3/4/17/373/0/4
+lodestar_network_params            parse fail                      list comprehension: sql parser error: Expected: joined table, found: AS at Line: 4, Column: 31
+lodestar_indexer_ledger            parse fail                      ASOF JOIN: sql parser error: Expected: MATCH_CONDITION, found: ON at Line: 15, Column: 20
+lodestar_indexers                  cascade    hugeint,intdiv,tuple-cmp via lodestar_indexer_ledger
+lodestar_delegator_stakes          plan fail  hugeint,intdiv       Invalid function 'list_reduce'.
+lodestar_delegators                cascade    -                    via lodestar_delegator_stakes
+lodestar_curator_signals           parity     hugeint,intdiv         15821      233      327   1.40  scan     1/17/17/84/544/408/1724
+lodestar_curators                  parity     hugeint                 1825       10       11   1.10  scan     1/3/1/5/44/10/2
+lodestar_provisions                parity     hugeint                   95      251      488   1.94  scan     1/19/15/63/657/5000/2721
+lodestar_network                   parse fail                      list comprehension: sql parser error: Expected: ], found: FOR at Line: 80, Column: 13
+lodestar_deployments               plan fail  hugeint,intdiv       Object Store error: Generic LocalFileSystem error: Unable to open file /home/pepe/1165-cor
+
+10/19 statements run on DataFusion with parity; time-weighted ratio 1.81 (1756 ms DataFusion against 971 ms DuckDB)
+outcomes: cascade=2 parity=10 parse fail=4 plan fail=3
+rewrite rules: hugeint=12 intdiv=5 tuple-cmp=1
+  hugeint    CAST(x AS HUGEINT) -> CAST(x AS DECIMAL(38,0)), the same 128-bit width
+  intdiv     a // b -> CAST((a - a % b) / b AS DECIMAL(38,0)), exact where decimal division would round
+  tuple-cmp  (a, b) > (c, d) -> a > c OR (a = c AND b > d)
+
+DIAGNOSIS: the 6 worst ratios (DuckDB >= 20 ms) under each remedy, median of 3 after a warm-up, df_ms per statement
+  DataFusion's defaults first (ListingTable, statistics on, 50 MiB footer cache); each row changes one thing.
+configuration                       reg_ms      open_allocations  lodestar_allocations   lodestar_provisions lodestar_curator_sign lodestar_escrow_trans  lodestar_delegations  sum_ms  ratio
+duckdb                                                        20                   297                   251                   233                    20                   117     938   1.00
+listing      stats=on  cache=50M         8                    63                   754                   529                   304                    12                    40    1702   1.00
+  plan+list/footers/open/scan/rest                  7/3/10/78/66   39/21/93/1139/11007     37/15/57/593/8130    42/20/123/581/1753            6/1/4/37/0         12/4/18/355/0
+listing      stats=off cache=50M         9                    54                   737                   514                   320                     9                    33    1667   0.98
+  plan+list/footers/open/scan/rest                  3/4/13/99/60    22/18/83/915/10921     20/14/58/580/8064     23/19/90/556/1976            2/1/4/38/2          4/4/17/354/3
+listing      stats=off cache=off         8                    57                   758                   510                   323                    10                    40    1698   1.00
+  plan+list/footers/open/scan/rest                 3/44/51/75/55  17/218/292/991/11336   21/174/224/642/8532   18/222/302/573/1932          2/14/18/37/0         4/71/90/433/3
+listing      stats=off cache=1G          8                    57                   708                   494                   323                     9                    43    1634   0.96
+  plan+list/footers/open/scan/rest                  2/3/10/89/59    18/18/83/886/10713     22/15/61/616/7569     18/18/89/564/1876            2/1/5/46/1          6/6/27/516/4
+listing      stats=on  cache=1G          9                    61                   732                   503                   319                    10                    41    1666   0.98
+  plan+list/footers/open/scan/rest                  7/3/10/80/64    36/19/83/998/10620     37/17/61/679/7504    38/18/109/520/1844            4/1/5/40/0          8/5/23/456/0
+files/8g     stats=off cache=1G          9                    56                   732                   495                   317                     9                    41    1650   0.97
+  plan+list/footers/open/scan/rest                  1/3/10/84/62    11/17/73/921/11180     15/19/68/787/7657     12/19/81/584/2178            2/1/5/41/1          2/8/35/708/6
+files/1g     stats=off cache=1G          8                    41                   727                   515                   314                     8                    32    1637   0.96
+  plan+list/footers/open/scan/rest                  1/3/10/84/48   11/18/78/1004/10936     15/18/68/783/7968     13/16/69/471/1903            2/1/4/38/0          2/4/17/346/4
+files/8g     stats=off cache=off         8                    58                   747                   516                   325                    10                    36    1692   0.99
+  plan+list/footers/open/scan/rest                 1/39/46/78/51  11/158/220/889/11009   15/119/164/609/8400   13/114/169/466/2111          2/15/20/35/1         2/41/54/346/3
+morsels/8g   stats=off cache=off        38                    52                   739                   495                   328                     9                    34    1657   0.97
+  plan+list/footers/open/scan/rest                  1/3/10/79/65    12/13/69/905/11177     16/12/52/560/8339     13/15/74/554/2131            3/1/4/40/1          2/4/21/439/3
+
+ratio is against the first row; plan+list is wall, the rest are per-file elapsed summed over 8 partitions and overlap under async I/O

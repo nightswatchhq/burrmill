@@ -4,6 +4,45 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Gate 1 on real data — parity holds, and the speed claim does not — 2026-09-24
+
+`burrmill-bench engine-views <nest>` runs every authored view of a real nest through `Engine`,
+against DuckDB set up as nuthatch sets it up (`union_by_name`, `_dec` as `DECIMAL(38,0)`,
+`_overflow`, UTC). It compares each view's whole contents as a multiset of nuthatch-encoded rows,
+then runs the nest's pinned checks. The nest is the thinkpad's copy of graph-allocations
+(`~/1165-corpus/graph-allocations-nest-next`, 1,925 segments, 643 MB), so no RPC was needed.
+Transcripts: `docs/bench/engine-views-thinkpad.txt`, `docs/bench/df-views-thinkpad-1925seg.txt`.
+
+**Parity: 12 of 12 portable views are byte-identical**, including 260,828 and 608,700-row views.
+The other 7 are DuckDB-only syntax (2 `ASOF`, `list_reduce`, list comprehensions) or depend on
+one. That is phase 1b, nuthatch's own views. Getting there took four engine fixes, each measured
+against DuckDB first:
+
+- `register_view`, and `_overflow` beside `_dec`, with taint stopping at `IS [NOT] NULL`: whether
+  a `TRY_CAST` came back NULL is an exact boolean;
+- DuckDB's integer-literal typing: `UBIGINT - 1` stays UBIGINT, where DataFusion widens to
+  `DECIMAL(20,0)` and nuthatch then prints a string;
+- `ORDER BY s.x` beside `... AS x`, which DataFusion refuses as ambiguous;
+- casts to integer round as DuckDB's do: half to even from a float (`2.5` → 2), half away from
+  zero from a decimal (`2.5` → 3). Arrow truncates.
+
+**Checks:** Burrmill and DuckDB agree on both. Neither matches the pinned JSON (14,654 against
+13,884 deployments), because this data copy is newer than the fixture.
+
+**Speed: gate 1 fails, and the cause is DataFusion, not Burrmill.** Warm medians of 5, 8 threads:
+Burrmill is **1.54x DuckDB** time-weighted. It wins 3 of 12 (`lodestar_delegations` 0.27x,
+`escrow` 0.44x, `deployments` 0.81x) and loses the rest by up to 4.7x on small views. The control
+is investigation 04's own `df-views`, stock DataFusion on the same nest and machine: **1.81-1.87x**.
+The engine's own layers (checked arithmetic, dialect, provider) are therefore not the cost. Planning
+is 2-49 ms. The time is in execution above the scan: joins and aggregation.
+
+**Investigation 04's 0.71x was measured on a 38,428-segment copy**, where DuckDB pays per file.
+On 1,925 compacted segments DuckDB is the faster engine by nearly 2x. The plan's "speed is not the
+obstacle" rested on that layout, and it does not hold on this one. That is Chief's to weigh before
+anything else is built on it.
+
+---
+
 ## 6.5 closed — identifiers without case, `information_schema`, repeated names — 2026-09-24
 
 - **Identifiers resolve without regard to case, quoted or not, as DuckDB resolves them.** Before
