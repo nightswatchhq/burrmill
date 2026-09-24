@@ -18,6 +18,7 @@ use crate::limits::Limits;
 
 mod catalog;
 mod checked;
+mod fold;
 mod rule;
 mod session;
 mod wide;
@@ -70,7 +71,19 @@ impl Engine {
             .enable_all()
             .build()
             .map_err(|e| BurrmillError::Substrate(e.to_string()))?;
-        let mut session = MiniSession::new(threads).map_err(df_err)?;
+        let mut fold_tables = std::collections::HashMap::new();
+        for t in tables.iter().filter(|t| !t.files.is_empty()) {
+            let name = if t.wide.is_empty() { t.name.clone() } else { format!("{}__raw", t.name) };
+            let files = t.files.iter().map(|(p, _)| p.clone());
+            fold_tables.insert(name.clone(), crate::segment::SealedSegments::from_files(name, files));
+        }
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads.max(1))
+            .thread_name(|i| format!("burrmill-fold-{i}"))
+            .build()
+            .map_err(|e| BurrmillError::Substrate(e.to_string()))?;
+        let fold = fold::FoldTables { tables: Arc::new(fold_tables), pool: Arc::new(pool) };
+        let mut session = MiniSession::new(threads, fold).map_err(df_err)?;
         let groups = threads.max(1);
         for t in &tables {
             let provider: Arc<dyn TableProvider> = if t.files.is_empty() {

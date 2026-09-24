@@ -4,6 +4,58 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.6 — the owned fold inside DataFusion plans; memory down a third, still over the gate — 2026-09-24
+
+Moved ahead of 6.4/6.5 because 6.3 showed the gate failing on DataFusion's aggregate, and the
+owned fold is the one operator here that has passed it.
+
+`src/df/fold.rs`. An analyzer rule, ahead of `CheckedArithmetic`, swaps a matching `Aggregate` for
+an `OwnedSignedFold` extension node; our physical planner lowers it to an operator that runs
+`SignedFoldExec` in the engine's own pool. It shows in `EXPLAIN` at every stage.
+
+**The rule may refuse where DataFusion answers, and must never answer differently.** So it only
+substitutes when:
+
+- the aggregate is one `SUM` of `[-]CAST|TRY_CAST(text AS DECIMAL(38,0))` over a `UNION ALL` of
+  projections read straight off nest tables (nested unions, view pass-throughs and union coercion
+  followed), keyed by columns or `lower`/`upper`;
+- the value columns are non-nullable, or the sum is filtered by a NULL-rejecting comparison above;
+  otherwise an all-NULL party would vanish instead of reading NULL;
+- `TRY_CAST` runs strict, so a bad row refuses rather than dropping.
+
+The output is checked against 38 digits, as the checked sum does. Where the predicate is exactly
+`sum <> 0` the fold drops zeros itself, the filter selects every row, and arrow passes the batch
+through uncopied. For a single key, the fold's canonical order is declared, and the sort above it
+goes. Each substituted query is tested against the same statement made unsubstitutable
+(`tests/df_fold.rs`).
+
+Two defects surfaced on the way, and neither belonged to 6.6:
+
+- **The owned fold read a NULL key as `""`** and merged the NULL party into the empty-string one
+  (`[("", 12)]` for 5 and 7). Refused now, and committed separately.
+- **EXPLAIN had only ever shown the plan as parsed**, because `MiniSession::optimize` lacked the
+  umbrella crate's `Explain` handling. Ported.
+
+**Same fixture as 6.3** (989,690 groups, 8 threads, 64 segments, MacBook, parity digest identical
+across all modes):
+
+| | median | peak RSS |
+|---|---:|---:|
+| stock DataFusion (wraps) | 100 ms | 589-593 MB |
+| 6.3 checked, `CAST` / `TRY_CAST` | 107 / 102 ms | 606-647 / 731-745 MB |
+| **6.6 owned fold, `CAST` / `TRY_CAST`** | **124 / 125 ms** | **381-388 / 395-404 MB** |
+
+The fold itself takes 96-102 ms here, as it does standalone. The rest is building a million output
+rows, which `collect` then holds (~73 MB of answer). So the gate still fails by about 1.5x on this
+machine. The standalone fold (292-300 MB here, 210 on the thinkpad) excludes its answer by design;
+this harness cannot. Hosting also costs about 24 ms over stock DataFusion on this fixture.
+
+Owed: the thinkpad figures; a streaming `Engine` API so the gate measures the operator and not the
+collected answer; composite keys with literal tags (the owned planner has them, this rule does not
+yet); the `_dec` columns, which reach the fold only through `TRY_CAST` and fall back to 6.3's path.
+
+---
+
 ## 6.3 — CheckedArithmetic lands; the memory gate fails, and not because of it — 2026-09-24
 
 The 03 prototype, hardened, in `src/df/{wide,checked,rule}.rs`, as an analyzer rule between two

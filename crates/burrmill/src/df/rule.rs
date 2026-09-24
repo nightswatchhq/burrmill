@@ -463,6 +463,7 @@ fn lossy(plan: &LogicalPlan) -> Vec<bool> {
     };
     match plan {
         LogicalPlan::TableScan(_) | LogicalPlan::EmptyRelation(_) => vec![false; n],
+        LogicalPlan::Extension(e) if e.node.name() == "OwnedSignedFold" => vec![false; n],
         LogicalPlan::Projection(p) => through(&p.input, &p.expr),
         LogicalPlan::Aggregate(a) => {
             let mut t = through(&a.input, &a.group_expr);

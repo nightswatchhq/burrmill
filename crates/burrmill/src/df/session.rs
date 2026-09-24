@@ -13,6 +13,7 @@ use datafusion_catalog::{
     MemorySchemaProvider, Session, TableProvider,
 };
 use datafusion_common::alias::AliasGenerator;
+use datafusion_common::display::{PlanType, ToStringifiedPlan};
 use datafusion_common::config::{ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, Result as DFResult, TableReference, plan_datafusion_err};
 use datafusion_execution::config::SessionConfig;
@@ -26,7 +27,7 @@ use datafusion_expr::registry::{
     ExtensionTypeRegistryRef, FunctionRegistry, MemoryExtensionTypeRegistry,
 };
 use datafusion_expr::{
-    AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
+    AggregateUDF, Explain, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_optimizer::analyzer::Analyzer;
@@ -39,6 +40,7 @@ use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use datafusion_session::{PhysicalOptimizerRule, PhysicalPlanner, QueryPlanner};
 
 use super::checked::{CheckedAgg, Mode};
+use super::fold::{FoldSubstitution, FoldTables, OwnedFoldPlanner};
 use super::physical_planner::DefaultPhysicalPlanner;
 use super::rule::CheckedArithmetic;
 
@@ -71,7 +73,7 @@ impl std::fmt::Debug for MiniSession {
 }
 
 impl MiniSession {
-    pub fn new(threads: usize) -> DFResult<Self> {
+    pub fn new(threads: usize, fold: FoldTables) -> DFResult<Self> {
         let mut config = SessionConfig::new()
             .with_target_partitions(threads.max(1))
             .with_collect_statistics(false);
@@ -122,6 +124,8 @@ impl MiniSession {
             analyzer: Analyzer::with_rules(vec![
                 Arc::new(ResolveGroupingFunction::new()),
                 Arc::new(TypeCoercion::new()),
+                // Before the checked rewrite, which would hide the shape it matches.
+                Arc::new(FoldSubstitution(fold)),
                 Arc::new(CheckedArithmetic::default()),
                 Arc::new(TypeCoercion::new()),
             ]),
@@ -157,7 +161,7 @@ impl QueryPlanner for MiniQueryPlanner {
         logical_plan: &LogicalPlan,
         session: &dyn Session,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        DefaultPhysicalPlanner::default()
+        DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(OwnedFoldPlanner)])
             .create_physical_plan(logical_plan, session)
             .await
     }
@@ -277,10 +281,39 @@ impl Session for MiniSession {
         Arc::clone(&self.query_planner)
     }
     fn optimize(&self, plan: &LogicalPlan) -> DFResult<LogicalPlan> {
-        let analyzed =
-            self.analyzer
-                .execute_and_check(plan.clone(), self.config.options().as_ref(), |_, _| {})?;
-        self.optimizer.optimize(analyzed, self, |_, _| {})
+        let LogicalPlan::Explain(e) = plan else {
+            let analyzed = self.analyzer.execute_and_check(
+                plan.clone(),
+                self.config.options().as_ref(),
+                |_, _| {},
+            )?;
+            return self.optimizer.optimize(analyzed, self, |_, _| {});
+        };
+        // As the umbrella crate's `SessionState::optimize`: without this, EXPLAIN shows only the
+        // plan as parsed, never what the analyzer and optimizer made of it.
+        let mut stringified_plans = e.stringified_plans.clone();
+        let analyzed = self.analyzer.execute_and_check(
+            e.plan.as_ref().clone(),
+            self.config.options().as_ref(),
+            |p, rule| {
+                let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name: rule.name().into() };
+                stringified_plans.push(p.to_stringified(plan_type));
+            },
+        )?;
+        stringified_plans.push(analyzed.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
+        let optimized = self.optimizer.optimize(analyzed, self, |p, rule| {
+            let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name: rule.name().into() };
+            stringified_plans.push(p.to_stringified(plan_type));
+        })?;
+        Ok(LogicalPlan::Explain(Explain {
+            verbose: e.verbose,
+            explain_format: e.explain_format.clone(),
+            plan: Arc::new(optimized),
+            stringified_plans,
+            schema: Arc::clone(&e.schema),
+            logical_optimization_succeeded: true,
+            show_statistics: e.show_statistics,
+        }))
     }
     fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         &self.physical_optimizers

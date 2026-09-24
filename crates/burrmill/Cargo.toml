@@ -103,3 +103,8 @@ required-features = ["datafusion"]
 name = "df_checked"
 path = "tests/df_checked.rs"
 required-features = ["datafusion"]
+
+[[test]]
+name = "df_fold"
+path = "tests/df_fold.rs"
+required-features = ["datafusion"]
