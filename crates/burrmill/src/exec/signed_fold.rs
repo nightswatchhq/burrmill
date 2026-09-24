@@ -491,11 +491,17 @@ impl<'a> SignedFoldExec<'a> {
                         rows_skipped += 1;
                         continue;
                     };
+                    if key.is_null(i) {
+                        return Err(null_key());
+                    }
                     let raw = key.value(i);
                     let signed = if fv.negated { checked_neg(d, raw)? } else { d };
                     scatter.push(raw.as_bytes(), signed, shared)?;
                 }
                 for (b, key, vis) in simple.iter() {
+                    if key.is_null(i) && vis.iter().any(|vi| parsed[*vi].is_some()) {
+                        return Err(null_key());
+                    }
                     let raw = key.value(i);
                     for (j, vi) in vis.iter().enumerate() {
                         let Some(d) = parsed[*vi] else {
@@ -533,6 +539,9 @@ impl<'a> SignedFoldExec<'a> {
                                     keybuf.extend_from_slice(l.as_bytes())
                                 }
                                 (crate::plan::KeyPart::Column { key_fn, .. }, Some(a)) => {
+                                    if a.is_null(i) {
+                                        return Err(null_key());
+                                    }
                                     let v = a.value(i);
                                     match key_fn {
                                         None => keybuf.extend_from_slice(v.as_bytes()),
@@ -600,6 +609,12 @@ impl<'a> SignedFoldExec<'a> {
 /// Parquet readers disagree here and it is a real migration hazard rather than a curiosity: nuthatch
 /// seals `Utf8`, DataFusion reads the same bytes back as `Utf8View`. Casting rather than assuming
 /// keeps the answer about the answer.
+/// A NULL key's slot reads as `""`, which would merge the NULL party into the empty-string one.
+/// `Rows` has no NULL key to give it, so the fold refuses rather than answers for either.
+fn null_key() -> BurrmillError {
+    BurrmillError::NotAllowed("a group key is NULL; the owned fold does not group NULLs".into())
+}
+
 fn utf8_column(batch: &RecordBatch, name: &str) -> Result<StringArray> {
     let idx = batch
         .schema()

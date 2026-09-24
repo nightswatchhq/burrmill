@@ -694,3 +694,33 @@ fn having_is_refused_when_there_is_more_than_one_sum() {
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
+
+/// A NULL key used to read as `""` and fold into the empty-string party. Now refused.
+#[test]
+fn a_null_key_is_refused_not_merged_into_the_empty_string() {
+    let tmp = tempfile::tempdir().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("block_number", DataType::UInt64, false),
+        Field::new("from", DataType::Utf8, true),
+        Field::new("to", DataType::Utf8, true),
+        Field::new("value", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt64Array::from(vec![1u64, 2])),
+            Arc::new(StringArray::from(vec![Some("0xa"), Some("0xa")])),
+            Arc::new(StringArray::from(vec![None, Some("")])),
+            Arc::new(StringArray::from(vec!["5", "7"])),
+        ],
+    )
+    .unwrap();
+    let f = std::fs::File::create(tmp.path().join("t-00000.parquet")).unwrap();
+    let mut w = parquet::arrow::ArrowWriter::try_new(f, schema, None).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    match fold(tmp.path(), 2) {
+        Err(BurrmillError::NotAllowed(m)) => assert!(m.contains("NULL"), "{m}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
