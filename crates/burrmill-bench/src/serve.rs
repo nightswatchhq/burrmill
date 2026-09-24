@@ -194,7 +194,8 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
     let df_rows = |e: &burrmill::Engine| -> anyhow::Result<usize> {
         Ok(e.sql(SQL)?.iter().map(|b| b.num_rows()).sum())
     };
-    let hosted = df_rows(&engine)?;
+    let e2 = Arc::clone(&engine);
+    let hosted = std::thread::spawn(move || df_rows(&e2)).join().expect("engine thread")?;
     anyhow::ensure!(hosted == ours, "PARITY FAILED: Engine {hosted} rows against the fold's {ours}");
     let theirs = duck_query(&duck_conn(dir)?)?;
     anyhow::ensure!(
