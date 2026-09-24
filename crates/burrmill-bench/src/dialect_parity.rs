@@ -52,6 +52,8 @@ const CORPUS: &[&str] = &[
     "SELECT 1 AS a, 2 AS a, block_number AS a FROM transfer ORDER BY 3",
     "SELECT block_number - 1 AS a, COALESCE(block_number - log_index, 0) AS b, CASE WHEN log_index = 0 THEN 0 ELSE block_number END AS c, block_number * 2 + 1 AS d FROM transfer ORDER BY 1",
     "SELECT t.\"from\", CAST(t.block_number / 10 AS BIGINT) AS block_number FROM transfer t ORDER BY t.block_number DESC",
+    "SELECT CAST(0.5::DOUBLE AS BIGINT) a, CAST(1.5::DOUBLE AS BIGINT) b, CAST(2.5::DOUBLE AS BIGINT) c, CAST(-0.5::DOUBLE AS BIGINT) d, CAST(-1.5::DOUBLE AS BIGINT) e, CAST(0.6::DOUBLE AS BIGINT) f, CAST(2.5::DECIMAL(3,1) AS BIGINT) l, CAST(-2.5::DECIMAL(3,1) AS BIGINT) m, CAST(2.4::DECIMAL(3,1) AS BIGINT) n",
+    "SELECT CAST(CAST(value AS DOUBLE) / 3 AS BIGINT) AS q, CAST(block_number / 4 AS INTEGER) AS r FROM transfer WHERE block_number < 100 ORDER BY 1, 2",
     "SELECT max(\"from\") AS m FROM transfer",
     "SELECT (block_number, log_index) > (2, 0) AS gt FROM transfer ORDER BY block_number, log_index",
     "SELECT CAST(block_number AS UBIGINT) AS b FROM transfer ORDER BY 1 LIMIT 1",
@@ -204,5 +206,12 @@ pub fn duck_keywords() -> anyhow::Result<()> {
         let (k, c): (String, String) = (r.get(0)?, r.get(1)?);
         println!("{k}\t{c}");
     }
+    Ok(())
+}
+
+/// `duck-eval <sql>`: DuckDB's answer as nuthatch's JSON, for probing semantics.
+pub fn duck_eval(sql: &str) -> anyhow::Result<()> {
+    let duck = duckdb::Connection::open_in_memory()?;
+    println!("{}", serde_json::to_string(&crate::encode_parity::nuthatch_rows(&duck, sql)?)?);
     Ok(())
 }

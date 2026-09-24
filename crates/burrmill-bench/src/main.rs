@@ -91,6 +91,9 @@ async fn main() -> anyhow::Result<()> {
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-views <nest>"))?,
         ),
         Some("duck-keywords") => dialect_parity::duck_keywords(),
+        Some("duck-eval") => dialect_parity::duck_eval(
+            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: duck-eval <sql>"))?,
+        ),
         Some("duck-names") => dialect_parity::duck_names(
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: duck-names <sql>"))?,
         ),

@@ -22,7 +22,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result as DFResult, exec_err, plan_err};
 use datafusion_expr::{
     BinaryExpr, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility,
 };
 use datafusion_optimizer::analyzer::AnalyzerRule;
 use datafusion_sql::parser::{DFParser, Statement as DfStatement};
@@ -477,8 +477,18 @@ impl ScalarUDFImpl for IntDiv {
 
 /// DuckDB semantics that change a result's type, applied once types are known. `/` between
 /// numbers is DOUBLE in DuckDB, where DataFusion divides integers as integers.
-#[derive(Debug, Default)]
-pub struct DuckSemantics;
+#[derive(Debug)]
+pub struct DuckSemantics {
+    round: Arc<ScalarUDF>,
+}
+
+impl Default for DuckSemantics {
+    fn default() -> Self {
+        Self {
+            round: RoundInt::udf(),
+        }
+    }
+}
 
 impl AnalyzerRule for DuckSemantics {
     fn name(&self) -> &str {
@@ -499,7 +509,8 @@ impl AnalyzerRule for DuckSemantics {
                 let name = e.schema_name().to_string();
                 let t = e.transform_up(|e| {
                     let t = divide_as_double(e, &schema)?;
-                    t.transform_data(|e| timestamp_as_duckdb(e, &schema))
+                    let t = t.transform_data(|e| timestamp_as_duckdb(e, &schema))?;
+                    t.transform_data(|e| round_before_int_cast(e, &schema, &self.round))
                 })?;
                 if t.transformed && names_matter && t.data.schema_name().to_string() != name {
                     Ok(Transformed::yes(t.data.alias(name)))
@@ -796,4 +807,119 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
         }
         e => Ok(Transformed::no(e)),
     }
+}
+
+/// `burrmill_round_int(x)`: `x` rounded to a whole number as DuckDB rounds it when casting to an
+/// integer: half to even for floats, half away from zero for decimals. Arrow's cast truncates.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct RoundInt {
+    sig: Signature,
+}
+
+impl RoundInt {
+    pub fn udf() -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(Self {
+            sig: Signature::user_defined(Volatility::Immutable),
+        }))
+    }
+}
+
+impl ScalarUDFImpl for RoundInt {
+    fn name(&self) -> &str {
+        "burrmill_round_int"
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn coerce_types(&self, args: &[DataType]) -> DFResult<Vec<DataType>> {
+        match args {
+            [DataType::Float32] | [DataType::Float16] => Ok(vec![DataType::Float64]),
+            [t @ (DataType::Float64 | DataType::Decimal128(..))] => Ok(vec![t.clone()]),
+            _ => plan_err!("burrmill_round_int takes a float or a decimal"),
+        }
+    }
+    fn return_type(&self, args: &[DataType]) -> DFResult<DataType> {
+        Ok(args[0].clone())
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        use arrow::array::{Decimal128Array, Float64Array};
+        use arrow::datatypes::Float64Type;
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let out: ArrayRef = match a.data_type() {
+            DataType::Float64 => Arc::new(
+                a.as_primitive::<Float64Type>()
+                    .iter()
+                    .map(|v| v.map(f64::round_ties_even))
+                    .collect::<Float64Array>(),
+            ),
+            DataType::Decimal128(p, s) => {
+                let unit = 10i128.pow(*s as u32);
+                let mut out = Vec::with_capacity(a.len());
+                for v in a.as_primitive::<Decimal128Type>().iter() {
+                    out.push(match v {
+                        None => None,
+                        Some(v) => {
+                            let (q, r) = (v / unit, v % unit);
+                            let q = if r.abs() * 2 >= unit {
+                                q + r.signum()
+                            } else {
+                                q
+                            };
+                            match q.checked_mul(unit) {
+                                Some(x) => Some(x),
+                                None => {
+                                    return exec_err!("Overflow rounding {v} to a whole number");
+                                }
+                            }
+                        }
+                    });
+                }
+                Arc::new(Decimal128Array::from(out).with_precision_and_scale(*p, *s)?)
+            }
+            t => return exec_err!("burrmill_round_int: unsupported {t}"),
+        };
+        if scalar {
+            Ok(ColumnarValue::Scalar(
+                datafusion_common::ScalarValue::try_from_array(&out, 0)?,
+            ))
+        } else {
+            Ok(ColumnarValue::Array(out))
+        }
+    }
+}
+
+/// A cast from a float or a scaled decimal to an integer rounds first, as DuckDB's does.
+fn round_before_int_cast(
+    e: Expr,
+    schema: &DFSchema,
+    round: &Arc<ScalarUDF>,
+) -> DFResult<Transformed<Expr>> {
+    let (inner, to, try_) = match &e {
+        Expr::Cast(Cast { expr, field }) => (expr, field.data_type().clone(), false),
+        Expr::TryCast(TryCast { expr, field }) => (expr, field.data_type().clone(), true),
+        _ => return Ok(Transformed::no(e)),
+    };
+    if !to.is_integer() {
+        return Ok(Transformed::no(e));
+    }
+    let from = inner.get_type(schema)?;
+    let needs = from.is_floating() || matches!(from, DataType::Decimal128(_, s) if s > 0);
+    if !needs
+        || matches!(inner.as_ref(), Expr::ScalarFunction(f) if f.func.name() == "burrmill_round_int")
+    {
+        return Ok(Transformed::no(e));
+    }
+    let rounded = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+        Arc::clone(round),
+        vec![inner.as_ref().clone()],
+    ));
+    Ok(Transformed::yes(if try_ {
+        Expr::TryCast(TryCast::new(Box::new(rounded), to))
+    } else {
+        Expr::Cast(Cast::new(Box::new(rounded), to))
+    }))
 }

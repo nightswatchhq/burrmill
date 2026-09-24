@@ -88,6 +88,8 @@ impl MiniSession {
         for f in datafusion_functions::all_default_functions() {
             scalar.insert(f.name().to_string(), f);
         }
+        let round = super::dialect::RoundInt::udf();
+        scalar.insert(round.name().to_string(), round);
         let intdiv = super::dialect::IntDiv::udf();
         scalar.insert(intdiv.name().to_string(), intdiv);
         let mut aggregate = HashMap::new();
@@ -131,7 +133,7 @@ impl MiniSession {
                 // Before coercion: DuckDB's text comparisons depend on what was written.
                 Arc::new(super::dialect::DuckComparisons),
                 Arc::new(TypeCoercion::new()),
-                Arc::new(super::dialect::DuckSemantics),
+                Arc::new(super::dialect::DuckSemantics::default()),
                 // Before the checked rewrite, which would hide the shape it matches.
                 Arc::new(FoldSubstitution(fold)),
                 Arc::new(CheckedArithmetic::default()),
