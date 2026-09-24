@@ -22,6 +22,7 @@ mod errors;
 mod checked;
 mod dialect;
 mod distinct;
+mod fastcast;
 mod fold;
 mod names;
 mod rule;

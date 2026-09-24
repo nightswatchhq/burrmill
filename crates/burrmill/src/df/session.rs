@@ -139,6 +139,7 @@ impl MiniSession {
                 Arc::new(CheckedArithmetic::default()),
                 Arc::new(super::topn::TopPerGroup),
                 Arc::new(super::distinct::DistinctSplit),
+                Arc::new(super::fastcast::FastTextCasts),
                 Arc::new(TypeCoercion::new()),
             ]),
             optimizer: Optimizer::new(),
