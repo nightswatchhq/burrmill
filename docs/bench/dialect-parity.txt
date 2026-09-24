@@ -1,0 +1,37 @@
+SAME   SELECT count(*) FROM transfer
+SAME   SELECT sum(value_dec) FROM transfer
+SAME   SELECT sum(block_number) FROM transfer
+SAME   SELECT avg(block_number) FROM transfer
+SAME   SELECT block_number / 100 AS q FROM transfer ORDER BY 1
+SAME   SELECT block_number // 100 AS b, count(*) AS n FROM transfer GROUP BY 1 ORDER BY 1
+SAME   SELECT CAST(value AS HUGEINT) * 2 AS v FROM transfer ORDER BY 1
+SAME   SELECT -CAST(value AS HUGEINT) AS v FROM transfer ORDER BY 1
+SAME   SELECT "from", sum(CAST(value AS HUGEINT)) AS s FROM transfer GROUP BY 1 ORDER BY 1
+SAME   SELECT 7 / 2 AS a, 7 // 2 AS b, -7 // 2 AS c, 7 % -2 AS d, 1 / 0 AS e, 1 // 0 AS f, 0.5 / 2 AS g
+SAME   SELECT to_timestamp(block_timestamp) AS t FROM transfer ORDER BY 1 LIMIT 2
+SAME   SELECT date_trunc('day', to_timestamp(block_timestamp)) AS d, count(*) AS n FROM transfer GROUP BY 1 ORDER BY 1
+SAME   SELECT extract(year FROM to_timestamp(block_timestamp)) AS y FROM transfer LIMIT 1
+SAME   SELECT round(CAST(value AS DOUBLE) / 1e18, 4) AS r FROM transfer ORDER BY 1
+SAME   SELECT lower("to") AS t FROM transfer ORDER BY 1
+SAME   SELECT count(*) AS n FROM transfer WHERE enabled = 'true'
+BOTH-REFUSE  SELECT count(*) AS n FROM transfer WHERE value = 10
+BOTH-REFUSE  SELECT count(*) AS n FROM transfer WHERE value IN (10, 4)
+SAME   SELECT count(*) AS n FROM transfer WHERE "tokensRewards" = 10
+SAME   SELECT count(*) AS n FROM transfer WHERE "tokensRewards" IN (5, 7, 10)
+BOTH-REFUSE  SELECT count(*) AS n FROM transfer WHERE "tokensRewards" > 9
+BOTH-REFUSE  SELECT count(*) AS n FROM transfer WHERE "tokensRewards" BETWEEN 1 AND 9
+BOTH-REFUSE  SELECT count(*) AS n FROM transfer WHERE 9 < "tokensRewards"
+SAME   SELECT count(*) AS n FROM transfer WHERE CAST("tokensRewards" AS INTEGER) > 9
+SAME   SELECT count(*) AS n FROM transfer WHERE enabled = true
+SAME   SELECT count(*) AS n FROM transfer WHERE enabled AND true
+SAME   SELECT count(*) AS n FROM transfer WHERE NOT enabled
+SAME   SELECT "tokensRewards" <> 5 AS ne FROM transfer ORDER BY 1
+SAME   SELECT CAST(value AS HUGEINT), block_number // 2, NOT (block_number > 2) FROM transfer ORDER BY 2
+SAME   SELECT max("from") AS m FROM transfer
+SAME   SELECT (block_number, log_index) > (2, 0) AS gt FROM transfer ORDER BY block_number, log_index
+SAME   SELECT CAST(block_number AS UBIGINT) AS b FROM transfer ORDER BY 1 LIMIT 1
+SAME   SELECT "tokensRewards" AS r FROM transfer ORDER BY 1
+SAME   SELECT t."to", l.name FROM transfer t LEFT JOIN label l ON l.addr = t."to" ORDER BY 1, 2
+SAME   SELECT count(DISTINCT "from") AS n FROM transfer
+SAME   SELECT "from" || ':' || CAST(block_number AS VARCHAR) AS k FROM transfer ORDER BY 1
+DIALECT	cases=36	differing=0

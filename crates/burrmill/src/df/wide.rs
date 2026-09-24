@@ -206,6 +206,30 @@ impl<const N: usize> Wide<N> {
         Self::from_magnitude(neg, mag).expect("quotient magnitude is below the dividend's")
     }
 
+    /// Integer text as DuckDB's `TRY_CAST(... AS DECIMAL(38,0))` reads it, where that reading is
+    /// exact: surrounding spaces, a sign, leading zeros, and a fraction of zeros only. `7.9` (which
+    /// DuckDB rounds) and exponents are refused.
+    pub fn parse_integer(s: &str) -> Result<Self, String> {
+        let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
+        let (neg, rest) = match t.as_bytes().first() {
+            Some(b'-') => (true, &t[1..]),
+            Some(b'+') => (false, &t[1..]),
+            _ => (false, t),
+        };
+        let int = match rest.split_once('.') {
+            Some((i, f)) if f.bytes().all(|b| b == b'0') && !(i.is_empty() && f.is_empty()) => i,
+            Some(_) => return Err(format!("not an exact integer: {s:?}")),
+            None => rest,
+        };
+        let digits = int.trim_start_matches('0');
+        if (int.is_empty() && !rest.contains('.')) || !int.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(format!("not an exact integer: {s:?}"));
+        }
+        let digits = if digits.is_empty() { "0" } else { digits };
+        let canonical = if neg && digits != "0" { format!("-{digits}") } else { digits.to_string() };
+        Self::parse_canonical(&canonical)
+    }
+
     /// Canonical text only: `0` or `-?[1-9][0-9]*`. Anything else is refused by name.
     pub fn parse_canonical(s: &str) -> Result<Self, String> {
         let (neg, digits) = match s.strip_prefix('-') {
@@ -306,6 +330,20 @@ mod tests {
             Some(i128::MAX)
         );
         assert!(Wide::<2>::parse_canonical("170141183460469231731687303715884105728").is_err());
+    }
+
+    #[test]
+    fn reads_integers_as_duckdb_does_where_exact() {
+        for (s, v) in [("010", "10"), (" 7 ", "7"), ("+1", "1"), ("7.0", "7"), ("-0", "0"), ("-007.00", "-7"), (".0", "0")] {
+            assert_eq!(I320::parse_integer(s).unwrap().to_string(), v, "{s:?}");
+        }
+        for s in ["7.9", "1e3", "", "-", ".", "1_000", "0x10", "7."] {
+            if s == "7." {
+                assert_eq!(I320::parse_integer(s).unwrap().to_string(), "7");
+                continue;
+            }
+            assert!(I320::parse_integer(s).is_err(), "{s:?}");
+        }
     }
 
     #[test]

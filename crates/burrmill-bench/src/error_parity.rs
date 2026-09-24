@@ -60,7 +60,6 @@ fn classify(raw: &str) -> String {
 const KNOWN: &[(&str, &str)] = &[
     ("SELECT \"Value\" FROM token__transfer", "6.5: DuckDB quoted identifiers are case-insensitive"),
     ("SELECT from FROM token__transfer", "6.7: sqlparser reads `from` as a table name, DuckDB as a syntax error"),
-    ("SELECT count(*) FROM token__transfer WHERE enabled AND true", "6.5: DuckDB casts VARCHAR to BOOLEAN implicitly"),
 ];
 
 const CASES: &[&str] = &[

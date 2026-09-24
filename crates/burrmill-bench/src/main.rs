@@ -20,6 +20,7 @@
 //!   RESULT line. A guard nobody has watched refuse is not a guard.
 
 mod df_views;
+mod dialect_parity;
 mod encode_parity;
 mod error_parity;
 mod fixture;
@@ -84,6 +85,11 @@ async fn main() -> anyhow::Result<()> {
         Some("df-fold") => df_fold().await,
         Some("encode-parity") => encode_parity::run(),
         Some("error-parity") => error_parity::run(),
+        Some("dialect-parity") => dialect_parity::run(),
+        Some("duck-keywords") => dialect_parity::duck_keywords(),
+        Some("duck-names") => dialect_parity::duck_names(
+            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: duck-names <sql>"))?,
+        ),
         Some("nest") => nest(),
         Some("gen") => generated(),
         Some("cast") => cast_table(),

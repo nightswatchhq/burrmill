@@ -1,0 +1,196 @@
+//! `dialect-parity` (roadmap 6.5): the same SQL through DuckDB and `burrmill::Engine`, each result
+//! encoded as nuthatch encodes it, compared byte for byte.
+//!
+//! DuckDB reads the fixture through views built as nuthatch builds them (`_dec` by `TRY_CAST`);
+//! Burrmill opens the same directory as a nest. A difference is either the dialect layer's to close
+//! or listed in `KNOWN` with the reason it stands.
+
+use std::sync::Arc;
+
+use arrow::array::{ArrayRef, StringArray, UInt64Array};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use serde_json::Value;
+
+const CORPUS: &[&str] = &[
+    "SELECT count(*) FROM transfer",
+    "SELECT sum(value_dec) FROM transfer",
+    "SELECT sum(block_number) FROM transfer",
+    "SELECT avg(block_number) FROM transfer",
+    "SELECT block_number / 100 AS q FROM transfer ORDER BY 1",
+    "SELECT block_number // 100 AS b, count(*) AS n FROM transfer GROUP BY 1 ORDER BY 1",
+    "SELECT CAST(value AS HUGEINT) * 2 AS v FROM transfer ORDER BY 1",
+    "SELECT -CAST(value AS HUGEINT) AS v FROM transfer ORDER BY 1",
+    "SELECT \"from\", sum(CAST(value AS HUGEINT)) AS s FROM transfer GROUP BY 1 ORDER BY 1",
+    "SELECT 7 / 2 AS a, 7 // 2 AS b, -7 // 2 AS c, 7 % -2 AS d, 1 / 0 AS e, 1 // 0 AS f, 0.5 / 2 AS g",
+    "SELECT to_timestamp(block_timestamp) AS t FROM transfer ORDER BY 1 LIMIT 2",
+    "SELECT date_trunc('day', to_timestamp(block_timestamp)) AS d, count(*) AS n FROM transfer GROUP BY 1 ORDER BY 1",
+    "SELECT extract(year FROM to_timestamp(block_timestamp)) AS y FROM transfer LIMIT 1",
+    "SELECT round(CAST(value AS DOUBLE) / 1e18, 4) AS r FROM transfer ORDER BY 1",
+    "SELECT lower(\"to\") AS t FROM transfer ORDER BY 1",
+    "SELECT count(*) AS n FROM transfer WHERE enabled = 'true'",
+    "SELECT count(*) AS n FROM transfer WHERE value = 10",
+    "SELECT count(*) AS n FROM transfer WHERE value IN (10, 4)",
+    "SELECT count(*) AS n FROM transfer WHERE \"tokensRewards\" = 10",
+    "SELECT count(*) AS n FROM transfer WHERE \"tokensRewards\" IN (5, 7, 10)",
+    "SELECT count(*) AS n FROM transfer WHERE \"tokensRewards\" > 9",
+    "SELECT count(*) AS n FROM transfer WHERE \"tokensRewards\" BETWEEN 1 AND 9",
+    "SELECT count(*) AS n FROM transfer WHERE 9 < \"tokensRewards\"",
+    "SELECT count(*) AS n FROM transfer WHERE CAST(\"tokensRewards\" AS INTEGER) > 9",
+    "SELECT count(*) AS n FROM transfer WHERE enabled = true",
+    "SELECT count(*) AS n FROM transfer WHERE enabled AND true",
+    "SELECT count(*) AS n FROM transfer WHERE NOT enabled",
+    "SELECT \"tokensRewards\" <> 5 AS ne FROM transfer ORDER BY 1",
+    "SELECT CAST(value AS HUGEINT), block_number // 2, NOT (block_number > 2) FROM transfer ORDER BY 2",
+    "SELECT max(\"from\") AS m FROM transfer",
+    "SELECT (block_number, log_index) > (2, 0) AS gt FROM transfer ORDER BY block_number, log_index",
+    "SELECT CAST(block_number AS UBIGINT) AS b FROM transfer ORDER BY 1 LIMIT 1",
+    "SELECT \"tokensRewards\" AS r FROM transfer ORDER BY 1",
+    "SELECT t.\"to\", l.name FROM transfer t LEFT JOIN label l ON l.addr = t.\"to\" ORDER BY 1, 2",
+    "SELECT count(DISTINCT \"from\") AS n FROM transfer",
+    "SELECT \"from\" || ':' || CAST(block_number AS VARCHAR) AS k FROM transfer ORDER BY 1",
+];
+
+/// Differences that stand, and why.
+const KNOWN: &[(&str, &str)] = &[];
+
+fn fixture(root: &std::path::Path) -> anyhow::Result<()> {
+    let segs = root.join("segments");
+    std::fs::create_dir_all(&segs)?;
+    let s = |v: &[&str]| Arc::new(StringArray::from(v.to_vec())) as ArrayRef;
+    let u = |v: &[u64]| Arc::new(UInt64Array::from(v.to_vec())) as ArrayRef;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("block_number", DataType::UInt64, false),
+        Field::new("log_index", DataType::UInt64, false),
+        Field::new("block_timestamp", DataType::UInt64, false),
+        Field::new("from", DataType::Utf8, true),
+        Field::new("to", DataType::Utf8, true),
+        Field::new("value", DataType::Utf8, true),
+        Field::new("enabled", DataType::Utf8, true),
+        Field::new("tokensRewards", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            u(&[1, 2, 2, 3, 150, 301]),
+            u(&[0, 0, 1, 0, 2, 0]),
+            u(&[1700000000, 1700000012, 1700000012, 1700086400, 1700172800, 1703980800]),
+            s(&["0xa", "0xb", "0xA", "0xc", "0xa", "0xd"]),
+            s(&["0xb", "0xc", "0xc", "0xa", "0xe", "0xa"]),
+            s(&["10", "4", "1", "010", "250000000000000000000", "7"]),
+            s(&["true", "false", "true", "true", "false", "true"]),
+            s(&["5", "6", "7", "8", "9", "10"]),
+        ],
+    )?;
+    let f = std::fs::File::create(segs.join(format!("transfer-{:064x}.parquet", 1)))?;
+    let mut w = parquet::arrow::ArrowWriter::try_new(f, schema, None)?;
+    w.write(&batch)?;
+    w.close()?;
+    let lschema = Arc::new(Schema::new(vec![
+        Field::new("addr", DataType::Utf8, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let labels = RecordBatch::try_new(lschema.clone(), vec![s(&["0xa", "0xc"]), s(&["alice", "carol"])])?;
+    let f = std::fs::File::create(segs.join(format!("label-{:064x}.parquet", 2)))?;
+    let mut w = parquet::arrow::ArrowWriter::try_new(f, lschema, None)?;
+    w.write(&labels)?;
+    w.close()?;
+    std::fs::write(
+        root.join("schema.json"),
+        r#"{"tables":[{"table":"transfer","columns":[{"name":"from","storage":"text"},{"name":"to","storage":"text"},{"name":"value","storage":"word32"},{"name":"tokensRewards","storage":"word32"}]}]}"#,
+    )?;
+    Ok(())
+}
+
+pub fn run() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    fixture(tmp.path())?;
+    let segs = tmp.path().join("segments");
+    let duck = duckdb::Connection::open_in_memory()?;
+    // nuthatch sets no zone, so DuckDB follows the host's; hosted servers run in UTC, and so does
+    // Burrmill, deterministically.
+    duck.execute_batch("SET TimeZone = 'UTC';")?;
+    duck.execute_batch(&format!(
+        "CREATE VIEW transfer AS SELECT *, TRY_CAST(\"value\" AS DECIMAL(38,0)) AS \"value_dec\", \
+         TRY_CAST(\"tokensRewards\" AS DECIMAL(38,0)) AS \"tokensRewards_dec\" \
+         FROM read_parquet('{0}/transfer-*.parquet');
+         CREATE VIEW label AS SELECT * FROM read_parquet('{0}/label-*.parquet');",
+        segs.display()
+    ))?;
+    let root = tmp.path().to_path_buf();
+    let engine = std::thread::spawn(move || burrmill::Engine::open_nest(&root)).join().expect("open")?;
+    let engine = Arc::new(engine);
+    let mut failed = 0;
+    for sql in CORPUS {
+        let want = match crate::encode_parity::nuthatch_rows(&duck, sql) {
+            Ok(v) => serde_json::to_string(&v)?,
+            Err(e) => format!("ERROR {}", e.to_string().lines().next().unwrap_or("")),
+        };
+        let e2 = Arc::clone(&engine);
+        let q = sql.to_string();
+        let got = std::thread::spawn(move || -> String {
+            match e2.sql(&q) {
+                Ok(bs) => {
+                    let mut rows = Vec::new();
+                    for b in &bs {
+                        match burrmill::df::encode::rows(b) {
+                            Ok(r) => rows.extend(r),
+                            Err(e) => return format!("ERROR {e}"),
+                        }
+                    }
+                    serde_json::to_string(&Value::Array(rows)).unwrap()
+                }
+                Err(e) => format!("ERROR {}", e.to_string().replace('\n', " | ")),
+            }
+        })
+        .join()
+        .expect("engine thread");
+        let known = KNOWN.iter().find(|(k, _)| k == sql).map(|(_, why)| *why);
+        let both_refuse = want.starts_with("ERROR") && got.starts_with("ERROR");
+        let tag = match (want == got || both_refuse, known) {
+            (true, _) if both_refuse => "BOTH-REFUSE".to_string(),
+            (true, _) => "SAME ".to_string(),
+            (false, Some(why)) => format!("KNOWN ({why})"),
+            (false, None) => {
+                failed += 1;
+                "DIFF ".to_string()
+            }
+        };
+        println!("{tag}  {sql}");
+        if want != got && !both_refuse {
+            println!("    duckdb   {}", want.chars().take(300).collect::<String>());
+            println!("    burrmill {}", got.chars().take(300).collect::<String>());
+        }
+    }
+    println!("DIALECT\tcases={}\tdiffering={failed}", CORPUS.len());
+    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+    anyhow::ensure!(failed == 0, "{failed} dialect differences");
+    Ok(())
+}
+
+/// `duck-names <sql>`: DuckDB's own column names for a statement over an empty `t`, one per line.
+pub fn duck_names(sql: &str) -> anyhow::Result<()> {
+    let duck = duckdb::Connection::open_in_memory()?;
+    duck.execute_batch(
+        "CREATE TABLE t(\"from\" VARCHAR, \"to\" VARCHAR, \"value\" VARCHAR, block_number UBIGINT, \
+         log_index UBIGINT, \"tokensRewards\" VARCHAR);",
+    )?;
+    let mut stmt = duck.prepare(sql)?;
+    let rows = stmt.query([])?;
+    for n in rows.as_ref().map(|s| s.column_names()).unwrap_or_default() {
+        println!("{n}");
+    }
+    Ok(())
+}
+
+/// `duck-keywords`: DuckDB's keyword list with categories, for the naming printer's quoting rule.
+pub fn duck_keywords() -> anyhow::Result<()> {
+    let duck = duckdb::Connection::open_in_memory()?;
+    let mut stmt = duck.prepare("SELECT keyword_name, keyword_category FROM duckdb_keywords() ORDER BY 1")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let (k, c): (String, String) = (r.get(0)?, r.get(1)?);
+        println!("{k}\t{c}");
+    }
+    Ok(())
+}

@@ -87,6 +87,8 @@ impl MiniSession {
         for f in datafusion_functions::all_default_functions() {
             scalar.insert(f.name().to_string(), f);
         }
+        let intdiv = super::dialect::IntDiv::udf();
+        scalar.insert(intdiv.name().to_string(), intdiv);
         let mut aggregate = HashMap::new();
         for f in datafusion_functions_aggregate::all_default_aggregate_functions() {
             aggregate.insert(f.name().to_string(), f);
@@ -99,6 +101,7 @@ impl MiniSession {
         }
         let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
             Arc::new(CoreFunctionPlanner::default()),
+            Arc::new(datafusion_functions::datetime::planner::DatetimeFunctionPlanner),
             Arc::new(datafusion_functions_aggregate::planner::AggregateFunctionPlanner),
             Arc::new(datafusion_functions_window::planner::WindowFunctionPlanner),
         ];
@@ -123,7 +126,10 @@ impl MiniSession {
             // Checked sums change their output type, so coercion runs again after the rule.
             analyzer: Analyzer::with_rules(vec![
                 Arc::new(ResolveGroupingFunction::new()),
+                // Before coercion: DuckDB's text comparisons depend on what was written.
+                Arc::new(super::dialect::DuckComparisons),
                 Arc::new(TypeCoercion::new()),
+                Arc::new(super::dialect::DuckSemantics),
                 // Before the checked rewrite, which would hide the shape it matches.
                 Arc::new(FoldSubstitution(fold)),
                 Arc::new(CheckedArithmetic::default()),

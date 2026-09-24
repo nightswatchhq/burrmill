@@ -6,7 +6,7 @@
 //! `burrmill-bench error-parity`.
 
 /// DuckDB's name for an Arrow type as DataFusion prints it.
-fn duck_type(t: &str) -> String {
+pub(super) fn duck_type(t: &str) -> String {
     let t = t.trim();
     let named = match t {
         "Utf8" | "Utf8View" | "LargeUtf8" => "VARCHAR",

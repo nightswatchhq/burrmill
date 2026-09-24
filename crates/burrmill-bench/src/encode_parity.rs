@@ -65,7 +65,7 @@ const CORPUS: &[&str] = &[
 const NESTED: &[&str] = &["SELECT [1, 2] l", "SELECT {'a': 1} s"];
 
 /// nuthatch `decimal_safe_sql`, reduced to what it does to a result: scaled decimals become VARCHAR.
-fn nuthatch_rows(conn: &duckdb::Connection, sql: &str) -> anyhow::Result<Value> {
+pub(crate) fn nuthatch_rows(conn: &duckdb::Connection, sql: &str) -> anyhow::Result<Value> {
     let mut stmt = conn.prepare(sql)?;
     let schema = stmt.query_arrow([])?.get_schema();
     let scaled = schema

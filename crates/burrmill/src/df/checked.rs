@@ -189,6 +189,9 @@ struct Spec {
     name: &'static str,
     in_ty: DataType,
     out_ty: DataType,
+    /// Text as DuckDB's `TRY_CAST` reads it, where that is still exactly an integer. Otherwise
+    /// canonical only.
+    lenient: bool,
 }
 
 impl CheckedAgg {
@@ -206,6 +209,7 @@ impl CheckedAgg {
             name,
             in_ty: args.exprs[0].data_type(args.schema)?,
             out_ty: args.return_field.data_type().clone(),
+            lenient: false,
         })
     }
 }
@@ -246,6 +250,10 @@ impl<const N: usize> Groups<N> {
     ) -> Result<()> {
         let keep = |i: usize| a.is_valid(i) && filter.is_none_or(|f| f.is_valid(i) && f.value(i));
         let name = self.spec.name;
+        let lenient = self.spec.lenient;
+        let parse = |t: &str| {
+            if lenient { Wide::parse_integer(t) } else { Wide::parse_canonical(t) }
+        };
         match a.data_type() {
             DataType::Int64 => {
                 let a = a.as_primitive::<Int64Type>();
@@ -276,7 +284,7 @@ impl<const N: usize> Groups<N> {
                 for i in (0..a.len()).filter(|&i| keep(i)) {
                     f(
                         i,
-                        Wide::parse_canonical(a.value(i))
+                        parse(a.value(i))
                             .map_err(|e| exec(format!("{name}: {e}")))?,
                     )?;
                 }
@@ -286,7 +294,7 @@ impl<const N: usize> Groups<N> {
                 for i in (0..a.len()).filter(|&i| keep(i)) {
                     f(
                         i,
-                        Wide::parse_canonical(a.value(i))
+                        parse(a.value(i))
                             .map_err(|e| exec(format!("{name}: {e}")))?,
                     )?;
                 }
@@ -302,7 +310,7 @@ impl<const N: usize> Groups<N> {
                 for i in (0..a.len()).filter(|&i| keep(i)) {
                     f(
                         i,
-                        Wide::parse_canonical(a.value(i))
+                        parse(a.value(i))
                             .map_err(|e| exec(format!("{name}: {e}")))?,
                     )?;
                 }
@@ -699,6 +707,7 @@ impl ScalarUDFImpl for ExactWide {
             },
             in_ty: a.data_type().clone(),
             out_ty: DataType::FixedSizeBinary(WIDE_BYTES),
+            lenient: true,
         };
         let g = Groups::<5>::new(spec);
         let mut b = FixedSizeBinaryBuilder::with_capacity(a.len(), WIDE_BYTES);

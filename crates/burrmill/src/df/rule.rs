@@ -48,6 +48,7 @@ const SAFE_SCALARS: &[&str] = &[
     "get_field",
     "regexp_count",
     "regexp_instr",
+    "burrmill_intdiv",
     "checked_add",
     "checked_sub",
     "checked_mul",

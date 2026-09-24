@@ -9,7 +9,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_catalog::view::ViewTable;
 use datafusion_catalog::{MemTable, Session, TableProvider};
 use datafusion_physical_plan::collect;
-use datafusion_sql::parser::{DFParser, Statement as DfStatement};
+use datafusion_sql::parser::Statement as DfStatement;
 use datafusion_sql::planner::SqlToRel;
 use sqlparser::ast::Statement as SqlStatement;
 
@@ -20,7 +20,9 @@ mod catalog;
 pub mod encode;
 mod errors;
 mod checked;
+mod dialect;
 mod fold;
+mod names;
 mod rule;
 mod session;
 mod wide;
@@ -154,14 +156,39 @@ impl Engine {
 }
 
 fn plan_query(session: &MiniSession, sql: &str) -> Result<datafusion_expr::LogicalPlan> {
-    let stmts = DFParser::parse_sql(sql).map_err(df_err)?;
-    let Some(stmt) = stmts.into_iter().next() else {
-        return Err(BurrmillError::Parse("empty statement".into()));
-    };
+    let (stmt, names) = dialect::parse(sql)?;
     refuse_df_statement(&stmt)?;
     refuse_wide_literals(&stmt)?;
     let planner = SqlToRel::new(session);
-    planner.statement_to_plan(stmt).map_err(df_err)
+    let plan = planner.statement_to_plan(stmt).map_err(df_err)?;
+    rename(plan, &names)
+}
+
+/// DuckDB's default names on the unaliased columns, by position. Left alone when the count does
+/// not line up or the renamed set would repeat a name.
+fn rename(plan: datafusion_expr::LogicalPlan, names: &[Option<String>]) -> Result<datafusion_expr::LogicalPlan> {
+    use datafusion_expr::{Expr, LogicalPlanBuilder};
+    let schema = plan.schema().clone();
+    if names.iter().all(Option::is_none) || names.len() != schema.fields().len() {
+        return Ok(plan);
+    }
+    let finals: Vec<&str> = schema
+        .fields()
+        .iter()
+        .zip(names)
+        .map(|(f, n)| n.as_deref().unwrap_or(f.name()))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    if !finals.iter().all(|n| seen.insert(*n)) {
+        return Ok(plan);
+    }
+    let exprs: Vec<Expr> = (0..schema.fields().len())
+        .map(|i| {
+            let col = Expr::Column(datafusion_common::Column::from(schema.qualified_field(i)));
+            if finals[i] == schema.field(i).name() { col } else { col.alias(finals[i]) }
+        })
+        .collect();
+    LogicalPlanBuilder::from(plan).project(exprs).and_then(|b| b.build()).map_err(df_err)
 }
 
 fn refuse_non_query(sql: &str) -> Result<()> {

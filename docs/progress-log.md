@@ -4,6 +4,47 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.5 — DuckDB's dialect, measured statement by statement — 2026-09-24
+
+`burrmill-bench dialect-parity` runs 36 statements, drawn from the census's most common
+constructs, through DuckDB (views built as nuthatch builds them) and through `Engine`. Each result
+is encoded as nuthatch encodes it and compared byte for byte. The first run matched 16/25. It now
+matches **36/36: 31 byte-identical, and 5 refused by both engines where DuckDB refuses.**
+Transcript: `docs/bench/dialect-parity.txt`.
+
+What it took:
+
+- **Parsing with sqlparser's DuckDB dialect**, then rewriting the AST: `HUGEINT` → `DECIMAL(38,0)`,
+  `UBIGINT` → `BIGINT UNSIGNED` (`UHUGEINT` refused), tuple comparisons expanded, and `a // b` →
+  `burrmill_intdiv`, which is exact and truncating. Built on `/`, it would have become a float once
+  `/` was made DOUBLE. `NOT x` → `x = false`, because DataFusion's SQL planner type-checks `NOT`
+  before any rule could cast text. The dialect switch also made `SELECT from FROM t` a syntax error,
+  as DuckDB has it, which closed a 6.7 item by accident.
+- **`/` is DOUBLE**, as in DuckDB (`DuckSemantics`, after coercion). `7/2`, `1/0` and
+  `-7 // 2` all agree.
+- **`to_timestamp` is microseconds, UTC.** nuthatch sets no time zone, so its `date_trunc`
+  follows the host's: the same nest gives different day boundaries on a UTC server and on the
+  MacBook. Burrmill is UTC, and the harness sets DuckDB to UTC, as a server runs it.
+- **`extract`** needed DataFusion's datetime expression planner registered.
+- **Text beside numbers and booleans** (`DuckComparisons`, before coercion, because afterwards a
+  written `CAST` and an implicit one look the same). Measured: DuckDB casts text for `=` and `<>`,
+  refuses `<`, `>`, `<=`, `>=` and `BETWEEN` against any number, and casts text to BOOLEAN beside a
+  boolean and under `AND`/`OR`/`NOT`. All reproduced, including the refusal wording.
+- **`_dec` sums read text as DuckDB's `TRY_CAST` does, where that is still exact.** Leading zeros,
+  sign, surrounding spaces and a zero fraction are accepted; `7.9`, which DuckDB rounds, and
+  exponents are refused.
+- **Default column names**, which are nuthatch's JSON keys (`count(*)` is `count_star()`). DuckDB
+  prints the parsed expression. `src/df/names.rs` prints the measured forms from the statement as
+  written, and matches 28/28 in its unit test and every unaliased column in the corpus. The
+  quoting rule comes from DuckDB's own keyword list (489 words, generated), and DuckDB folds
+  `NOT (a > b)` to `(a <= b)` before naming. Forms it does not cover keep DataFusion's name.
+
+Still open in 6.5: quoted identifiers are case-insensitive in DuckDB (`"Value"` finds `value`),
+and `information_schema` shaped for the REPL. DuckDB-only syntax (ASOF, list comprehensions,
+`list_reduce`) is phase 1b, in nuthatch's own views.
+
+---
+
 ## 6.4 — nuthatch's JSON and nuthatch's error classes, checked against nuthatch's own code — 2026-09-24
 
 **Encoder** (`src/df/encode.rs`). nuthatch encodes a cell as duckdb-rs's `ValueRef`, which

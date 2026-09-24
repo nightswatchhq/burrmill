@@ -13,9 +13,9 @@ SAME   SELECT t.valu FROM token__transfer t
 KNOWN (6.5: DuckDB quoted identifiers are case-insensitive)  SELECT "Value" FROM token__transfer
     duckdb   [unclassified] OK
     burrmill [unknown-column(Value)] substrate error: Binder Error: Referenced column "Value" not found in FROM clause! | Schema error: No field named "Value". Did you mean 'token__transfer.value'? | Column names are case sensitive. You can use double quotes to refer to the token__transfer.value column or disable the datafusion.sql_parser.enable_ident_normalization configuration. | Valid fields are token__transfer.block_number, token__transfer.from, token__transfer.to, token__transfer.value, token__transfer.enabled.
-KNOWN (6.7: sqlparser reads `from` as a table name, DuckDB as a syntax error)  SELECT from FROM token__transfer
+SAME   SELECT from FROM token__transfer
     duckdb   [syntax] Parser Error: syntax error at or near "FROM"
-    burrmill [unknown-table(FROM)] no segments: Catalog Error: Table with name FROM does not exist! | Error during planning: no table FROM
+    burrmill [syntax] parse error: Parser Error: syntax error at or near "from" | SQL error: SQL(ParserError("Expected an expression, found: from at Line: 1, Column: 13"), None)
 SAME   SELECT sum(value) FROM token__transfer
     duckdb   [function-on-varchar] Binder Error: No function matches the given name and argument types 'sum(VARCHAR)'. You might need to add explicit type casts.
     burrmill [function-on-varchar] substrate error: Binder Error: No function matches the given name and argument types 'sum(VARCHAR)'. You might need to add explicit type casts. | Error during planning: Internal error: Function 'sum' failed to match any signature, errors: Error during planning: Function 'sum' requires Decimal, but received String (DataType: Utf8View).,Error during planning: Function 'sum' requires UInt64, but received String (DataType: Utf8View).,Error during planning: Function 'sum' requires Int64, but received String (DataType: Utf8View).,Error during planning: Function 'sum' requires Float64, but received String (DataType: Utf8View).,Error during planning: Function 'sum' requires Duration, but received String (DataType: Utf8View).,Error during planning: Function 'sum' requires Interval, but received String (DataType: Utf8View).. | This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. no function matches the given name and argument types 'sum(Utf8View)'. You might need to add explicit type casts. | 	Candidate functions: | 	sum(Decimal) | 	sum(UInt64) | 	sum(Int64) | 	sum(Float64) | 	sum(Duration) | 	sum(Interval)
@@ -25,9 +25,9 @@ SAME   SELECT avg("from") FROM token__transfer
 SAME   SELECT bool_and(enabled) FROM token__transfer
     duckdb   [bool-aggregate] Binder Error: No function matches the given name and argument types 'bool_and(VARCHAR)'. You might need to add explicit type casts.
     burrmill [bool-aggregate] substrate error: Binder Error: No function matches the given name and argument types 'bool_and(VARCHAR)'. You might need to add explicit type casts. | Error during planning: Failed to coerce arguments to satisfy a call to 'bool_and' function: coercion from Utf8View to the signature Exact(Boolean) failed. no function matches the given name and argument types 'bool_and(Utf8View)'. You might need to add explicit type casts. | 	Candidate functions: | 	bool_and(Boolean)
-KNOWN (6.5: DuckDB casts VARCHAR to BOOLEAN implicitly)  SELECT count(*) FROM token__transfer WHERE enabled AND true
+SAME   SELECT count(*) FROM token__transfer WHERE enabled AND true
     duckdb   [unclassified] OK
-    burrmill [unclassified] substrate error: type_coercion | caused by | Error during planning: Cannot infer common argument type for logical boolean operation Utf8View AND Boolean
+    burrmill [unclassified] OK
 SAME   SELECT COALESCE(enabled, true) FROM token__transfer
     duckdb   [mixed-varchar-boolean] Binder Error: Cannot mix values of type VARCHAR and BOOLEAN in COALESCE operator - an explicit cast is required
     burrmill [mixed-varchar-boolean] substrate error: Binder Error: Cannot mix values of type VARCHAR and BOOLEAN in COALESCE operator - an explicit cast is required | Error during planning: Execution error: Function 'coalesce' user-defined coercion failed with: Execution error: Fail to find the coerced type, errors: Execution error: Expect to get struct but got Utf8View. no function matches the given name and argument types 'coalesce(Utf8View, Boolean)'. You might need to add explicit type casts. | 	Candidate functions: | 	coalesce(UserDefined)
@@ -36,8 +36,8 @@ SAME   SELECT CASE WHEN block_number > 1 THEN enabled ELSE false END FROM token_
     burrmill [mixed-varchar-boolean] substrate error: Binder Error: Cannot mix values of type BOOLEAN and VARCHAR in CASE expression - an explicit cast is required | type_coercion | caused by | Error during planning: Failed to coerce then (Utf8View) and else (Boolean) to common types in CASE WHEN expression
 SAME   SELEC 1
     duckdb   [syntax] Parser Error: syntax error at or near "SELEC"
-    burrmill [syntax] substrate error: Parser Error: syntax error at or near "SELEC" | SQL error: ParserError("Expected: an SQL statement, found: SELEC at Line: 1, Column: 1")
+    burrmill [syntax] parse error: Parser Error: syntax error at or near "SELEC" | SQL error: SQL(ParserError("Expected: an SQL statement, found: SELEC at Line: 1, Column: 1"), None)
 SAME   SELECT 1 FROM
     duckdb   [syntax] Parser Error: syntax error at end of input
-    burrmill [syntax] substrate error: Parser Error: syntax error at end of input | SQL error: ParserError("Expected: identifier, found: EOF")
+    burrmill [syntax] parse error: Parser Error: syntax error at or near "EOF"), None" | SQL error: SQL(ParserError("Expected: identifier, found: EOF"), None)
 ERRORS	cases=14	differing=0
