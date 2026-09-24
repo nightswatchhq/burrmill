@@ -245,3 +245,33 @@ pub fn run(root: &str) -> anyhow::Result<()> {
     std::thread::spawn(move || drop(engine)).join().expect("drop engine");
     Ok(())
 }
+
+/// `engine-analyze <nest> <view>`: `EXPLAIN ANALYZE` of one authored view through `Engine`, after a
+/// warm-up, so operator timings are the steady state rather than the first read of the footers.
+pub fn analyze(root: &str, view: &str) -> anyhow::Result<()> {
+    let nest = load_nest(Path::new(root))?;
+    let root_owned = Path::new(root).to_path_buf();
+    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let view = view.to_string();
+    std::thread::spawn(move || -> anyhow::Result<()> {
+        let mut e = burrmill::Engine::open_nest(&root_owned)?;
+        for (n, b) in &views {
+            let _ = e.register_view(n, b);
+        }
+        let sql = format!("SELECT * FROM \"{view}\"");
+        e.sql_for_each(&sql, |_| Ok(()))?;
+        use arrow::array::Array;
+        for b in e.sql(&format!("EXPLAIN ANALYZE {sql}"))? {
+            let plan = b.column(1);
+            let plan = arrow::compute::cast(plan, &arrow::datatypes::DataType::Utf8)?;
+            let plan = plan.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+            for i in 0..plan.len() {
+                println!("{}", plan.value(i));
+            }
+        }
+        std::thread::spawn(move || drop(e)).join().expect("drop");
+        Ok(())
+    })
+    .join()
+    .expect("analyze thread")
+}

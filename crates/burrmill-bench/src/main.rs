@@ -87,6 +87,10 @@ async fn main() -> anyhow::Result<()> {
         Some("encode-parity") => encode_parity::run(),
         Some("error-parity") => error_parity::run(),
         Some("dialect-parity") => dialect_parity::run(),
+        Some("engine-analyze") => engine_views::analyze(
+            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,
+            &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,
+        ),
         Some("engine-views") => engine_views::run(
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-views <nest>"))?,
         ),
