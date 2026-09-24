@@ -4,6 +4,28 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Gate 1 speed — repeated subqueries computed once, and the floor found — 2026-09-24
+
+- **`ShareRepeats`** (`src/df/sharing.rs`). An aliased subquery that occurs more than once and
+  contains an aggregate is computed once, behind a shared cache (`OnceCell`), and read by every
+  use. Its node lets nothing through from above, so every copy is optimised alike. It only shares
+  aggregates, whose output is bounded, rather than buffering whole scans. `epoch_boundaries` uses
+  `per_epoch` twice: **34 → 20 ms (1.11x)**.
+- **`NOT IN` left alone, measured.** A plain anti-join guarded by one `count(*)`/`count(y)` over
+  the subquery gives the same rows in 77 ms against the null-aware join's 38 (DuckDB: 43 against 24).
+  The null-aware join is the better plan.
+- **The floor.** `SELECT 1` is under a millisecond, so there is no fixed cost. `lodestar_disputes`
+  (8 rows, DuckDB 3-4 ms) spends 6 of its 9 ms planning a large inlined view tree. Timed per rule,
+  that is about 2.3 ms in the analyzer (Burrmill's rules about 0.8 of it) and about 2.5 ms in
+  DataFusion's two optimizer passes. No single pass is worth attacking.
+
+Real nest, warm medians, **12/12 byte-identical**: **0.53x DuckDB time-weighted** (814 ms against
+1,538). **9 of 12 within 1.5x** per statement. Over: `open_allocations` 1.78x (41 ms against 23)
+and `port_queue` 1.70x (51 against 30), both the null-aware anti-join; and `lodestar_disputes`,
+9 ms against 3, which is planning.
+
+---
+
 ## Gate 1 speed — the text-to-HUGEINT cast, and where it stops — 2026-09-24
 
 The two small shapes, profiled. `epoch_boundaries` was not its window. It was four scans of about

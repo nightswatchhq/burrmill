@@ -1,22 +1,22 @@
-SAME  deployment_signal                  rows=14654   duck_ms=8      burrmill_ms=11     ratio=1.38
-SAME  open_allocations                   rows=6812    duck_ms=24     burrmill_ms=39     ratio=1.62
-SAME  port_queue                         rows=3943    duck_ms=30     burrmill_ms=52     ratio=1.73
-SAME  lodestar_allocations               rows=260828  duck_ms=298    burrmill_ms=242    ratio=0.81
-SAME  epoch_boundaries                   rows=269     duck_ms=18     burrmill_ms=34     ratio=1.89
+SAME  deployment_signal                  rows=14654   duck_ms=8      burrmill_ms=10     ratio=1.25
+SAME  open_allocations                   rows=6812    duck_ms=23     burrmill_ms=41     ratio=1.78
+SAME  port_queue                         rows=3943    duck_ms=30     burrmill_ms=51     ratio=1.70
+SAME  lodestar_allocations               rows=260828  duck_ms=304    burrmill_ms=238    ratio=0.78
+SAME  epoch_boundaries                   rows=269     duck_ms=18     burrmill_ms=20     ratio=1.11
 REGISTER-FAIL lodestar_epochs                    parse error: Parser Error: syntax error at or near "LEFT"
-SAME  lodestar_disputes                  rows=8       duck_ms=4      burrmill_ms=11     ratio=2.75
-SAME  lodestar_escrow_transactions       rows=77941   duck_ms=24     burrmill_ms=9      ratio=0.38
-SAME  lodestar_delegations               rows=608700  duck_ms=118    burrmill_ms=30     ratio=0.25
+SAME  lodestar_disputes                  rows=8       duck_ms=3      burrmill_ms=9      ratio=3.00
+SAME  lodestar_escrow_transactions       rows=77941   duck_ms=23     burrmill_ms=10     ratio=0.43
+SAME  lodestar_delegations               rows=608700  duck_ms=119    burrmill_ms=31     ratio=0.26
 REGISTER-FAIL lodestar_network_params            parse error: Parser Error: syntax error at or near "AS"
 REGISTER-FAIL lodestar_indexer_ledger            parse error: Parser Error: syntax error at or near "ON"
 REGISTER-FAIL lodestar_indexers                  no segments: Catalog Error: Table with name lodestar_indexer_ledger does not exist!
 REGISTER-FAIL lodestar_delegator_stakes          substrate error: Error during planning: Invalid function 'list_reduce'.
 REGISTER-FAIL lodestar_delegators                no segments: Catalog Error: Table with name lodestar_delegator_stakes does not exist!
-SAME  lodestar_curator_signals           rows=15821   duck_ms=267    burrmill_ms=110    ratio=0.41
-SAME  lodestar_curators                  rows=1825    duck_ms=14     burrmill_ms=14     ratio=1.00
-SAME  lodestar_provisions                rows=95      duck_ms=244    burrmill_ms=138    ratio=0.57
+SAME  lodestar_curator_signals           rows=15821   duck_ms=259    burrmill_ms=117    ratio=0.45
+SAME  lodestar_curators                  rows=1825    duck_ms=13     burrmill_ms=16     ratio=1.23
+SAME  lodestar_provisions                rows=95      duck_ms=246    burrmill_ms=136    ratio=0.55
 REGISTER-FAIL lodestar_network                   parse error: Parser Error: syntax error at or near "FOR"
-SAME  lodestar_deployments               rows=24833   duck_ms=487    burrmill_ms=150    ratio=0.31
+SAME  lodestar_deployments               rows=24833   duck_ms=492    burrmill_ms=135    ratio=0.27
 CHECK populations    burrmill=Ok(Array [Object {"deployments_ever_signalled": Number(14654), "still_signalled": Number(8382), "deployments_with_open_alloc": Number(6812)}]) duckdb=Ok(Array [Object {"deployments_ever_signalled": Number(14654), "still_signalled": Number(8382), "deployments_with_open_alloc": Number(6812)}])
 CHECK port-queue     burrmill=Ok(Array [Object {"unserved_signalled": Number(3943), "unserved_over_1000": Number(65), "largest_net_signal": Number(54336)}]) duckdb=Ok(Array [Object {"unserved_signalled": Number(3943), "unserved_over_1000": Number(65), "largest_net_signal": Number(54336)}])
 VIEWS	views=19	same=12	differing=0	failing=7	checks=0/2
