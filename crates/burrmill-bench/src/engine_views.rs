@@ -125,7 +125,48 @@ pub fn run(root: &str) -> anyhow::Result<()> {
         match (want, got) {
             (Ok(w), Ok(g)) if w == g => {
                 same += 1;
-                println!("SAME  {:<34} rows={:<7} duck_ms={duck_ms:<6} burrmill_ms={bm_ms}", v.name, w.len());
+                // Warm medians when asked: the parity run above is each side's first, cold, query.
+                let (duck_ms, bm_ms) = match std::env::var("TIMING").ok().and_then(|t| t.parse::<usize>().ok()) {
+                    Some(n) if n > 0 => {
+                        let median = |mut v: Vec<u128>| {
+                            v.sort_unstable();
+                            v[v.len() / 2]
+                        };
+                        let mut d = Vec::new();
+                        for _ in 0..n {
+                            let t = Instant::now();
+                            let mut stmt = conn.prepare(&sql)?;
+                            for b in stmt.query_arrow([])? {
+                                std::hint::black_box(b.num_rows());
+                            }
+                            d.push(t.elapsed().as_millis());
+                        }
+                        let e3 = std::sync::Arc::clone(&engine);
+                        let q = sql.clone();
+                        let b = std::thread::spawn(move || {
+                            (0..n)
+                                .map(|_| {
+                                    let t = Instant::now();
+                                    let _ = e3.sql_for_each(&q, |b| {
+                                        std::hint::black_box(b.num_rows());
+                                        Ok(())
+                                    });
+                                    t.elapsed().as_millis()
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .join()
+                        .expect("engine thread");
+                        (median(d), median(b))
+                    }
+                    _ => (duck_ms, bm_ms),
+                };
+                println!(
+                    "SAME  {:<34} rows={:<7} duck_ms={duck_ms:<6} burrmill_ms={bm_ms:<6} ratio={:.2}",
+                    v.name,
+                    w.len(),
+                    bm_ms as f64 / duck_ms.max(1) as f64
+                );
             }
             (Ok(w), Ok(g)) => {
                 diff += 1;
