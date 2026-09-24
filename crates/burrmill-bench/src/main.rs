@@ -270,7 +270,40 @@ async fn df_fold() -> anyhow::Result<()> {
     let mut all = Vec::new();
     let mut rows = 0usize;
     let mut digest = None;
-    if mode == "stock" {
+    if mode == "duck" {
+        // The incumbent, embedded as nuthatch embeds it, same thread budget, batches consumed and
+        // dropped as they arrive: the like-for-like of `STREAM=1`.
+        use std::hash::Hasher;
+        let conn = duckdb::Connection::open_in_memory()?;
+        conn.execute_batch(&format!("SET threads TO {};", burrmill::Limits::default().max_threads))?;
+        conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{dir}/*.parquet');"))?;
+        for _ in 0..repeats {
+            let t = Instant::now();
+            let mut stmt = conn.prepare(&sql)?;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            rows = 0;
+            for b in stmt.query_arrow([])? {
+                rows += b.num_rows();
+                if env_flag("PARITY") {
+                    use duckdb::arrow::array::{Array, StringArray};
+                    use std::hash::Hash;
+                    let utf8 = duckdb::arrow::datatypes::DataType::Utf8;
+                    let cols: Vec<_> = b
+                        .columns()
+                        .iter()
+                        .map(|c| duckdb::arrow::compute::cast(c, &utf8))
+                        .collect::<Result<_, _>>()?;
+                    let cols: Vec<&StringArray> =
+                        cols.iter().map(|c| c.as_any().downcast_ref().unwrap()).collect();
+                    for i in 0..b.num_rows() {
+                        cols.iter().for_each(|c| c.is_valid(i).then(|| c.value(i)).hash(&mut h));
+                    }
+                }
+            }
+            all.push(t.elapsed().as_millis());
+            digest = env_flag("PARITY").then(|| h.finish());
+        }
+    } else if mode == "stock" {
         let threads = burrmill::Limits::default().max_threads;
         let ctx = SessionContext::new_with_config(SessionConfig::new().with_target_partitions(threads));
         ctx.register_parquet("t", &dir, ParquetReadOptions::default()).await?;
