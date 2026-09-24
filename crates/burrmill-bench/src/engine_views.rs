@@ -275,3 +275,79 @@ pub fn analyze(root: &str, view: &str) -> anyhow::Result<()> {
     .join()
     .expect("analyze thread")
 }
+
+/// `engine-sql <nest> <sql-file>...`: each file's statement on both engines over the nest with its
+/// views, as a sorted row multiset in nuthatch's JSON, with warm medians of 5.
+pub fn sql_files(root: &str, files: &[String]) -> anyhow::Result<()> {
+    let nest = load_nest(Path::new(root))?;
+    let conn = duck(&nest)?;
+    for v in &nest.views {
+        let _ = conn.execute_batch(&v.text);
+    }
+    let root_owned = Path::new(root).to_path_buf();
+    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let engine = std::thread::spawn(move || -> anyhow::Result<_> {
+        let mut e = burrmill::Engine::open_nest(&root_owned)?;
+        for (n, b) in &views {
+            let _ = e.register_view(n, b);
+        }
+        Ok(e)
+    })
+    .join()
+    .expect("engine")?;
+    let engine = std::sync::Arc::new(engine);
+    let median = |mut v: Vec<u128>| {
+        v.sort_unstable();
+        v[v.len() / 2]
+    };
+    for f in files {
+        let sql = std::fs::read_to_string(f)?.trim().trim_end_matches(';').to_string();
+        let duck_rows = crate::encode_parity::nuthatch_rows(&conn, &sql).map(sorted_rows);
+        let duck_ms = match &duck_rows {
+            Ok(_) => median((0..5).map(|_| {
+                let t = Instant::now();
+                let mut s = conn.prepare(&sql).unwrap();
+                for b in s.query_arrow([]).unwrap() {
+                    std::hint::black_box(b.num_rows());
+                }
+                t.elapsed().as_millis()
+            }).collect()),
+            Err(_) => 0,
+        };
+        let e2 = std::sync::Arc::clone(&engine);
+        let q = sql.clone();
+        let (rows, ms) = std::thread::spawn(move || -> (Result<Vec<String>, String>, Vec<u128>) {
+            let rows = e2.sql(&q).map_err(|e| first_line(&e.to_string())).and_then(|bs| {
+                let mut r = Vec::new();
+                for b in &bs {
+                    r.extend(burrmill::df::encode::rows(b).map_err(|e| e.to_string())?);
+                }
+                Ok(sorted_rows(Value::Array(r)))
+            });
+            let ms = (0..5)
+                .map(|_| {
+                    let t = Instant::now();
+                    let _ = e2.sql_for_each(&q, |_| Ok(()));
+                    t.elapsed().as_millis()
+                })
+                .collect();
+            (rows, ms)
+        })
+        .join()
+        .expect("engine");
+        let digest = |r: &Vec<String>| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            r.hash(&mut h);
+            format!("{:016x}", h.finish())
+        };
+        println!(
+            "{f}\n  duckdb   {} ms={duck_ms}\n  burrmill {} ms={}",
+            match &duck_rows { Ok(r) => format!("rows={} digest={}", r.len(), digest(r)), Err(e) => format!("ERROR {}", first_line(&e.to_string())) },
+            match &rows { Ok(r) => format!("rows={} digest={}", r.len(), digest(r)), Err(e) => format!("ERROR {e}") },
+            median(ms)
+        );
+    }
+    std::thread::spawn(move || drop(engine)).join().expect("drop");
+    Ok(())
+}
