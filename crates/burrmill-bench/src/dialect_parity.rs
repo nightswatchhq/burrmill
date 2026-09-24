@@ -50,6 +50,8 @@ const CORPUS: &[&str] = &[
     "SELECT column_name, ordinal_position, is_nullable FROM information_schema.columns WHERE table_name = 'label' ORDER BY 2",
     "SELECT *, value_dec, \"from\" FROM transfer ORDER BY block_number, log_index",
     "SELECT 1 AS a, 2 AS a, block_number AS a FROM transfer ORDER BY 3",
+    "SELECT block_number - 1 AS a, COALESCE(block_number - log_index, 0) AS b, CASE WHEN log_index = 0 THEN 0 ELSE block_number END AS c, block_number * 2 + 1 AS d FROM transfer ORDER BY 1",
+    "SELECT t.\"from\", CAST(t.block_number / 10 AS BIGINT) AS block_number FROM transfer t ORDER BY t.block_number DESC",
     "SELECT max(\"from\") AS m FROM transfer",
     "SELECT (block_number, log_index) > (2, 0) AS gt FROM transfer ORDER BY block_number, log_index",
     "SELECT CAST(block_number AS UBIGINT) AS b FROM transfer ORDER BY 1 LIMIT 1",
@@ -120,7 +122,9 @@ pub fn run() -> anyhow::Result<()> {
     duck.execute_batch("SET TimeZone = 'UTC';")?;
     duck.execute_batch(&format!(
         "CREATE VIEW transfer AS SELECT *, TRY_CAST(\"value\" AS DECIMAL(38,0)) AS \"value_dec\", \
-         TRY_CAST(\"tokensRewards\" AS DECIMAL(38,0)) AS \"tokensRewards_dec\" \
+         (\"value\" IS NOT NULL AND TRY_CAST(\"value\" AS DECIMAL(38,0)) IS NULL) AS \"value_overflow\", \
+         TRY_CAST(\"tokensRewards\" AS DECIMAL(38,0)) AS \"tokensRewards_dec\", \
+         (\"tokensRewards\" IS NOT NULL AND TRY_CAST(\"tokensRewards\" AS DECIMAL(38,0)) IS NULL) AS \"tokensRewards_overflow\" \
          FROM read_parquet('{0}/transfer-*.parquet');
          CREATE VIEW label AS SELECT * FROM read_parquet('{0}/label-*.parquet');",
         segs.display()

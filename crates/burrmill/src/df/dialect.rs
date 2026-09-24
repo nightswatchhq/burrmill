@@ -181,9 +181,32 @@ fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
             sq::SelectItem::Wildcard(_) | sq::SelectItem::QualifiedWildcard(..)
         )
     });
+    // `ORDER BY s.x` beside `... AS x`: DuckDB sorts by the source column, DataFusion adds it to
+    // the projection and then refuses `s.x` beside `x` as ambiguous. The alias is suffixed instead.
+    let ordered: std::collections::HashSet<String> = match &q.order_by {
+        Some(sq::OrderBy {
+            kind: sq::OrderByKind::Expressions(items),
+            ..
+        }) => items
+            .iter()
+            .filter_map(|o| match &o.expr {
+                SqlExpr::CompoundIdentifier(v) => v.last().map(|i| i.value.to_lowercase()),
+                _ => None,
+            })
+            .collect(),
+        _ => Default::default(),
+    };
     let mut seen = std::collections::HashSet::new();
     let mut pos = 0usize;
     for (i, item) in sel.projection.iter_mut().enumerate() {
+        let collides = match item {
+            sq::SelectItem::ExprWithAlias { expr, alias } => {
+                ordered.contains(&alias.value.to_lowercase())
+                    && !matches!(expr, SqlExpr::CompoundIdentifier(v)
+                        if v.last().is_some_and(|l| l.value.eq_ignore_ascii_case(&alias.value)))
+            }
+            _ => false,
+        };
         let (key, display, bare) = match item {
             sq::SelectItem::UnnamedExpr(e) => match e {
                 SqlExpr::Identifier(id) => (id.value.to_lowercase(), id.value.clone(), true),
@@ -205,7 +228,7 @@ fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
             }
             _ => continue,
         };
-        let repeated = !seen.insert(key) || (wildcard && bare);
+        let repeated = !seen.insert(key) || (wildcard && bare) || collides;
         if repeated {
             let alias = sq::Ident::with_quote('"', format!("{display}{DUP}{pos}"));
             pos += 1;
@@ -607,7 +630,104 @@ fn as_bool(e: Expr) -> Expr {
     Expr::Cast(Cast::new(Box::new(e), DataType::Boolean))
 }
 
+/// DuckDB types an integer literal to fit the integer beside it (`UBIGINT - 1` stays UBIGINT);
+/// DataFusion widens such a pair to DECIMAL(20,0), which nuthatch prints as a string.
+fn fit_literal(e: Expr, to: &DataType) -> Expr {
+    match &e {
+        Expr::Literal(v, meta)
+            if v.data_type().is_integer() && to.is_integer() && v.data_type() != *to =>
+        {
+            match v.cast_to(to) {
+                Ok(c) if !c.is_null() => Expr::Literal(c, meta.clone()),
+                _ => e,
+            }
+        }
+        _ => e,
+    }
+}
+
+/// The one integer type among `types` that is not a bare literal, if there is exactly one.
+fn sole_integer(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType>> {
+    let mut found: Option<DataType> = None;
+    for e in exprs {
+        if matches!(e, Expr::Literal(..)) {
+            continue;
+        }
+        let t = e.get_type(schema)?;
+        if !t.is_integer() {
+            return Ok(None);
+        }
+        match &found {
+            Some(f) if *f != t => return Ok(None),
+            _ => found = Some(t),
+        }
+    }
+    Ok(found)
+}
+
 fn compare_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
+    let before = e.clone();
+    let t = compare_inner(e, schema)?;
+    if !t.transformed && t.data != before {
+        return Ok(Transformed::yes(t.data));
+    }
+    Ok(t)
+}
+
+fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
+    let e = match e {
+        Expr::BinaryExpr(BinaryExpr { left, op, right })
+            if matches!(
+                op,
+                Operator::Plus
+                    | Operator::Minus
+                    | Operator::Multiply
+                    | Operator::Modulo
+                    | Operator::Eq
+                    | Operator::NotEq
+                    | Operator::Lt
+                    | Operator::Gt
+                    | Operator::LtEq
+                    | Operator::GtEq
+            ) =>
+        {
+            let (lt, rt) = (left.get_type(schema)?, right.get_type(schema)?);
+            let (l, r) = match (left.as_ref(), right.as_ref()) {
+                (Expr::Literal(..), r) if !matches!(r, Expr::Literal(..)) => {
+                    (fit_literal(*left, &rt), *right)
+                }
+                (l, Expr::Literal(..)) if !matches!(l, Expr::Literal(..)) => {
+                    (*left, fit_literal(*right, &lt))
+                }
+                _ => (*left, *right),
+            };
+            Expr::BinaryExpr(BinaryExpr::new(Box::new(l), op, Box::new(r)))
+        }
+        Expr::Case(mut c) => {
+            let mut branches: Vec<&Expr> =
+                c.when_then_expr.iter().map(|(_, t)| t.as_ref()).collect();
+            if let Some(e) = &c.else_expr {
+                branches.push(e);
+            }
+            if let Some(t) = sole_integer(&branches, schema)? {
+                for (_, then) in c.when_then_expr.iter_mut() {
+                    **then = fit_literal(then.as_ref().clone(), &t);
+                }
+                if let Some(e) = c.else_expr.as_mut() {
+                    **e = fit_literal(e.as_ref().clone(), &t);
+                }
+            }
+            Expr::Case(c)
+        }
+        Expr::ScalarFunction(mut f) if f.func.name() == "coalesce" => {
+            let args: Vec<&Expr> = f.args.iter().collect();
+            if let Some(t) = sole_integer(&args, schema)? {
+                f.args = f.args.into_iter().map(|a| fit_literal(a, &t)).collect();
+            }
+            Expr::ScalarFunction(f)
+        }
+        e => e,
+    };
     match e {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             let (lt, rt) = (left.get_type(schema)?, right.get_type(schema)?);

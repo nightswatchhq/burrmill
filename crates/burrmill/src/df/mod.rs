@@ -185,28 +185,44 @@ fn plan_query(session: &MiniSession, sql: &str) -> Result<datafusion_expr::Logic
     rename(plan, &names)
 }
 
-/// DuckDB's default names on the unaliased columns, by position. Left alone when the count does
-/// not line up or the renamed set would repeat a name.
+/// DuckDB's default names on the unaliased columns, by position, and the private suffixes of
+/// `dialect` taken off wherever the plain name is unique. A name that stays repeated keeps its
+/// suffix until the result batches, which may repeat names where a plan may not.
 fn rename(plan: datafusion_expr::LogicalPlan, names: &[Option<String>]) -> Result<datafusion_expr::LogicalPlan> {
     use datafusion_expr::{Expr, LogicalPlanBuilder};
     let schema = plan.schema().clone();
-    if names.iter().all(Option::is_none) || names.len() != schema.fields().len() {
+    let n = schema.fields().len();
+    let by_position = names.len() == n;
+    let suffixed = schema.fields().iter().any(|f| f.name().contains(dialect::DUP));
+    if !suffixed && (!by_position || names.iter().all(Option::is_none)) {
         return Ok(plan);
     }
-    let finals: Vec<&str> = schema
-        .fields()
+    let wanted: Vec<String> = (0..n)
+        .map(|i| match names.get(i).filter(|_| by_position) {
+            Some(Some(name)) => name.clone(),
+            _ => schema.field(i).name().clone(),
+        })
+        .collect();
+    let base = |s: &str| s.split_once(dialect::DUP).map_or(s, |(b, _)| b).to_string();
+    let finals: Vec<String> = wanted
         .iter()
-        .zip(names)
-        .map(|(f, n)| n.as_deref().unwrap_or(f.name()))
+        .map(|w| {
+            let b = base(w);
+            let clash = wanted.iter().filter(|o| base(o) == b).count() > 1;
+            if clash { w.clone() } else { b }
+        })
         .collect();
     let mut seen = std::collections::HashSet::new();
-    if !finals.iter().all(|n| seen.insert(*n)) {
+    if !finals.iter().all(|f| seen.insert(f.as_str())) {
         return Ok(plan);
     }
-    let exprs: Vec<Expr> = (0..schema.fields().len())
+    if (0..n).all(|i| finals[i] == *schema.field(i).name()) {
+        return Ok(plan);
+    }
+    let exprs: Vec<Expr> = (0..n)
         .map(|i| {
             let col = Expr::Column(datafusion_common::Column::from(schema.qualified_field(i)));
-            if finals[i] == schema.field(i).name() { col } else { col.alias(finals[i]) }
+            if finals[i] == *schema.field(i).name() { col } else { col.alias(finals[i].as_str()) }
         })
         .collect();
     LogicalPlanBuilder::from(plan).project(exprs).and_then(|b| b.build()).map_err(df_err)
