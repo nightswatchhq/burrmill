@@ -103,7 +103,13 @@ impl Engine {
                 let dec: String = t
                     .wide
                     .iter()
-                    .map(|c| format!(", TRY_CAST(\"{c}\" AS DECIMAL(38,0)) AS \"{c}_dec\""))
+                    .map(|c| {
+                        format!(
+                            ", TRY_CAST(\"{c}\" AS DECIMAL(38,0)) AS \"{c}_dec\", \
+                             (\"{c}\" IS NOT NULL AND TRY_CAST(\"{c}\" AS DECIMAL(38,0)) IS NULL) \
+                             AS \"{c}_overflow\""
+                        )
+                    })
                     .collect();
                 let sql = format!("SELECT *{dec} FROM \"{raw}\"");
                 let logical = plan_query(&session, &sql)?;
@@ -114,6 +120,17 @@ impl Engine {
             .build_information_schema(|n| n.ends_with("__raw"))
             .map_err(df_err)?;
         Ok(Self { rt, session })
+    }
+
+    /// Define a view over the nest's tables and earlier views, as nuthatch defines its authored
+    /// ones: `body` is the query after `AS`.
+    pub fn register_view(&mut self, name: &str, body: &str) -> Result<()> {
+        let logical = plan_query(&self.session, body)?;
+        self.session
+            .register_table(name, Arc::new(ViewTable::new(logical, Some(body.to_string()))));
+        self.session
+            .build_information_schema(|n| n.ends_with("__raw"))
+            .map_err(df_err)
     }
 
     pub fn tables(&self) -> Vec<String> {

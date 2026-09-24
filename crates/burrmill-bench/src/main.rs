@@ -22,6 +22,7 @@
 mod df_views;
 mod dialect_parity;
 mod encode_parity;
+mod engine_views;
 mod error_parity;
 mod fixture;
 mod generate;
@@ -86,6 +87,9 @@ async fn main() -> anyhow::Result<()> {
         Some("encode-parity") => encode_parity::run(),
         Some("error-parity") => error_parity::run(),
         Some("dialect-parity") => dialect_parity::run(),
+        Some("engine-views") => engine_views::run(
+            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-views <nest>"))?,
+        ),
         Some("duck-keywords") => dialect_parity::duck_keywords(),
         Some("duck-names") => dialect_parity::duck_names(
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: duck-names <sql>"))?,

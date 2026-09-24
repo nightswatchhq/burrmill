@@ -442,14 +442,21 @@ fn checked_window_sum(
 
 /// True if `e` contains a `TRY_CAST` to an exact type or reads a tainted column.
 fn expr_lossy(e: &Expr, schema: &DFSchema, taint: &[bool]) -> bool {
-    e.exists(|x| {
-        Ok(match x {
-            Expr::TryCast(TryCast { field, .. }) => is_exact(field.data_type()),
-            Expr::Column(c) => schema.index_of_column(c).is_ok_and(|i| taint[i]),
-            _ => false,
-        })
-    })
-    .unwrap_or(true)
+    match e {
+        Expr::TryCast(TryCast { field, .. }) if is_exact(field.data_type()) => true,
+        Expr::Column(c) => schema.index_of_column(c).is_ok_and(|i| taint[i]),
+        // Whether a TRY_CAST came back NULL is an exact answer (nuthatch's `_overflow`), so taint
+        // does not pass through IS [NOT] NULL.
+        Expr::IsNull(_) | Expr::IsNotNull(_) => false,
+        e => {
+            let mut lossy = false;
+            let _ = e.apply_children(|c| {
+                lossy |= expr_lossy(c, schema, taint);
+                Ok(if lossy { TreeNodeRecursion::Stop } else { TreeNodeRecursion::Continue })
+            });
+            lossy
+        }
+    }
 }
 
 /// Per output column of `plan`: does it carry a lossy `TRY_CAST` value?

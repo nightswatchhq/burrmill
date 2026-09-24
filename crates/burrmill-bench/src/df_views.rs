@@ -62,32 +62,32 @@ const REPEATS: usize = 3;
 // ---------------------------------------------------------------------------------------------
 // The nest
 
-struct Table {
-    name: String,
-    schema: SchemaRef,
+pub(crate) struct Table {
+    pub(crate) name: String,
+    pub(crate) schema: SchemaRef,
     /// Path and size, from one `read_dir` pass. Empty for a declared table nothing has sealed.
-    files: Vec<(PathBuf, u64)>,
+    pub(crate) files: Vec<(PathBuf, u64)>,
     /// `word16`/`word32` columns, which nuthatch gives a `{col}_dec` companion at query time.
-    wide: Vec<String>,
+    pub(crate) wide: Vec<String>,
 }
 
-struct View {
-    name: String,
-    file: String,
+pub(crate) struct View {
+    pub(crate) name: String,
+    pub(crate) file: String,
     /// The statement as authored, for DuckDB and for the parity record.
-    text: String,
+    pub(crate) text: String,
     /// The body after `AS`, which is what a serving path runs.
-    body: String,
+    pub(crate) body: String,
 }
 
-struct Nest {
-    tables: Vec<Table>,
-    views: Vec<View>,
+pub(crate) struct Nest {
+    pub(crate) tables: Vec<Table>,
+    pub(crate) views: Vec<View>,
     /// Whether any view reads a `_dec` companion, so the base layer must synthesise them.
-    wants_dec: bool,
+    pub(crate) wants_dec: bool,
 }
 
-fn load_nest(root: &Path) -> anyhow::Result<Nest> {
+pub(crate) fn load_nest(root: &Path) -> anyhow::Result<Nest> {
     let mut by_table: BTreeMap<String, Vec<(PathBuf, u64)>> = BTreeMap::new();
     for e in std::fs::read_dir(root.join("segments"))?.flatten() {
         let p = e.path();
@@ -411,7 +411,7 @@ impl ParquetFileReaderFactory for PreparsedFactory {
 /// A table that is exactly a list of sealed files, sizes known, nothing to list.
 #[derive(Debug)]
 struct SegmentTable {
-    schema: SchemaRef,
+    pub(crate) schema: SchemaRef,
     files: Vec<PartitionedFile>,
     groups: usize,
     footers: Option<Arc<HashMap<String, Arc<ParquetMetaData>>>>,
@@ -752,7 +752,7 @@ fn first_line(s: &str) -> String {
 
 /// A view that ran on DataFusion with parity, kept so the diagnosis can run it again.
 struct Runnable {
-    name: String,
+    pub(crate) name: String,
     stmt: sq::Statement,
     duck_ms: u128,
     df_ms: u128,
