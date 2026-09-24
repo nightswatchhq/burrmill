@@ -35,13 +35,13 @@ use crate::error::{BurrmillError, Result};
 
 /// Parse with DuckDB's dialect and rewrite into what DataFusion plans. The result columns' DuckDB
 /// names come back too, taken from the statement as written, before any rewrite.
-pub fn parse(sql: &str) -> Result<(DfStatement, Vec<Option<String>>)> {
+pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String>>)> {
     let stmts = DFParser::parse_sql_with_dialect(sql, &DuckDbDialect {})
         .map_err(|e| BurrmillError::Parse(super::errors::restate(format!("SQL error: {e:?}"))))?;
     let Some(mut stmt) = stmts.into_iter().next() else {
         return Err(BurrmillError::Parse("empty statement".into()));
     };
-    let names = match &stmt {
+    let mut names = match &stmt {
         DfStatement::Statement(s) => match s.as_ref() {
             sq::Statement::Query(q) => super::names::default_names(q),
             _ => vec![],
@@ -49,6 +49,12 @@ pub fn parse(sql: &str) -> Result<(DfStatement, Vec<Option<String>>)> {
         _ => vec![],
     };
     if let DfStatement::Statement(s) = &mut stmt {
+        let mut known = known.clone();
+        let _ = sq::Visit::visit(s.as_ref(), &mut Aliases(&mut known));
+        let _ = sq::VisitMut::visit(s.as_mut(), &mut CaseFix(&known));
+        if let sq::Statement::Query(q) = s.as_mut() {
+            dedupe_output_names(q, &mut names);
+        }
         let mut rw = Rewriter { refused: None };
         let _ = sq::VisitMut::visit(s.as_mut(), &mut rw);
         if let Some(why) = rw.refused {
@@ -56,6 +62,182 @@ pub fn parse(sql: &str) -> Result<(DfStatement, Vec<Option<String>>)> {
         }
     }
     Ok((stmt, names))
+}
+
+/// Names a statement may refer to: the nest's tables and columns, and the statement's own aliases.
+/// DuckDB resolves identifiers without regard to case, quoted or not; DataFusion, as configured
+/// here, resolves them exactly.
+#[derive(Clone, Default)]
+pub struct Known {
+    exact: std::collections::HashSet<String>,
+    folded: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+}
+
+impl Known {
+    pub fn add(&mut self, name: &str) {
+        self.exact.insert(name.to_string());
+        self.folded
+            .entry(name.to_lowercase())
+            .or_default()
+            .insert(name.to_string());
+    }
+
+    /// An identifier written in another case than the one name it can mean, as that name.
+    fn resolve(&self, written: &str) -> Option<&str> {
+        if self.exact.contains(written) {
+            return None;
+        }
+        match self.folded.get(&written.to_lowercase()) {
+            Some(set) if set.len() == 1 => set.iter().next().map(String::as_str),
+            _ => None,
+        }
+    }
+}
+
+struct Aliases<'a>(&'a mut Known);
+
+impl sq::Visitor for Aliases<'_> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, q: &sq::Query) -> ControlFlow<()> {
+        for cte in q.with.iter().flat_map(|w| &w.cte_tables) {
+            self.alias(&cte.alias);
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_select(&mut self, s: &sq::Select) -> ControlFlow<()> {
+        for item in &s.projection {
+            if let sq::SelectItem::ExprWithAlias { alias, .. } = item {
+                self.0.add(&alias.value);
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_table_factor(&mut self, t: &sq::TableFactor) -> ControlFlow<()> {
+        match t {
+            sq::TableFactor::Table { alias: Some(a), .. }
+            | sq::TableFactor::Derived { alias: Some(a), .. } => self.alias(a),
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl Aliases<'_> {
+    fn alias(&mut self, a: &sq::TableAlias) {
+        self.0.add(&a.name.value);
+        for c in &a.columns {
+            self.0.add(&c.name.value);
+        }
+    }
+}
+
+struct CaseFix<'a>(&'a Known);
+
+impl CaseFix<'_> {
+    fn fix(&self, i: &mut sq::Ident) {
+        if let Some(name) = self.0.resolve(&i.value) {
+            i.value = name.to_string();
+        }
+    }
+}
+
+impl VisitorMut for CaseFix<'_> {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, e: &mut SqlExpr) -> ControlFlow<()> {
+        match e {
+            SqlExpr::Identifier(i) => self.fix(i),
+            SqlExpr::CompoundIdentifier(v) => v.iter_mut().for_each(|i| self.fix(i)),
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_relation(&mut self, r: &mut sq::ObjectName) -> ControlFlow<()> {
+        for part in &mut r.0 {
+            if let sq::ObjectNamePart::Identifier(i) = part {
+                self.fix(i);
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+/// Marks a private suffix on a repeated output name; [`strip_dup_suffix`] takes it off the result.
+pub const DUP: char = '\u{1}';
+
+/// DuckDB allows two result columns of one name (`SELECT *, value`); DataFusion's projection does
+/// not. Repeated top-level items get a private suffix here and lose it again on the result.
+fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
+    let sq::SetExpr::Select(sel) = q.body.as_mut() else {
+        return;
+    };
+    let wildcard = sel.projection.iter().any(|i| {
+        matches!(
+            i,
+            sq::SelectItem::Wildcard(_) | sq::SelectItem::QualifiedWildcard(..)
+        )
+    });
+    let mut seen = std::collections::HashSet::new();
+    let mut pos = 0usize;
+    for (i, item) in sel.projection.iter_mut().enumerate() {
+        let (key, display, bare) = match item {
+            sq::SelectItem::UnnamedExpr(e) => match e {
+                SqlExpr::Identifier(id) => (id.value.to_lowercase(), id.value.clone(), true),
+                SqlExpr::CompoundIdentifier(v) => {
+                    let last = v.last().map(|x| x.value.clone()).unwrap_or_default();
+                    (last.to_lowercase(), last, true)
+                }
+                e => {
+                    let shown = names
+                        .get(i)
+                        .cloned()
+                        .flatten()
+                        .unwrap_or_else(|| e.to_string());
+                    (e.to_string(), shown, false)
+                }
+            },
+            sq::SelectItem::ExprWithAlias { alias, .. } => {
+                (alias.value.to_lowercase(), alias.value.clone(), false)
+            }
+            _ => continue,
+        };
+        let repeated = !seen.insert(key) || (wildcard && bare);
+        if repeated {
+            let alias = sq::Ident::with_quote('"', format!("{display}{DUP}{pos}"));
+            pos += 1;
+            *item = match std::mem::replace(item, sq::SelectItem::Wildcard(Default::default())) {
+                sq::SelectItem::UnnamedExpr(expr) | sq::SelectItem::ExprWithAlias { expr, .. } => {
+                    sq::SelectItem::ExprWithAlias { expr, alias }
+                }
+                other => other,
+            };
+            if let Some(n) = names.get_mut(i) {
+                *n = None;
+            }
+        }
+    }
+}
+
+/// The result's field names without the suffixes [`dedupe_output_names`] added.
+pub fn strip_dup_suffix(b: arrow::record_batch::RecordBatch) -> arrow::record_batch::RecordBatch {
+    let schema = b.schema();
+    if !schema.fields().iter().any(|f| f.name().contains(DUP)) {
+        return b;
+    }
+    let fields: Vec<arrow::datatypes::FieldRef> = schema
+        .fields()
+        .iter()
+        .map(|f| match f.name().split_once(DUP) {
+            Some((n, _)) => Arc::new(f.as_ref().clone().with_name(n)),
+            None => Arc::clone(f),
+        })
+        .collect();
+    let schema = Arc::new(arrow::datatypes::Schema::new(fields));
+    arrow::record_batch::RecordBatch::try_new(schema, b.columns().to_vec()).expect("same columns")
 }
 
 struct Rewriter {

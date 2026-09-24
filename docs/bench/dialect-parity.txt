@@ -27,6 +27,14 @@ SAME   SELECT count(*) AS n FROM transfer WHERE enabled AND true
 SAME   SELECT count(*) AS n FROM transfer WHERE NOT enabled
 SAME   SELECT "tokensRewards" <> 5 AS ne FROM transfer ORDER BY 1
 SAME   SELECT CAST(value AS HUGEINT), block_number // 2, NOT (block_number > 2) FROM transfer ORDER BY 2
+SAME   SELECT "Value", VALUE, "TOKENSREWARDS", t."FROM", "Value" || 'x', sum(Block_Number) OVER () FROM Transfer t ORDER BY 1
+SAME   SELECT count(*) FROM TRANSFER T WHERE t.ENABLED = 'true'
+SAME   SELECT table_name FROM information_schema.tables WHERE NOT starts_with(table_name, '__hot_') ORDER BY table_name
+SAME   SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'transfer' ORDER BY ordinal_position
+SAME   SELECT table_catalog, table_schema, table_name, table_type FROM information_schema.tables ORDER BY 3
+SAME   SELECT column_name, ordinal_position, is_nullable FROM information_schema.columns WHERE table_name = 'label' ORDER BY 2
+SAME   SELECT *, value_dec, "from" FROM transfer ORDER BY block_number, log_index
+SAME   SELECT 1 AS a, 2 AS a, block_number AS a FROM transfer ORDER BY 3
 SAME   SELECT max("from") AS m FROM transfer
 SAME   SELECT (block_number, log_index) > (2, 0) AS gt FROM transfer ORDER BY block_number, log_index
 SAME   SELECT CAST(block_number AS UBIGINT) AS b FROM transfer ORDER BY 1 LIMIT 1
@@ -34,4 +42,4 @@ SAME   SELECT "tokensRewards" AS r FROM transfer ORDER BY 1
 SAME   SELECT t."to", l.name FROM transfer t LEFT JOIN label l ON l.addr = t."to" ORDER BY 1, 2
 SAME   SELECT count(DISTINCT "from") AS n FROM transfer
 SAME   SELECT "from" || ':' || CAST(block_number AS VARCHAR) AS k FROM transfer ORDER BY 1
-DIALECT	cases=36	differing=0
+DIALECT	cases=44	differing=0

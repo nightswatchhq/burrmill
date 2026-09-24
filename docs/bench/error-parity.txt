@@ -10,9 +10,9 @@ SAME   SELECT valu FROM token__transfer
 SAME   SELECT t.valu FROM token__transfer t
     duckdb   [unclassified] Binder Error: Values list "t" does not have a column named "valu"
     burrmill [unclassified] substrate error: Binder Error: Table "t" does not have a column named "valu" | Schema error: No field named t.valu. Did you mean 't.value'? | Valid fields are t.block_number, t.from, t.to, t.value, t.enabled.
-KNOWN (6.5: DuckDB quoted identifiers are case-insensitive)  SELECT "Value" FROM token__transfer
+SAME   SELECT "Value" FROM token__transfer
     duckdb   [unclassified] OK
-    burrmill [unknown-column(Value)] substrate error: Binder Error: Referenced column "Value" not found in FROM clause! | Schema error: No field named "Value". Did you mean 'token__transfer.value'? | Column names are case sensitive. You can use double quotes to refer to the token__transfer.value column or disable the datafusion.sql_parser.enable_ident_normalization configuration. | Valid fields are token__transfer.block_number, token__transfer.from, token__transfer.to, token__transfer.value, token__transfer.enabled.
+    burrmill [unclassified] OK
 SAME   SELECT from FROM token__transfer
     duckdb   [syntax] Parser Error: syntax error at or near "FROM"
     burrmill [syntax] parse error: Parser Error: syntax error at or near "from" | SQL error: SQL(ParserError("Expected an expression, found: from at Line: 1, Column: 13"), None)

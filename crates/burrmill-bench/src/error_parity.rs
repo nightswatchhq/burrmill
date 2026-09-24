@@ -57,10 +57,7 @@ fn classify(raw: &str) -> String {
 }
 
 /// Differences that are not error wording, with the roadmap item that owns them.
-const KNOWN: &[(&str, &str)] = &[
-    ("SELECT \"Value\" FROM token__transfer", "6.5: DuckDB quoted identifiers are case-insensitive"),
-    ("SELECT from FROM token__transfer", "6.7: sqlparser reads `from` as a table name, DuckDB as a syntax error"),
-];
+const KNOWN: &[(&str, &str)] = &[];
 
 const CASES: &[&str] = &[
     "SELECT * FROM nosuch",

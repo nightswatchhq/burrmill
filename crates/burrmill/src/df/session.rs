@@ -13,13 +13,13 @@ use datafusion_catalog::{
     MemorySchemaProvider, Session, TableProvider,
 };
 use datafusion_common::alias::AliasGenerator;
-use datafusion_common::display::{PlanType, ToStringifiedPlan};
 use datafusion_common::config::{ConfigOptions, TableOptions};
+use datafusion_common::display::{PlanType, ToStringifiedPlan};
 use datafusion_common::{DFSchema, Result as DFResult, TableReference, plan_datafusion_err};
-use datafusion_execution::config::SessionConfig;
-use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion_execution::TaskContext;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
+use datafusion_execution::config::SessionConfig;
+use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::planner::{ContextProvider, ExprPlanner};
@@ -55,6 +55,7 @@ pub struct MiniSession {
     window: HashMap<String, Arc<WindowUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     tables: HashMap<String, Arc<dyn TableSource>>,
+    information_schema: HashMap<String, Arc<dyn TableSource>>,
     analyzer: Analyzer,
     optimizer: Optimizer,
     physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
@@ -123,6 +124,7 @@ impl MiniSession {
             window,
             expr_planners,
             tables: HashMap::new(),
+            information_schema: HashMap::new(),
             // Checked sums change their output type, so coercion runs again after the rule.
             analyzer: Analyzer::with_rules(vec![
                 Arc::new(ResolveGroupingFunction::new()),
@@ -146,8 +148,88 @@ impl MiniSession {
         })
     }
 
+    /// `information_schema.tables` and `.columns` as DuckDB shows them to nuthatch's `.tables` and
+    /// `.schema`: the visible tables, all views, with DuckDB's type names. A subset of DuckDB's
+    /// columns, the ones those commands and a person reading them use.
+    pub fn build_information_schema(&mut self, hidden: impl Fn(&str) -> bool) -> DFResult<()> {
+        use arrow::array::{ArrayRef, Int32Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use datafusion_catalog::MemTable;
+
+        let mut names: Vec<&String> = self.tables.keys().filter(|n| !hidden(n)).collect();
+        names.sort();
+        let text = |v: Vec<String>| Arc::new(StringArray::from(v)) as ArrayRef;
+        let n = names.len();
+        let tschema = Arc::new(Schema::new(
+            ["table_catalog", "table_schema", "table_name", "table_type"]
+                .map(|c| Field::new(c, DataType::Utf8, false))
+                .to_vec(),
+        ));
+        let tables = RecordBatch::try_new(
+            Arc::clone(&tschema),
+            vec![
+                text(vec!["memory".into(); n]),
+                text(vec!["main".into(); n]),
+                text(names.iter().map(|s| s.to_string()).collect()),
+                text(vec!["VIEW".into(); n]),
+            ],
+        )?;
+        let (mut tn, mut cn, mut pos, mut nul, mut ty) = (vec![], vec![], vec![], vec![], vec![]);
+        for name in &names {
+            for (i, f) in self.tables[*name].schema().fields().iter().enumerate() {
+                tn.push(name.to_string());
+                cn.push(f.name().clone());
+                pos.push(i as i32 + 1);
+                nul.push(if f.is_nullable() { "YES" } else { "NO" }.to_string());
+                ty.push(super::errors::duck_type(&f.data_type().to_string()));
+            }
+        }
+        let m = tn.len();
+        let cschema = Arc::new(Schema::new(vec![
+            Field::new("table_catalog", DataType::Utf8, false),
+            Field::new("table_schema", DataType::Utf8, false),
+            Field::new("table_name", DataType::Utf8, false),
+            Field::new("column_name", DataType::Utf8, false),
+            Field::new("ordinal_position", DataType::Int32, false),
+            Field::new("is_nullable", DataType::Utf8, false),
+            Field::new("data_type", DataType::Utf8, false),
+        ]));
+        let columns = RecordBatch::try_new(
+            Arc::clone(&cschema),
+            vec![
+                text(vec!["memory".into(); m]),
+                text(vec!["main".into(); m]),
+                text(tn),
+                text(cn),
+                Arc::new(Int32Array::from(pos)),
+                text(nul),
+                text(ty),
+            ],
+        )?;
+        for (name, schema, batch) in [("tables", tschema, tables), ("columns", cschema, columns)] {
+            let t = MemTable::try_new(schema, vec![vec![batch]])?;
+            self.information_schema
+                .insert(name.into(), provider_as_source(Arc::new(t)));
+        }
+        Ok(())
+    }
+
     pub fn register_table(&mut self, name: &str, table: Arc<dyn TableProvider>) {
-        self.tables.insert(name.to_string(), provider_as_source(table));
+        self.tables
+            .insert(name.to_string(), provider_as_source(table));
+    }
+
+    /// Every table and column name, for resolving identifiers as DuckDB does.
+    pub fn known_names(&self) -> super::dialect::Known {
+        let mut k = super::dialect::Known::default();
+        for (name, t) in &self.tables {
+            k.add(name);
+            for f in t.schema().fields() {
+                k.add(f.name());
+            }
+        }
+        k
     }
 
     pub fn table_names(&self) -> Vec<String> {
@@ -232,7 +314,11 @@ impl FunctionRegistry for MiniSession {
 
 impl ContextProvider for MiniSession {
     fn get_table_source(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
-        self.tables
+        let tables = match name.schema() {
+            Some(s) if s.eq_ignore_ascii_case("information_schema") => &self.information_schema,
+            _ => &self.tables,
+        };
+        tables
             .get(name.table())
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("no table {name}"))
@@ -302,13 +388,17 @@ impl Session for MiniSession {
             e.plan.as_ref().clone(),
             self.config.options().as_ref(),
             |p, rule| {
-                let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name: rule.name().into() };
+                let plan_type = PlanType::AnalyzedLogicalPlan {
+                    analyzer_name: rule.name().into(),
+                };
                 stringified_plans.push(p.to_stringified(plan_type));
             },
         )?;
         stringified_plans.push(analyzed.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
         let optimized = self.optimizer.optimize(analyzed, self, |p, rule| {
-            let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name: rule.name().into() };
+            let plan_type = PlanType::OptimizedLogicalPlan {
+                optimizer_name: rule.name().into(),
+            };
             stringified_plans.push(p.to_stringified(plan_type));
         })?;
         Ok(LogicalPlan::Explain(Explain {

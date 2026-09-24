@@ -156,7 +156,7 @@ fn print(e: &Expr) -> Option<String> {
             format!("{f}({} AS {})", print(expr)?, ty(data_type)?)
         }
         Expr::Function(f) => {
-            if f.over.is_some() || !f.within_group.is_empty() {
+            if !f.within_group.is_empty() {
                 return None;
             }
             let name = f.name.0.last()?.as_ident()?.value.to_ascii_lowercase();
@@ -195,10 +195,53 @@ fn print(e: &Expr) -> Option<String> {
             if let Some(filter) = &f.filter {
                 out.push_str(&format!(" FILTER (WHERE {})", print(filter)?));
             }
+            if let Some(over) = &f.over {
+                out.push_str(&format!(" OVER ({})", window(over)?));
+            }
             out
         }
         _ => return None,
     })
+}
+
+/// A window specification as DuckDB prints it: `PARTITION BY`, then `ORDER BY` with `DESC` shown
+/// and `ASC` only beside an explicit `NULLS`, then the frame as written.
+fn window(w: &sqlparser::ast::WindowType) -> Option<String> {
+    let sqlparser::ast::WindowType::WindowSpec(spec) = w else {
+        return None;
+    };
+    if spec.window_name.is_some() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if !spec.partition_by.is_empty() {
+        let p: Option<Vec<String>> = spec.partition_by.iter().map(print).collect();
+        parts.push(format!("PARTITION BY {}", p?.join(", ")));
+    }
+    if !spec.order_by.is_empty() {
+        let mut items = Vec::new();
+        for o in &spec.order_by {
+            let mut item = print(&o.expr)?;
+            match (o.options.asc, o.options.nulls_first) {
+                (None, None) => {}
+                (Some(false), None) => item.push_str(" DESC"),
+                (asc, Some(nf)) => {
+                    item.push_str(if asc == Some(false) { " DESC" } else { " ASC" });
+                    item.push_str(if nf { " NULLS FIRST" } else { " NULLS LAST" });
+                }
+                (Some(true), None) => return None,
+            }
+            items.push(item);
+        }
+        parts.push(format!("ORDER BY {}", items.join(", ")));
+    }
+    if let Some(frame) = &spec.window_frame {
+        parts.push(match &frame.end_bound {
+            Some(end) => format!("{} BETWEEN {} AND {end}", frame.units, frame.start_bound),
+            None => format!("{} {}", frame.units, frame.start_bound),
+        });
+    }
+    Some(parts.join(" "))
 }
 
 /// The name DuckDB gives each result column of `q`, where this knows it; `None` for an aliased
@@ -289,5 +332,26 @@ mod tests {
         let mut want: Vec<Option<String>> = want.iter().map(|s| Some(s.to_string())).collect();
         want.extend([None, None, None]);
         assert_eq!(got, want);
+
+        let got = names(
+            r#"SELECT sum(block_number) OVER (), sum(block_number) OVER (PARTITION BY "from"),
+                      row_number() OVER (ORDER BY block_number DESC),
+                      lag(block_number) OVER (PARTITION BY "from" ORDER BY block_number),
+                      sum(block_number) OVER (ORDER BY block_number ROWS BETWEEN 1 PRECEDING AND CURRENT ROW),
+                      rank() OVER (PARTITION BY "from", "to" ORDER BY block_number, log_index ASC NULLS FIRST)
+               FROM t"#,
+        );
+        let want = [
+            "sum(block_number) OVER ()",
+            "sum(block_number) OVER (PARTITION BY \"from\")",
+            "row_number() OVER (ORDER BY block_number DESC)",
+            "lag(block_number) OVER (PARTITION BY \"from\" ORDER BY block_number)",
+            "sum(block_number) OVER (ORDER BY block_number ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+            "rank() OVER (PARTITION BY \"from\", \"to\" ORDER BY block_number, log_index ASC NULLS FIRST)",
+        ];
+        assert_eq!(
+            got,
+            want.iter().map(|s| Some(s.to_string())).collect::<Vec<_>>()
+        );
     }
 }

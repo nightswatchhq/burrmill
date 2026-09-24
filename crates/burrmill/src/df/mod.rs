@@ -110,6 +110,9 @@ impl Engine {
                 session.register_table(&t.name, Arc::new(ViewTable::new(logical, Some(sql))));
             }
         }
+        session
+            .build_information_schema(|n| n.ends_with("__raw"))
+            .map_err(df_err)?;
         Ok(Self { rt, session })
     }
 
@@ -124,7 +127,8 @@ impl Engine {
         refuse_non_query(sql)?;
         self.rt.block_on(async {
             let physical = self.session.create_physical_plan(&logical).await.map_err(df_err)?;
-            collect(physical, self.session.task_ctx()).await.map_err(df_err)
+            let batches = collect(physical, self.session.task_ctx()).await.map_err(df_err)?;
+            Ok(batches.into_iter().map(dialect::strip_dup_suffix).collect())
         })
     }
 }
@@ -148,7 +152,7 @@ impl Engine {
             let mut stream = datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
                 .map_err(df_err)?;
             while let Some(b) = stream.next().await {
-                f(b.map_err(df_err)?)?;
+                f(dialect::strip_dup_suffix(b.map_err(df_err)?))?;
             }
             Ok(())
         })
@@ -156,7 +160,7 @@ impl Engine {
 }
 
 fn plan_query(session: &MiniSession, sql: &str) -> Result<datafusion_expr::LogicalPlan> {
-    let (stmt, names) = dialect::parse(sql)?;
+    let (stmt, names) = dialect::parse(sql, &session.known_names())?;
     refuse_df_statement(&stmt)?;
     refuse_wide_literals(&stmt)?;
     let planner = SqlToRel::new(session);

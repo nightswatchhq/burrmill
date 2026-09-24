@@ -4,6 +4,29 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.5 closed — identifiers without case, `information_schema`, repeated names — 2026-09-24
+
+- **Identifiers resolve without regard to case, quoted or not, as DuckDB resolves them.** Before
+  planning, an identifier with no exact match is rewritten to the one table, column or alias it
+  matches ignoring case. An ambiguous one is left for DataFusion to reject. Result names follow
+  DuckDB: a bare column takes the catalogue's case (`"Value"` → `value`), and a column inside an
+  expression keeps its case as written.
+- **`information_schema.tables` and `.columns`**, as nuthatch's `.tables` and `.schema` read them:
+  catalogue `memory`, schema `main`, every table a `VIEW` as nuthatch's are, DuckDB's type names,
+  and the `__raw` tables behind `_dec` hidden. This is a subset of DuckDB's columns (4 of 13, 7 of
+  46): the ones those commands use.
+- **Repeated result names** (`SELECT *, value_dec`, `SELECT 1 AS a, 2 AS a`), which DuckDB allows
+  and DataFusion's projection refuses. Repeated items get a private suffix before planning, and
+  lose it on the result.
+- **Window functions** are named as DuckDB names them. The names unit test grows to 34, every
+  string taken from DuckDB.
+
+`dialect-parity` **44/44** (39 byte-identical, 5 refused by both). `error-parity` has no known
+differences left: case-insensitive names closed the last one, and the DuckDB dialect had already
+closed `SELECT from FROM t`.
+
+---
+
 ## 6.5 — DuckDB's dialect, measured statement by statement — 2026-09-24
 
 `burrmill-bench dialect-parity` runs 36 statements, drawn from the census's most common
