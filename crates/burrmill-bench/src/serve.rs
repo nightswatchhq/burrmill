@@ -256,6 +256,9 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
 /// cycles through every view that both engines answer identically, starting at its own offset.
 /// DuckDB is its fair best here, one connection per client; Burrmill is one shared `Engine`.
 pub fn run_views(root: &str) -> anyhow::Result<()> {
+    // ARMS=duck or ARMS=engine runs one engine alone, so the process's peak RSS is that engine's.
+    let arms = std::env::var("ARMS").unwrap_or_else(|_| "duck,engine".into());
+    let arm = |a: &str| arms.split(',').any(|x| x.trim() == a);
     let secs: f64 = std::env::var("SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(5.0);
     let counts: Vec<usize> = std::env::var("CLIENTS")
         .unwrap_or_else(|_| "1,2,4,8,16,32".into())
@@ -287,7 +290,12 @@ pub fn run_views(root: &str) -> anyhow::Result<()> {
                 Ok(n)
             }));
         }
-        report(n, "duck_multi", &drive(secs, runners));
+        if arm("duck") {
+            report(n, "duck_multi", &drive(secs, runners));
+        }
+        if !arm("engine") {
+            continue;
+        }
         let runners: Vec<Runner> = (0..n)
             .map(|c| {
                 let e = Arc::clone(&engine);
