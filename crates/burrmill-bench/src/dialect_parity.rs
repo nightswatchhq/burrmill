@@ -120,6 +120,8 @@ const CORPUS: &[&str] = &[
     "SELECT regexp_extract(value, '[0-9]{2}') AS a, regexp_matches(\"from\", '(?i)0XA') AS b, regexp_replace(value, '0', 'z', 'g') AS c, regexp_replace(value, '(1)', '\\1\\1') AS d, regexp_replace(value, '^1', '\\2') AS e FROM transfer ORDER BY block_number, log_index",
     "SELECT sign(CAST(block_number AS BIGINT) - 3) AS a, sign(-2.5) AS b, NULLIF(block_number, 2) AS c FROM transfer ORDER BY block_number, log_index",
     "SELECT 1 AS a ORDER BY 'x'",
+    "SELECT (SELECT count(DISTINCT addr) FROM label) AS n_all, (SELECT count(DISTINCT addr) FROM label WHERE addr NOT IN (SELECT \"to\" AS addr FROM transfer WHERE log_index > 0)) AS n_active",
+    "SELECT \"from\", \"from\" IN (SELECT \"to\" FROM transfer) AS bare_outer, t.\"from\" IN (SELECT \"to\" FROM transfer) AS qualified FROM transfer t ORDER BY block_number, log_index",
     "SELECT 7.5::DOUBLE // 2 AS a, -7.5::DOUBLE // 2 AS b, 7::DOUBLE // 0 AS c, CAST(7 AS BIGINT) // 2.0::DOUBLE AS f, 1.5 // 1 AS g, block_number // 2.5 AS h FROM transfer ORDER BY block_number, log_index",
     "SELECT \"from\", bool_and(enabled = 'true') AS a, count(value = '10') AS b, bool_or('10' = value) AS c, bool_or(\"from\" = \"to\") AS d FROM transfer GROUP BY 1 ORDER BY 1",
     "SELECT \"from\", count(DISTINCT CASE WHEN \"to\" <> \"from\" THEN \"to\" ELSE '0xz' END) AS d, count(*) AS n FROM transfer GROUP BY 1 ORDER BY 1",

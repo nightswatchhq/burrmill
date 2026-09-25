@@ -258,18 +258,104 @@ pub fn predicates_as_counts(q: &mut Query) {
         return;
     };
     hoist_from_aggregates(s);
+    let outer = single_qualifier(s);
     for item in s.projection.iter_mut() {
         let e = match item {
             SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => e,
             _ => continue,
         };
-        let _ = sq::visit_expressions_mut(e, |x| {
-            if let Some(n) = as_counts(x) {
+        at_this_level(e, &mut |x| {
+            if let Some(n) = as_counts(x, outer.as_ref()) {
                 *x = n;
             }
-            std::ops::ControlFlow::<()>::Continue(())
         });
     }
+}
+
+/// The one relation a SELECT reads, by the name its columns are qualified with.
+fn single_qualifier(s: &Select) -> Option<Ident> {
+    let [TableWithJoins { relation, joins }] = s.from.as_slice() else {
+        return None;
+    };
+    if !joins.is_empty() {
+        return None;
+    }
+    match relation {
+        TableFactor::Table { alias: Some(a), .. } | TableFactor::Derived { alias: Some(a), .. } => Some(a.name.clone()),
+        TableFactor::Table { name, alias: None, args: None, .. } => match name.0.last()? {
+            sq::ObjectNamePart::Identifier(i) => Some(i.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `x` with each bare column qualified by the outer query's one relation.
+fn qualified(x: &Expr, outer: &Ident) -> Expr {
+    let mut x = x.clone();
+    at_this_level(&mut x, &mut |e| {
+        if let Expr::Identifier(i) = e {
+            *e = Expr::CompoundIdentifier(vec![outer.clone(), i.clone()]);
+        }
+    });
+    x
+}
+
+/// Calls `f` on every expression of `e` that is not inside a nested query: a predicate in a nested
+/// query's `WHERE` is that query's, and DataFusion plans it there.
+fn at_this_level(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
+    struct Level<'a> {
+        depth: usize,
+        f: &'a mut dyn FnMut(&mut Expr),
+    }
+    impl sq::VisitorMut for Level<'_> {
+        type Break = ();
+        fn pre_visit_query(&mut self, _q: &mut Query) -> std::ops::ControlFlow<()> {
+            self.depth += 1;
+            std::ops::ControlFlow::Continue(())
+        }
+        fn post_visit_query(&mut self, _q: &mut Query) -> std::ops::ControlFlow<()> {
+            self.depth -= 1;
+            std::ops::ControlFlow::Continue(())
+        }
+        fn post_visit_expr(&mut self, e: &mut Expr) -> std::ops::ControlFlow<()> {
+            if self.depth == 0 {
+                (self.f)(e);
+            }
+            std::ops::ControlFlow::Continue(())
+        }
+    }
+    let _ = sq::VisitMut::visit(e, &mut Level { depth: 0, f });
+}
+
+/// `x` can move into the subquery's `WHERE` without changing what it names: every column in it
+/// qualified, by a name the subquery does not bind itself. `x IN (SELECT id FROM t)` with a bare
+/// outer `id` would otherwise compare the inner `id` with itself.
+fn movable(x: &Expr, sub: &Select) -> bool {
+    let mut bound = std::collections::HashSet::new();
+    let _ = sq::visit_relations(&sub.from, |r| {
+        if let Some(sq::ObjectNamePart::Identifier(i)) = r.0.last() {
+            bound.insert(i.value.to_lowercase());
+        }
+        std::ops::ControlFlow::<()>::Continue(())
+    });
+    for t in &sub.from {
+        for f in std::iter::once(&t.relation).chain(t.joins.iter().map(|j| &j.relation)) {
+            if let TableFactor::Table { alias: Some(a), .. } | TableFactor::Derived { alias: Some(a), .. } = f {
+                bound.insert(a.name.value.to_lowercase());
+            }
+        }
+    }
+    let mut ok = true;
+    let _ = sq::visit_expressions(x, |e| {
+        match e {
+            Expr::Identifier(_) | Expr::Subquery(_) | Expr::Exists { .. } | Expr::InSubquery { .. } => ok = false,
+            Expr::CompoundIdentifier(v) if v.len() < 2 || bound.contains(&v[v.len() - 2].value.to_lowercase()) => ok = false,
+            _ => {}
+        }
+        std::ops::ControlFlow::<()>::Continue(())
+    });
+    ok
 }
 
 /// A subquery predicate inside an aggregate (`bool_and(x IN (SELECT ...))`) cannot be decorrelated
@@ -295,21 +381,21 @@ fn hoist_from_aggregates(s: &mut Select) {
     };
     let mut hoisted: Vec<(String, Expr)> = Vec::new();
     let mut take = |e: &mut Expr| {
-        let _ = sq::visit_expressions_mut(e, |x| {
+        at_this_level(e, &mut |x| {
             if let Expr::Function(f) = x
                 && f.over.is_none()
                 && AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str())
             {
-                let _ = sq::visit_expressions_mut(f, |y| {
+                let mut inner = Expr::Function(f.clone());
+                at_this_level(&mut inner, &mut |y| {
                     if matches!(y, Expr::Exists { .. } | Expr::InSubquery { .. }) {
                         let name = format!("__burrmill_pred{}", hoisted.len());
                         let col = Expr::CompoundIdentifier(vec![qualifier.clone(), Ident::new(&name)]);
                         hoisted.push((name, std::mem::replace(y, col)));
                     }
-                    std::ops::ControlFlow::<()>::Continue(())
                 });
+                *x = inner;
             }
-            std::ops::ControlFlow::<()>::Continue(())
         });
     };
     for item in s.projection.iter_mut() {
@@ -432,7 +518,7 @@ fn cmp(a: Expr, op: sq::BinaryOperator, n: i64) -> Expr {
     Expr::BinaryOp { left: Box::new(a), op, right: Box::new(Expr::Value(sq::Value::Number(n.to_string(), false).into())) }
 }
 
-fn as_counts(x: &Expr) -> Option<Expr> {
+fn as_counts(x: &Expr, outer: Option<&Ident>) -> Option<Expr> {
     use sq::BinaryOperator::{Eq, Gt};
     match x {
         Expr::Exists { subquery, negated } => {
@@ -444,7 +530,14 @@ fn as_counts(x: &Expr) -> Option<Expr> {
             let [SelectItem::UnnamedExpr(y) | SelectItem::ExprWithAlias { expr: y, .. }] = s.projection.as_slice() else {
                 return None;
             };
-            let (x, y) = (nested(expr.as_ref().clone()), nested(y.clone()));
+            let expr = match outer {
+                Some(o) => qualified(expr, o),
+                None => expr.as_ref().clone(),
+            };
+            if !movable(&expr, s) {
+                return None;
+            }
+            let (x, y) = (nested(expr), nested(y.clone()));
             let lit = |b: Option<bool>| {
                 Expr::Value(match b {
                     Some(b) => sq::Value::Boolean(b),
