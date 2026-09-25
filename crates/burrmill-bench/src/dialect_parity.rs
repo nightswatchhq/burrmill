@@ -107,6 +107,12 @@ const CORPUS: &[&str] = &[
     "SELECT n AS x FROM (VALUES (1), (1), (1), (NULL), (NULL), (2)) t(n) INTERSECT ALL SELECT n FROM (VALUES (1), (1), (NULL), (3)) u(n) ORDER BY 1",
     "SELECT n AS x FROM (VALUES (1), (1), (1), (NULL), (NULL), (2)) t(n) EXCEPT ALL SELECT n FROM (VALUES (1), (NULL), (3)) u(n) ORDER BY 1",
     "SELECT DISTINCT \"to\" AS x FROM transfer EXCEPT ALL SELECT \"from\" FROM transfer ORDER BY 1",
+    "SELECT 32 AS x FROM transfer EXCEPT ALL SELECT CAST(log_index AS BIGINT) * block_number FROM transfer ORDER BY 1",
+    "SELECT log_index AS x FROM transfer EXCEPT SELECT greatest(log_index, CAST(block_number AS BIGINT)) FROM transfer ORDER BY 1",
+    "SELECT log_index AS x FROM transfer INTERSECT SELECT 1.5 ORDER BY 1",
+    "SELECT log_index FROM transfer WHERE CASE WHEN block_number < -16 THEN 48 ELSE log_index END < (block_number - 95)",
+    "SELECT log_index FROM transfer WHERE block_number - 95 > 0",
+    "SELECT block_number - 95 AS d FROM transfer",
     "SELECT length('héllo') AS a, char_length('ab') AS b, length(\"from\") AS c FROM transfer ORDER BY block_number, log_index",
     "SELECT count(*) AS n FROM (SELECT * FROM transfer x JOIN transfer y ON x.block_number = y.block_number)",
     "WITH j AS (SELECT * FROM label a JOIN label b ON a.addr = b.addr) SELECT addr_1, name_1 FROM j ORDER BY 1",
@@ -117,7 +123,11 @@ const CORPUS: &[&str] = &[
 ];
 
 /// Differences that stand, and why.
-const KNOWN: &[(&str, &str)] = &[];
+const KNOWN: &[(&str, &str)] = &[(
+    "SELECT log_index FROM transfer WHERE block_number - 95 > 0",
+    "DuckDB rewrites x - 95 > 0 to x > 95 before evaluating, so its UBIGINT underflow never happens; \
+     Burrmill evaluates what was written and refuses. Which overflows surface is the optimiser's",
+)];
 
 fn fixture(root: &std::path::Path) -> anyhow::Result<()> {
     let segs = root.join("segments");

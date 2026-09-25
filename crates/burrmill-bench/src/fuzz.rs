@@ -313,6 +313,42 @@ impl Gen<'_> {
     }
 }
 
+/// `sql` with each `TRY_CAST(... AS <64-bit or narrower integer>)` widened to HUGEINT: DuckDB's
+/// answer had those casts not dropped what did not fit, which is what Burrmill's exact sums give.
+fn widened(sql: &str) -> Option<String> {
+    let mut out = String::with_capacity(sql.len());
+    let mut rest = sql;
+    let mut changed = false;
+    while let Some(i) = rest.find("TRY_CAST(") {
+        out.push_str(&rest[..i + 9]);
+        rest = &rest[i + 9..];
+        let mut depth = 0usize;
+        let mut end = None;
+        for (j, c) in rest.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' if depth == 0 => {
+                    end = Some(j);
+                    break;
+                }
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        let j = end?;
+        let inner = &rest[..j];
+        let widened = ["BIGINT", "INTEGER", "SMALLINT", "UBIGINT"]
+            .iter()
+            .find_map(|t| inner.strip_suffix(&format!(" AS {t}")))
+            .map(|body| format!("{body} AS HUGEINT"));
+        changed |= widened.is_some();
+        out.push_str(widened.as_deref().unwrap_or(inner));
+        rest = &rest[j..];
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
 fn duck_rows(conn: &duckdb::Connection, sql: &str) -> Result<Vec<String>, String> {
     match crate::encode_parity::nuthatch_rows(conn, sql) {
         Ok(Value::Array(rows)) => Ok(rows.iter().map(|r| r.to_string()).collect()),
@@ -351,7 +387,7 @@ pub fn run() -> anyhow::Result<()> {
     let engine = std::thread::spawn(move || burrmill::Engine::open_segments(&s2)).join().expect("open")?;
     let engine = Arc::new(engine);
 
-    let (mut same, mut both, mut stricter, mut looser, mut differ, mut designed) = (0, 0, 0, 0, 0, 0);
+    let (mut same, mut both, mut stricter, mut looser, mut differ, mut designed, mut overflow_order, mut designed_exact) = (0, 0, 0, 0, 0, 0, 0, 0);
     let mut stricter_why: std::collections::BTreeMap<String, usize> = Default::default();
     for i in 0..cases {
         let case_seed = seed + i as u64;
@@ -368,9 +404,21 @@ pub fn run() -> anyhow::Result<()> {
                     w.sort();
                     g.sort();
                 }
+                let exact = || {
+                    let alt = widened(&sql).and_then(|q| duck_rows(&duck, &q).ok());
+                    alt.is_some_and(|mut a| {
+                        if !ordered {
+                            a.sort();
+                        }
+                        a == g
+                    })
+                };
                 if w == g {
                     same += 1;
                     "SAME"
+                } else if exact() {
+                    designed_exact += 1;
+                    "DESIGNED-EXACT"
                 } else {
                     differ += 1;
                     "DIFF"
@@ -379,6 +427,12 @@ pub fn run() -> anyhow::Result<()> {
             (Err(_), Err(_)) => {
                 both += 1;
                 "BOTH-REFUSE"
+            }
+            // One engine overflowed where the other, having rewritten or skipped the arithmetic,
+            // did not: which overflows surface is each optimiser's, and neither answer is wrong.
+            (Ok(_), Err(e)) | (Err(e), Ok(_)) if e.contains("verflow") => {
+                overflow_order += 1;
+                "OVERFLOW-ORDER"
             }
             // The checked rule's refusals of a sum or bound that DuckDB would compute by dropping
             // values that did not fit: the 6.3 design, not a gap.
@@ -418,7 +472,7 @@ pub fn run() -> anyhow::Result<()> {
         println!("  {n:>5}  {k}");
     }
     println!(
-        "FUZZ\tseed={seed}\tcases={cases}\tsame={same}\tboth_refuse={both}\tdesigned_refusal={designed}\tstricter={stricter}\tlooser={looser}\tdiffer={differ}"
+        "FUZZ\tseed={seed}\tcases={cases}\tsame={same}\tboth_refuse={both}\tdesigned_refusal={designed}\tdesigned_exact={designed_exact}\toverflow_order={overflow_order}\tstricter={stricter}\tlooser={looser}\tdiffer={differ}"
     );
     std::thread::spawn(move || drop(engine)).join().expect("drop engine");
     Ok(())

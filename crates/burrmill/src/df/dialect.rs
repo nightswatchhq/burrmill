@@ -877,7 +877,17 @@ fn set_op_types(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
         .fields()
         .iter()
         .zip(rs.fields())
-        .map(|(l, r)| duck_union(l.data_type(), r.data_type()).filter(|t| t != l.data_type()))
+        .map(|(l, r)| {
+            let (l, r) = (l.data_type(), r.data_type());
+            // Beside a DECIMAL (HUGEINT here) or a float, DataFusion's union type is DuckDB's too.
+            duck_union(l, r)
+                .or_else(|| {
+                    (numeric(l) && numeric(r))
+                        .then(|| datafusion_expr::type_coercion::binary::type_union_resolution(&[l.clone(), r.clone()]))
+                        .flatten()
+                })
+                .filter(|t| t != l)
+        })
         .collect();
     let bag = !matches!(j.left.as_ref(), LogicalPlan::Distinct(_));
     if types.iter().all(Option::is_none) && !bag {
