@@ -202,7 +202,12 @@ roundings, both found by measuring DuckDB rather than reading it:
 
 - ~~**`lodestar_epochs`, 1.92x.**~~ Range joins, above: 0.5x.
 - Planning is quadratic in expression depth (a 32-term sum: 66 ms). DataFusion recomputes a type
-  from the whole subtree whenever asked; the analyzer passes ask at every node.
+  from the whole subtree whenever asked; the analyzer passes ask at every node. **2026-09-25:**
+  `DuckComparisons` now asks only where a literal is fitted or a comparison typed, 66 to 59 ms.
+  The rest is `CheckedArithmetic` (~11 ms, which needs every operand's type) and DataFusion's two
+  coercion passes (~30 ms), quadratic for the same reason inside DataFusion. Carrying types
+  through the checked rewrite would buy at most the 11 ms, on the rule that guarantees exactness,
+  and leave the larger half; not done. No view pays it since 7092337.
 - HUGEINT is DECIMAL(38,0), which stops at 10^38 - 1 where HUGEINT reaches 2^127 - 1. A value
   between refuses; it does not answer wrongly.
 - An integer compared with a boolean (`1 = false`): DuckDB casts, Burrmill refuses.

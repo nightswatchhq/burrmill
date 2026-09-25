@@ -871,12 +871,15 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
                     | Operator::GtEq
             ) =>
         {
-            let (lt, rt) = (left.get_type(schema)?, right.get_type(schema)?);
+            // Types only where a literal is fitted: asking re-types the whole subtree, and at every
+            // node of a long chain that made planning quadratic.
             let (l, r) = match (left.as_ref(), right.as_ref()) {
                 (Expr::Literal(..), r) if !matches!(r, Expr::Literal(..)) => {
+                    let rt = right.get_type(schema)?;
                     (fit_literal(*left, &rt), *right)
                 }
                 (l, Expr::Literal(..)) if !matches!(l, Expr::Literal(..)) => {
+                    let lt = left.get_type(schema)?;
                     (*left, fit_literal(*right, &lt))
                 }
                 _ => (*left, *right),
@@ -909,7 +912,19 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
         e => e,
     };
     match e {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right })
+            if matches!(
+                op,
+                Operator::Eq
+                    | Operator::NotEq
+                    | Operator::Lt
+                    | Operator::Gt
+                    | Operator::LtEq
+                    | Operator::GtEq
+                    | Operator::And
+                    | Operator::Or
+            ) =>
+        {
             let (lt, rt) = (left.get_type(schema)?, right.get_type(schema)?);
             let ordering = matches!(
                 op,
