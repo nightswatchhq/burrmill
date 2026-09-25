@@ -257,6 +257,7 @@ pub fn predicates_as_counts(q: &mut Query) {
     let SetExpr::Select(s) = q.body.as_mut() else {
         return;
     };
+    hoist_from_aggregates(s);
     for item in s.projection.iter_mut() {
         let e = match item {
             SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => e,
@@ -269,6 +270,96 @@ pub fn predicates_as_counts(q: &mut Query) {
             std::ops::ControlFlow::<()>::Continue(())
         });
     }
+}
+
+/// A subquery predicate inside an aggregate (`bool_and(x IN (SELECT ...))`) cannot be decorrelated
+/// even as a count. Over a single relation it is computed per row in a wrapper that keeps the
+/// relation's name, where it is a select-list predicate again, and the aggregate reads the column.
+fn hoist_from_aggregates(s: &mut Select) {
+    let [TableWithJoins { relation, joins }] = s.from.as_mut_slice() else {
+        return;
+    };
+    if !joins.is_empty() || s.projection.iter().any(|i| matches!(i, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..))) {
+        return;
+    }
+    let qualifier = match relation {
+        TableFactor::Table { name, alias, args: None, .. } => match alias {
+            Some(a) if a.columns.is_empty() => a.name.clone(),
+            None => match name.0.last() {
+                Some(sq::ObjectNamePart::Identifier(i)) => i.clone(),
+                _ => return,
+            },
+            _ => return,
+        },
+        _ => return,
+    };
+    let mut hoisted: Vec<(String, Expr)> = Vec::new();
+    let mut take = |e: &mut Expr| {
+        let _ = sq::visit_expressions_mut(e, |x| {
+            if let Expr::Function(f) = x
+                && f.over.is_none()
+                && AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str())
+            {
+                let _ = sq::visit_expressions_mut(f, |y| {
+                    if matches!(y, Expr::Exists { .. } | Expr::InSubquery { .. }) {
+                        let name = format!("__burrmill_pred{}", hoisted.len());
+                        let col = Expr::CompoundIdentifier(vec![qualifier.clone(), Ident::new(&name)]);
+                        hoisted.push((name, std::mem::replace(y, col)));
+                    }
+                    std::ops::ControlFlow::<()>::Continue(())
+                });
+            }
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+    };
+    for item in s.projection.iter_mut() {
+        if let SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } = item {
+            take(e);
+        }
+    }
+    if let Some(h) = s.having.as_mut() {
+        take(h);
+    }
+    if hoisted.is_empty() {
+        return;
+    }
+    let mut projection = vec![SelectItem::QualifiedWildcard(
+        SelectItemQualifiedWildcardKind::ObjectName(sq::ObjectName::from(vec![qualifier.clone()])),
+        sq::WildcardAdditionalOptions::default(),
+    )];
+    projection.extend(hoisted.into_iter().map(|(name, e)| SelectItem::ExprWithAlias { expr: e, alias: Ident::new(name) }));
+    let inner = sq::Select {
+        projection,
+        from: vec![TableWithJoins { relation: relation.clone(), joins: vec![] }],
+        ..empty_select()
+    };
+    *relation = TableFactor::Derived {
+        lateral: false,
+        subquery: Box::new(Query {
+            with: None,
+            body: Box::new(SetExpr::Select(Box::new(inner))),
+            order_by: None,
+            limit_clause: None,
+            fetch: None,
+            locks: vec![],
+            for_clause: None,
+            settings: None,
+            format_clause: None,
+            pipe_operators: vec![],
+        }),
+        alias: Some(sq::TableAlias { explicit: true, name: qualifier, columns: vec![], at: None }),
+        sample: None,
+    };
+}
+
+/// A SELECT with nothing in it, to fill in.
+fn empty_select() -> sq::Select {
+    let Ok(stmts) = sqlparser::parser::Parser::parse_sql(&sqlparser::dialect::DuckDbDialect {}, "SELECT 1") else {
+        unreachable!("a constant statement parses")
+    };
+    let Some(sq::Statement::Query(q)) = stmts.into_iter().next() else { unreachable!() };
+    let SetExpr::Select(s) = *q.body else { unreachable!() };
+    *s
 }
 
 const AGGREGATES: &[&str] = &[

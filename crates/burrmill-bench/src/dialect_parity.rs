@@ -120,10 +120,16 @@ const CORPUS: &[&str] = &[
     "SELECT regexp_extract(value, '[0-9]{2}') AS a, regexp_matches(\"from\", '(?i)0XA') AS b, regexp_replace(value, '0', 'z', 'g') AS c, regexp_replace(value, '(1)', '\\1\\1') AS d, regexp_replace(value, '^1', '\\2') AS e FROM transfer ORDER BY block_number, log_index",
     "SELECT sign(CAST(block_number AS BIGINT) - 3) AS a, sign(-2.5) AS b, NULLIF(block_number, 2) AS c FROM transfer ORDER BY block_number, log_index",
     "SELECT 1 AS a ORDER BY 'x'",
+    "SELECT 7.5::DOUBLE // 2 AS a, -7.5::DOUBLE // 2 AS b, 7::DOUBLE // 0 AS c, CAST(7 AS BIGINT) // 2.0::DOUBLE AS f, 1.5 // 1 AS g, block_number // 2.5 AS h FROM transfer ORDER BY block_number, log_index",
+    "SELECT \"from\", bool_and(enabled = 'true') AS a, count(value = '10') AS b, bool_or('10' = value) AS c, bool_or(\"from\" = \"to\") AS d FROM transfer GROUP BY 1 ORDER BY 1",
+    "SELECT \"from\", count(DISTINCT CASE WHEN \"to\" <> \"from\" THEN \"to\" ELSE '0xz' END) AS d, count(*) AS n FROM transfer GROUP BY 1 ORDER BY 1",
+    "SELECT k, count(*) AS n FROM (SELECT CASE WHEN \"to\" <> \"from\" THEN \"to\" ELSE '0xz' END AS k FROM transfer GROUP BY 1) GROUP BY 1 ORDER BY 1",
+    "SELECT to_timestamp(64814395658) AS a, to_timestamp(1.5) AS b, to_timestamp(-1.5) AS c, CAST(to_timestamp(64814395658) AS VARCHAR) AS d",
     "SELECT x, x IN (SELECT y FROM (VALUES (1), (NULL)) s(y)) AS a, x NOT IN (SELECT y FROM (VALUES (1), (NULL)) s(y)) AS b, x IN (SELECT y FROM (VALUES (1)) s(y)) AS c, x IN (SELECT y FROM (VALUES (1)) s(y) WHERE false) AS d FROM (VALUES (1), (2), (NULL)) t(x) ORDER BY x",
     "SELECT block_number, \"to\" IN (SELECT addr FROM label) AS labelled, EXISTS (SELECT 1 FROM label l WHERE l.addr = t.\"from\") AS known, NOT EXISTS (SELECT 1 FROM label l WHERE l.addr = t.\"to\" AND l.name = 'carol') AS not_carol FROM transfer t ORDER BY block_number, log_index",
     "SELECT \"from\", count(*) FILTER (WHERE true) AS n, bool_or(\"to\" IN (SELECT addr FROM label WHERE name <> 'alice')) AS any_label FROM transfer GROUP BY 1 ORDER BY 1",
     "SELECT CASE WHEN EXISTS (SELECT 1 FROM label l WHERE lower(l.addr) = lower(t.\"from\")) THEN 'known' ELSE 'unknown' END AS k FROM transfer t ORDER BY block_number, log_index",
+    "SELECT \"from\", sum(CASE WHEN \"to\" IN (SELECT addr FROM label) THEN 1 ELSE 0 END) AS to_labelled, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM label l WHERE l.addr = transfer.\"from\")) AS from_labelled FROM transfer GROUP BY 1 HAVING bool_or(\"to\" NOT IN (SELECT addr FROM label)) IS NOT NULL ORDER BY 1",
     "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
     "SELECT date_trunc('day', CAST(to_timestamp(block_timestamp) AS DATE)) AS a, CAST(to_timestamp(block_timestamp) AS DATE) + INTERVAL 33 HOUR AS b, CAST(to_timestamp(block_timestamp) AS DATE) + 3 AS c FROM transfer ORDER BY 1, 2",
     "SELECT CASE WHEN log_index = 0 THEN CAST(value AS DECIMAL(20,2)) ELSE 2.5::DOUBLE END AS a, COALESCE(TRY_CAST(value AS HUGEINT), 0.5::DOUBLE) AS b FROM transfer ORDER BY block_number, log_index",
@@ -140,6 +146,11 @@ const CORPUS: &[&str] = &[
 
 /// Differences that stand, and why.
 const KNOWN: &[(&str, &str)] = &[
+    (
+        "SELECT CASE WHEN EXISTS (SELECT 1 FROM label l WHERE lower(l.addr) = lower(t.\"from\")) THEN 'known' ELSE 'unknown' END AS k FROM transfer t ORDER BY block_number, log_index",
+        "a refusal, not an answer: DataFusion 55 cannot decorrelate a subquery correlated through an \
+         expression of the outer row (lower(t.x)), in any position; correlated through a column it can",
+    ),
     (
         "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
         "a DuckDB 1.5 bug, not reported upstream yet: with a date part projected, a <> between text and a \

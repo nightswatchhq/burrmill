@@ -105,6 +105,14 @@ impl MiniSession {
         }
         let mark = super::dialect::HugeintMark::udf();
         scalar.insert(mark.name().to_string(), mark);
+        if let Some(inner) = scalar.get("to_timestamp").cloned() {
+            let t = super::duckfns::ToTimestamp::udf(inner);
+            scalar.retain(|_, f| f.name() != "to_timestamp");
+            for a in t.aliases() {
+                scalar.insert(a.clone(), Arc::clone(&t));
+            }
+            scalar.insert("to_timestamp".into(), t);
+        }
         for f in super::duckfns::all() {
             for a in f.aliases() {
                 scalar.insert(a.clone(), Arc::clone(&f));

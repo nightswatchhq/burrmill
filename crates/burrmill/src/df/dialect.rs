@@ -545,6 +545,22 @@ impl VisitorMut for Rewriter {
             }
             nulls_last(&mut f.within_group);
             rename_function(f);
+            // sqlparser's DuckDB dialect reads `f(flag = 'true')` as a named argument; DuckDB, in an
+            // expression, reads a comparison.
+            if let sq::FunctionArguments::List(l) = &mut f.args {
+                for a in l.args.iter_mut() {
+                    if let sq::FunctionArg::Named { name, arg: sq::FunctionArgExpr::Expr(v), operator: sq::FunctionArgOperator::Equals } = a {
+                        // `f('x y' = v)` arrives with the string as the argument's name.
+                        let left = if name.quote_style == Some('\'') {
+                            SqlExpr::Value(sq::Value::SingleQuotedString(name.value.clone()).into())
+                        } else {
+                            SqlExpr::Identifier(name.clone())
+                        };
+                        let cmp = binop(left, BinaryOperator::Eq, v.clone());
+                        *a = sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(cmp));
+                    }
+                }
+            }
         }
         match e {
             SqlExpr::Lambda(l) => self.lambda.extend(l.params.iter().map(|p| p.name.value.clone())),
@@ -667,8 +683,12 @@ impl ScalarUDFImpl for IntDiv {
         let exact = |t: &DataType| {
             t.is_integer() || matches!(t, DataType::Decimal128(_, 0) | DataType::Null)
         };
+        // Beside a DOUBLE or a scaled DECIMAL, DuckDB's `//` is ordinary division, in DOUBLE.
+        if (a.is_numeric() || a.is_null()) && (b.is_numeric() || b.is_null()) && (!exact(a) || !exact(b)) {
+            return Ok(vec![DataType::Float64, DataType::Float64]);
+        }
         if !exact(a) || !exact(b) {
-            return plan_err!("// needs integer or scale-0 decimal operands, not {a} and {b}");
+            return plan_err!("// needs numeric operands, not {a} and {b}");
         }
         // As DuckDB types it: unsigned stays unsigned, unsigned beside signed is HUGEINT (a literal
         // having been fitted to its partner already), the rest BIGINT.
@@ -698,6 +718,18 @@ impl ScalarUDFImpl for IntDiv {
         let (a, b) = (&arrays[0], &arrays[1]);
         let n = a.len();
         let out: ArrayRef = match a.data_type() {
+            DataType::Float64 => {
+                let (a, b) = (a.as_primitive::<arrow::datatypes::Float64Type>(), b.as_primitive::<arrow::datatypes::Float64Type>());
+                let mut o = arrow::array::Float64Builder::with_capacity(n);
+                for i in 0..n {
+                    if a.is_null(i) || b.is_null(i) || b.value(i) == 0.0 {
+                        o.append_null();
+                    } else {
+                        o.append_value(a.value(i) / b.value(i));
+                    }
+                }
+                std::sync::Arc::new(o.finish())
+            }
             DataType::UInt64 => {
                 let (a, b) = (a.as_primitive::<UInt64Type>(), b.as_primitive::<UInt64Type>());
                 let mut o = arrow::array::UInt64Builder::with_capacity(n);
@@ -804,6 +836,7 @@ impl AnalyzerRule for DuckSemantics {
                     let t = t.transform_data(|e| round_before_int_cast(e, &schema, &self.round))?;
                     let t = t.transform_data(|e| timestamp_as_text(e, &schema))?;
                     let t = t.transform_data(|e| dates_as_duckdb(e, &schema))?;
+                    let t = t.transform_data(|e| case_nullability(e, &schema))?;
                     t.transform_data(|e| hugeint_rounding(e, &schema, &self.round))
                 })?;
                 if t.transformed && names_matter && t.data.schema_name().to_string() != name {
@@ -824,6 +857,31 @@ impl AnalyzerRule for DuckSemantics {
 
 /// DuckDB's date arithmetic types: `date_trunc` of a DATE and `DATE ± INTERVAL` are TIMESTAMP (in
 /// microseconds, where DataFusion gives nanoseconds or keeps the DATE and drops the hours).
+/// DataFusion's logical planner proves some `CASE` values never NULL from which branches are
+/// reachable (`CASE WHEN m <> k THEN m ELSE 'x' END`); its physical expression cannot, calls the
+/// column nullable, and the physical planner then refuses the plan as a schema mismatch whenever
+/// that value is grouped or aggregated again. Declaring it nullable makes both say the same.
+fn case_nullability(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
+    let Expr::Case(c) = &e else {
+        return Ok(Transformed::no(e));
+    };
+    let branch_nullable = c
+        .when_then_expr
+        .iter()
+        .map(|(_, t)| t.as_ref())
+        .chain(c.else_expr.as_deref())
+        .map(|b| b.nullable(schema))
+        .collect::<DFResult<Vec<_>>>()?
+        .into_iter()
+        .any(|n| n)
+        || c.else_expr.is_none();
+    if e.nullable(schema)? || !branch_nullable {
+        return Ok(Transformed::no(e));
+    }
+    let f = Arc::new(ScalarUDF::from(super::duckfns::Nullable(Signature::user_defined(Volatility::Immutable))));
+    Ok(Transformed::yes(Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(f, vec![e]))))
+}
+
 /// A DATE, or one DataFusion's coercion has already cast to a timestamp.
 fn is_date(e: &Expr, schema: &DFSchema) -> bool {
     let date = |t: DataType| matches!(t, DataType::Date32 | DataType::Date64);

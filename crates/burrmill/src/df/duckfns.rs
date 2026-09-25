@@ -101,6 +101,104 @@ impl ScalarUDFImpl for TimestampText {
     }
 }
 
+/// Returns its argument, declared nullable. See `dialect::case_nullability`.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct Nullable(pub Signature);
+
+impl ScalarUDFImpl for Nullable {
+    fn name(&self) -> &str {
+        "burrmill_nullable"
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        Ok(args.to_vec())
+    }
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        Ok(args[0].clone())
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        Ok(args.args[0].clone())
+    }
+}
+
+/// `to_timestamp(seconds)`: TIMESTAMP WITH TIME ZONE in microseconds, UTC, as DuckDB has it, across
+/// DuckDB's whole range. DataFusion's goes through nanoseconds and overflows past 2262. Anything
+/// but a number goes to DataFusion's own.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ToTimestamp {
+    sig: Signature,
+    inner: Arc<ScalarUDF>,
+}
+
+impl ToTimestamp {
+    pub fn udf(inner: Arc<ScalarUDF>) -> Arc<ScalarUDF> {
+        udf(Self { sig: Signature::user_defined(Volatility::Immutable), inner })
+    }
+}
+
+impl ScalarUDFImpl for ToTimestamp {
+    fn name(&self) -> &str {
+        "to_timestamp"
+    }
+    fn aliases(&self) -> &[String] {
+        self.inner.aliases()
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        match args {
+            [t] if t.is_integer() || t.is_null() => Ok(vec![DataType::Int64]),
+            [t] if t.is_numeric() => Ok(vec![DataType::Float64]),
+            _ => self.inner.coerce_types(args),
+        }
+    }
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        match args {
+            [DataType::Int64 | DataType::Float64] => Ok(DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))),
+            _ => self.inner.return_type(args),
+        }
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        use arrow::array::TimestampMicrosecondBuilder;
+        if args.args.len() != 1 || !matches!(args.args[0].data_type(), DataType::Int64 | DataType::Float64) {
+            return self.inner.invoke_with_args(args);
+        }
+        let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
+        let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let mut b = TimestampMicrosecondBuilder::with_capacity(a.len());
+        let out_of_range = |v: String| exec_err!("Conversion Error: Could not convert epoch seconds {v} to TIMESTAMP WITH TIME ZONE");
+        for i in 0..a.len() {
+            if a.is_null(i) {
+                b.append_null();
+                continue;
+            }
+            let us = match a.data_type() {
+                DataType::Int64 => {
+                    let v = a.as_primitive::<arrow::datatypes::Int64Type>().value(i);
+                    match v.checked_mul(1_000_000) {
+                        Some(us) => us,
+                        None => return out_of_range(v.to_string()),
+                    }
+                }
+                _ => {
+                    let v = a.as_primitive::<arrow::datatypes::Float64Type>().value(i);
+                    let us = (v * 1e6).round();
+                    if !us.is_finite() || us.abs() >= 9.2e18 {
+                        return out_of_range(v.to_string());
+                    }
+                    us as i64
+                }
+            };
+            b.append_value(us);
+        }
+        let out: ArrayRef = Arc::new(b.finish().with_timezone("UTC"));
+        scalar_out(scalar, out)
+    }
+}
+
 /// DuckDB's `strftime` specifiers, which are not chrono's: `%f` is microseconds and `%g`
 /// milliseconds. One it does not know is refused, as DuckDB refuses it.
 fn strftime(t: NaiveDateTime, fmt: &str) -> Result<String> {
