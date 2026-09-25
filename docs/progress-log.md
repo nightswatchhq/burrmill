@@ -4,6 +4,31 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.2 closed — the function surface audited; one path leak removed — 2026-09-25
+
+6.2 left "a function allowlist built from the census" open. The census counts features, not
+function names, and the reason for an allowlist on DuckDB was functions that reach outside the
+query: `read_csv`, `getenv`, `glob`, the `duckdb_*` catalogue. So the question asked was whether
+DataFusion's registry, as the engine builds it, has any such function at all.
+
+`tests/df_functions.rs` lists all 172 scalar, aggregate and window functions (`Engine::
+function_names`) and fails on any name suggesting files, environment, network, catalogue or query
+execution. **Two turned up:**
+
+- **`input_file_name()` returned the server's full segment path.** Measured on the unpatched
+  engine: `private/var/folders/.../segments/t-0000...0001.parquet`. That is the class of nuthatch's
+  audit finding 2 (`duckdb_settings()` path disclosure), and nuthatch rewrites its nest directory to
+  `<nest>` in error text for the same reason. Removed.
+- **`file_row_index()`**, a row's position within its file. File-identity information that no view
+  uses and DuckDB does not offer. Removed.
+
+Calling either is now refused without the path appearing in the error (tested). Nothing else
+reaches outside the query. **A census allowlist would therefore close no further hole, and it would
+refuse ordinary functions agents use.** The audit test stands in its place, and fails if a
+DataFusion upgrade brings in something of that kind.
+
+---
+
 ## 6.7 — what a statement reaches, answered by sqlparser — 2026-09-25
 
 nuthatch asks DuckDB's parser (`json_serialize_sql`) which tables and table functions a `/sql`

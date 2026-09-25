@@ -141,6 +141,11 @@ impl Engine {
             .map_err(df_err)
     }
 
+    /// Every scalar, aggregate and window function a statement can call, sorted.
+    pub fn function_names(&self) -> Vec<String> {
+        self.session.function_names()
+    }
+
     pub fn tables(&self) -> Vec<String> {
         self.session.table_names()
     }

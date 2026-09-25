@@ -88,6 +88,11 @@ impl MiniSession {
         for f in datafusion_functions::all_default_functions() {
             scalar.insert(f.name().to_string(), f);
         }
+        // The only defaults that reach outside the query (roadmap 6.2 audit, `df_functions`):
+        // `input_file_name()` would hand a caller the server's segment paths.
+        for name in ["input_file_name", "file_row_index"] {
+            scalar.remove(name);
+        }
         let round = super::dialect::RoundInt::udf();
         scalar.insert(round.name().to_string(), round);
         let intdiv = super::dialect::IntDiv::udf();
@@ -236,6 +241,20 @@ impl MiniSession {
             }
         }
         k
+    }
+
+    pub fn function_names(&self) -> Vec<String> {
+        let mut n: Vec<String> = self
+            .scalar
+            .keys()
+            .chain(self.aggregate.keys())
+            .chain(self.window.keys())
+            .chain(self.higher.keys())
+            .cloned()
+            .collect();
+        n.sort();
+        n.dedup();
+        n
     }
 
     pub fn table_names(&self) -> Vec<String> {
