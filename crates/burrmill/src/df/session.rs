@@ -358,6 +358,14 @@ impl ContextProvider for MiniSession {
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("no table {name}"))
     }
+    fn create_cte_work_table(
+        &self,
+        name: &str,
+        schema: arrow::datatypes::SchemaRef,
+    ) -> DFResult<Arc<dyn TableSource>> {
+        let table = datafusion_catalog::cte_worktable::CteWorkTable::new(name, schema);
+        Ok(provider_as_source(Arc::new(table)))
+    }
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
         self.scalar.get(name).cloned()
     }
