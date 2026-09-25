@@ -7,3 +7,4 @@ Cargo.lock
 duck/Cargo.lock
 umbrella/Cargo.lock
 components/Cargo.lock
+burrmill/Cargo.lock

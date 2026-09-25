@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 6.0 footprint spike. Nuthatch-shaped: line-tables-only, CXXFLAGS=-g0, six
 # test binaries (four query, two do not), thin-LTO stripped release.
-# Usage: run.sh [duck|umbrella|components]
+# Usage: run.sh [duck|umbrella|components|burrmill]
 set -eu
 export PATH=$HOME/.cargo/bin:$PATH
 export CARGO_TERM_COLOR=never

@@ -1,0 +1,23 @@
+[package]
+name = "consumer_burrmill"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[lib]
+name = "consumer"
+path = "src/lib.rs"
+[[bin]]
+name = "consumer-bin"
+path = "src/main.rs"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# Burrmill itself, as nuthatch would take it after the swap; the path is the repository's own crate.
+[dependencies]
+burrmill = { path = "../../../../../../crates/burrmill", features = ["datafusion"] }
+arrow = { version = "59", default-features = false }
