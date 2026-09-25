@@ -68,6 +68,8 @@ rec release_bin_bytes "$(bytes "$B")"
 rec release_ldd "$(ldd "$B" | awk '{print $1}' | paste -sd' ')"
 rec release_glibcxx "$(objdump -T "$B" 2>/dev/null | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1 || true)"
 rec release_glibc "$(objdump -T "$B" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 || true)"
-rec release_run "$("$B" "$ROOT/fixture" 2>&1 | head -1)"
+# A variant reading nuthatch's segment naming carries its own `segments/`, linked to the same file.
+FX="$ROOT/fixture"; [ -d "$ROOT/$V/segments" ] && FX="$ROOT/$V/segments"
+rec release_run "$("$B" "$FX" 2>&1 | head -1)"
 unset CARGO_TARGET_DIR
 rec done "$(date -Is)"

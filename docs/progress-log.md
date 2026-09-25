@@ -4,6 +4,33 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.0b — the footprint, re-measured on Burrmill itself — 2026-09-25
+
+6.0 measured a stand-in: component crates and a ported planner in a nuthatch-shaped consumer. Gate
+1 asks that those figures hold, so `probes/footprint6` gained a fourth variant, `burrmill`, the same
+consumer (six test binaries, four querying, `line-tables-only`, thin-LTO stripped release) on
+`burrmill::Engine` with its `datafusion` feature. Same machine, same toolchain, same answer (90
+parties, first balance 3185):
+
+| | duck | umbrella | components (6.0) | **burrmill** |
+|---|---:|---:|---:|---:|
+| querying test binary | 162 MB | 493 | 446 | **495** |
+| release binary | 41 MB | 127 | 105 | **112** |
+| target directory | 3.27 GB | 4.48 | 4.14 | **4.76** |
+| clean test build (j32) | 77 s | 121 | 87 | **84** |
+| incremental | 1.1 s | 1.9 | 1.9 | **1.8** |
+
+**They do not quite hold: +11% on the test binary, +7% release, +15% target**; build times are
+level or better. The test binary's code is 10.2 MB larger, and every part of it traces to a feature
+added on purpose since 6.0: sqlparser's AST visitor (+2.0 MB, `reach` and the dialect rewrites),
+the nested list functions (+1.7, `list_reduce`), `stacker` (+1.5, `recursive_protection`), generic
+instantiations under `core` and `datafusion_expr` (+4.7), Burrmill's own code (+0.9). Against DuckDB
+the querying test binary is now 3.05x, from 2.75x. Whether that trade is acceptable is the RFC-0042
+amendment's question, and Chief's; nothing here is waste to be cut without giving up a feature.
+Results: `probes/footprint6/results/burrmill.txt`.
+
+---
+
 ## 6.6d — the memory gate: the gap was code, and it passes as nuthatch would run it — 2026-09-25
 
 6.6c left the hosted fold at 249-261 MB against a 256 MB gate, 20-40 MB over the bare operator,

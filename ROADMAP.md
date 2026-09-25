@@ -164,6 +164,9 @@ With `RangeJoin` the same day: **0.65x time-weighted and 22/22 within 1.5x**, `l
 (`docs/bench/rangejoin-thinkpad.txt`). Gate 1's speed leg passes on this nest.
 The memory leg passes as nuthatch would run it: **241-245 MB at 989,690 groups** in a Burrmill-only
 binary (6.6d).
+The footprint leg, re-measured on Burrmill itself (6.0b): **495 MB querying test binary, 112 MB
+release, 4.76 GB target**, 7-15% over 6.0's stand-in, all of it traced to features added since.
+That is Chief's trade to accept or refuse.
 
 **Gate 1:**
 
