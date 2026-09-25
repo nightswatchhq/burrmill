@@ -4,6 +4,29 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Subquery column names, and a silent loss of columns — 2026-09-25
+
+The owed "nested-SELECT duplicate unaliased names" turned out to hide a wrong answer.
+`SELECT * FROM (SELECT * FROM t a JOIN t b ON ...)` **returned half its columns on Burrmill,
+without an error**: an unaliased subquery passed both sides' `from`, `to`, ... through under one
+name each, and the result encoder, which keeps one value per name as nuthatch's does, kept one.
+DuckDB, inside a subquery or CTE, renames a repeated column `from_1` and names an unaliased
+expression by its text, `(x + 0)`, and the outer query may use either. DataFusion refused the
+explicit repeats, or renamed them `from:1` where the subquery had an alias.
+
+`df/subqueries.rs` walks each derived table and CTE bottom-up for DuckDB's output names:
+aliases, printed names for unaliased expressions, wildcards expanded from the tables' and views'
+columns (`Known` now carries them) or from an inner subquery already named. Repeats are renamed by
+DuckDB's rule, measured: `_1`, `_2` until free, compared without case, the renamed column keeping
+its spelling (`a, A` is `a, A_1`), column-alias lists first (`t(x)`). The select list is rewritten
+only where a name changes; `USING`/`NATURAL` and semi joins, table functions, wildcard options and
+expressions the printer cannot name leave the query as it was.
+
+`dialect-parity` 82/82 with nine new cases; a regression test in `df_engine`. On the thinkpad
+nest, 22/22 identical, 0.645x, all within 1.5x.
+
+---
+
 ## Dialect: booleans beside numbers, decimal literals, `round` — 2026-09-25
 
 `dialect-parity` gained 29 cases (73 now, all identical to DuckDB), covering today's fixes and the
