@@ -231,3 +231,12 @@ fn doubles_round_to_hugeint_half_to_even_and_to_decimal_half_away() {
         r#"[{"a":"2","b":"4","c":"-2","d":"3","e":"2106471783529098","f":"7","g":4.758202831081926e+19}]"#
     );
 }
+
+#[test]
+fn is_distinct_from_binds_tighter_than_and_or() {
+    let (_tmp, engine) = nest_with_transfer();
+    // sqlparser alone reads this as `1 IS DISTINCT FROM (2 AND 3 IS DISTINCT FROM (3 OR ...))`.
+    let sql = "SELECT 1 IS DISTINCT FROM 2 AND 3 IS DISTINCT FROM 3 OR 4 IS NOT DISTINCT FROM 4 AS v";
+    let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
+    assert_eq!(serde_json::to_string(&rows).unwrap(), r#"[{"v":true}]"#);
+}

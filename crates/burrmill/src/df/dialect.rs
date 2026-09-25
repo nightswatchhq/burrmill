@@ -36,7 +36,7 @@ use crate::error::{BurrmillError, Result};
 /// Parse with DuckDB's dialect and rewrite into what DataFusion plans. The result columns' DuckDB
 /// names come back too, taken from the statement as written, before any rewrite.
 pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String>>)> {
-    let stmts = DFParser::parse_sql_with_dialect(sql, &DuckDbDialect {})
+    let stmts = DFParser::parse_sql_with_dialect(sql, &Duck)
         .map_err(|e| BurrmillError::Parse(super::errors::restate(format!("SQL error: {e:?}"))))?;
     let Some(mut stmt) = stmts.into_iter().next() else {
         return Err(BurrmillError::Parse("empty statement".into()));
@@ -50,6 +50,75 @@ pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String
     };
     rewrite(&mut stmt, known, &mut names)?;
     Ok((stmt, names))
+}
+
+/// DuckDB's dialect with `IS [NOT] DISTINCT FROM` bound as DuckDB binds it. sqlparser reads its
+/// right side as a whole expression, so `a IS DISTINCT FROM b OR c = d` became
+/// `a IS DISTINCT FROM (b OR c = d)`; here it stops where `IS` does, as in Postgres.
+#[derive(Debug)]
+struct Duck;
+
+macro_rules! as_duckdb {
+    ($($f:ident),* $(,)?) => {
+        $(fn $f(&self) -> bool { DuckDbDialect {}.$f() })*
+    };
+}
+
+impl sqlparser::dialect::Dialect for Duck {
+    fn dialect(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<DuckDbDialect>()
+    }
+    fn is_identifier_start(&self, ch: char) -> bool {
+        DuckDbDialect {}.is_identifier_start(ch)
+    }
+    fn is_identifier_part(&self, ch: char) -> bool {
+        DuckDbDialect {}.is_identifier_part(ch)
+    }
+    as_duckdb!(
+        supports_trailing_commas,
+        supports_filter_during_aggregation,
+        supports_group_by_expr,
+        supports_bitwise_shift_operators,
+        supports_named_fn_args_with_eq_operator,
+        supports_named_fn_args_with_assignment_operator,
+        supports_dictionary_syntax,
+        support_map_literal_syntax,
+        supports_lambda_functions,
+        allow_extract_single_quotes,
+        supports_explain_with_utility_options,
+        supports_load_extension,
+        supports_array_typedef_with_brackets,
+        supports_from_first_select,
+        supports_order_by_all,
+        supports_select_wildcard_exclude,
+        supports_notnull_operator,
+        supports_install,
+        supports_detach,
+        supports_select_wildcard_replace,
+        supports_comma_separated_trim,
+    );
+
+    fn parse_infix(
+        &self,
+        parser: &mut sqlparser::parser::Parser,
+        expr: &SqlExpr,
+        _precedence: u8,
+    ) -> Option<std::result::Result<SqlExpr, sqlparser::parser::ParserError>> {
+        use sqlparser::dialect::Precedence;
+        use sqlparser::keywords::Keyword::{DISTINCT, FROM, IS, NOT};
+        let not = if parser.parse_keywords(&[IS, DISTINCT, FROM]) {
+            false
+        } else if parser.parse_keywords(&[IS, NOT, DISTINCT, FROM]) {
+            true
+        } else {
+            return None;
+        };
+        let (a, b) = match parser.parse_subexpr(self.prec_value(Precedence::Is)) {
+            Ok(b) => (Box::new(expr.clone()), Box::new(b)),
+            Err(e) => return Some(Err(e)),
+        };
+        Some(Ok(if not { SqlExpr::IsNotDistinctFrom(a, b) } else { SqlExpr::IsDistinctFrom(a, b) }))
+    }
 }
 
 /// Names a statement may refer to: the nest's tables and columns, and the statement's own aliases.

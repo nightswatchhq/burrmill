@@ -203,46 +203,56 @@ pub fn run(root: &str) -> anyhow::Result<()> {
 
     let mut checks = 0;
     let mut checks_ok = 0;
-    if let Ok(dir) = std::fs::read_dir(root.join("checks")) {
-        let mut files: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "sql")).collect();
-        files.sort();
-        for f in files {
-            let stem = f.file_stem().unwrap().to_string_lossy().to_string();
-            let expected: Value = serde_json::from_str(&std::fs::read_to_string(root.join("checks/expected").join(format!("{stem}.json")))?)?;
-            let sql: String = std::fs::read_to_string(&f)?
-                .lines()
-                .filter(|l| !l.trim_start().starts_with("--"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let sql = sql.trim().trim_end_matches(';').to_string();
-            let duck = crate::encode_parity::nuthatch_rows(&conn, &sql).map_err(|e| first_line(&e.to_string()));
-            let e2 = std::sync::Arc::clone(&engine);
-            let q = sql.clone();
-            let bm = std::thread::spawn(move || -> Result<Value, String> {
-                let batches = e2.sql(&q).map_err(|e| first_line(&e.to_string()))?;
-                let mut rows = Vec::new();
-                for b in &batches {
-                    rows.extend(burrmill::df::encode::rows(b).map_err(|e| e.to_string())?);
-                }
-                Ok(Value::Array(rows))
-            })
-            .join()
-            .expect("engine thread");
-            checks += 1;
-            let bm_ok = bm.as_ref().is_ok_and(|v| *v == expected);
-            checks_ok += bm_ok as usize;
-            println!(
-                "CHECK {stem:<14} burrmill={} duckdb={}",
-                if bm_ok { "expected".to_string() } else { format!("{bm:?}") },
-                if duck.as_ref().is_ok_and(|v| *v == expected) { "expected".to_string() } else { format!("{duck:?}") }
-            );
+    // `main` is inside a runtime, where dropping the engine panics; an early `?` here would drop it.
+    let checked = (|| -> anyhow::Result<()> {
+        if let Ok(dir) = std::fs::read_dir(root.join("checks")) {
+            let mut files: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "sql")).collect();
+            files.sort();
+            for f in files {
+                let stem = f.file_stem().unwrap().to_string_lossy().to_string();
+                // A check with no expected file expects zero rows, as its header says.
+                let expected: Value = match std::fs::read_to_string(root.join("checks/expected").join(format!("{stem}.json"))) {
+                    Ok(t) => serde_json::from_str(&t)?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Array(vec![]),
+                    Err(e) => return Err(e.into()),
+                };
+                let sql: String = std::fs::read_to_string(&f)?
+                    .lines()
+                    .filter(|l| !l.trim_start().starts_with("--"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let sql = sql.trim().trim_end_matches(';').to_string();
+                let duck = crate::encode_parity::nuthatch_rows(&conn, &sql).map_err(|e| first_line(&e.to_string()));
+                let e2 = std::sync::Arc::clone(&engine);
+                let q = sql.clone();
+                let bm = std::thread::spawn(move || -> Result<Value, String> {
+                    let batches = e2.sql(&q).map_err(|e| first_line(&e.to_string()))?;
+                    let mut rows = Vec::new();
+                    for b in &batches {
+                        rows.extend(burrmill::df::encode::rows(b).map_err(|e| e.to_string())?);
+                    }
+                    Ok(Value::Array(rows))
+                })
+                .join()
+                .expect("engine thread");
+                checks += 1;
+                let bm_ok = bm.as_ref().is_ok_and(|v| *v == expected);
+                checks_ok += bm_ok as usize;
+                println!(
+                    "CHECK {stem:<14} burrmill={} duckdb={}",
+                    if bm_ok { "expected".to_string() } else { format!("{bm:?}") },
+                    if duck.as_ref().is_ok_and(|v| *v == expected) { "expected".to_string() } else { format!("{duck:?}") }
+                );
+            }
         }
-    }
+        Ok(())
+    })();
+    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+    checked?;
     println!(
         "VIEWS\tviews={}\tsame={same}\tdiffering={diff}\tfailing={fail}\tchecks={checks_ok}/{checks}",
         nest.views.len()
     );
-    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
     Ok(())
 }
 
