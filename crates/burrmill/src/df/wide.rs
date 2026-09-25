@@ -206,28 +206,32 @@ impl<const N: usize> Wide<N> {
         Self::from_magnitude(neg, mag).expect("quotient magnitude is below the dividend's")
     }
 
-    /// Integer text as DuckDB's `TRY_CAST(... AS DECIMAL(38,0))` reads it, where that reading is
-    /// exact: surrounding spaces, a sign, leading zeros, and a fraction of zeros only. `7.9` (which
-    /// DuckDB rounds) and exponents are refused.
-    pub fn parse_integer(s: &str) -> Result<Self, String> {
-        let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
-        let (neg, rest) = match t.as_bytes().first() {
-            Some(b'-') => (true, &t[1..]),
-            Some(b'+') => (false, &t[1..]),
-            _ => (false, t),
+    /// Integer text as DuckDB's `TRY_CAST(... AS HUGEINT)` and `AS DECIMAL(38,0)` read it (see
+    /// [`duck_number`]), exactly and without DuckDB's range: `Ok(None)` for text that is not a
+    /// number, which DuckDB reads as NULL, and an error only for a value past `N * 64` bits.
+    pub fn parse_integer(s: &str) -> Result<Option<Self>, String> {
+        let Some(n) = duck_number(s) else {
+            return Ok(None);
         };
-        let int = match rest.split_once('.') {
-            Some((i, f)) if f.bytes().all(|b| b == b'0') && !(i.is_empty() && f.is_empty()) => i,
-            Some(_) => return Err(format!("not an exact integer: {s:?}")),
-            None => rest,
-        };
-        let digits = int.trim_start_matches('0');
-        if (int.is_empty() && !rest.contains('.')) || !int.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(format!("not an exact integer: {s:?}"));
+        let too_big = || format!("does not fit in {} bits: {s:?}", N * 64);
+        let mut mag = [0u64; N];
+        for &d in &n.digits {
+            if Self::mul_small_add(&mut mag, 10, d as u64) {
+                return Err(too_big());
+            }
         }
-        let digits = if digits.is_empty() { "0" } else { digits };
-        let canonical = if neg && digits != "0" { format!("-{digits}") } else { digits.to_string() };
-        Self::parse_canonical(&canonical)
+        if mag.iter().any(|&l| l != 0) {
+            for _ in 0..n.zeros {
+                if Self::mul_small_add(&mut mag, 10, 0) {
+                    return Err(too_big());
+                }
+            }
+        }
+        if n.round_up && Self::mul_small_add(&mut mag, 1, 1) {
+            return Err(too_big());
+        }
+        let neg = n.neg && mag.iter().any(|&l| l != 0);
+        Self::from_magnitude(neg, mag).map(Some).ok_or_else(too_big)
     }
 
     /// Canonical text only: `0` or `-?[1-9][0-9]*`. Anything else is refused by name.
@@ -253,6 +257,49 @@ impl<const N: usize> Wide<N> {
         Self::from_magnitude(neg, mag)
             .ok_or_else(|| format!("does not fit in {} bits: {s:?}", N * 64))
     }
+}
+
+/// A number as DuckDB's integer casts read text, before it is fitted to a type: `digits` then
+/// `zeros` more zeros, plus one if `round_up`, negated if `neg`.
+pub struct DuckNumber {
+    pub neg: bool,
+    pub digits: Vec<u8>,
+    pub zeros: u32,
+    pub round_up: bool,
+}
+
+/// DuckDB's grammar, as measured with `duck-eval`: surrounding whitespace, a sign, digits with
+/// underscores between them, an optional fraction and exponent, rounded half away from zero on the
+/// first digit dropped. No `0x` (HUGEINT and DECIMAL do not read it; the 64-bit casts do, apart).
+pub fn duck_number(s: &str) -> Option<DuckNumber> {
+    let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
+    let (neg, t) = match t.as_bytes().first()? {
+        b'-' => (true, &t[1..]),
+        b'+' => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let (mantissa, exp) = match t.find(['e', 'E']) {
+        Some(i) => (&t[..i], t[i + 1..].parse::<i32>().ok()?),
+        None => (t, 0),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let part = |p: &str| {
+        p.is_empty()
+            || (!p.starts_with('_') && !p.ends_with('_') && p.chars().all(|c| c.is_ascii_digit() || c == '_'))
+    };
+    if int.is_empty() && frac.is_empty() || !part(int) || !part(frac) {
+        return None;
+    }
+    let all: Vec<u8> = int.chars().chain(frac.chars()).filter(|&c| c != '_').map(|c| c as u8 - b'0').collect();
+    let point = exp as i64 - frac.chars().filter(|&c| c != '_').count() as i64;
+    if point >= 0 {
+        return Some(DuckNumber { neg, digits: all, zeros: point.min(u32::MAX as i64) as u32, round_up: false });
+    }
+    let drop = point.unsigned_abs() as usize;
+    let cut = all.len().saturating_sub(drop);
+    // The first digit dropped decides, and it exists only if the point stays within the digits.
+    let round_up = drop <= all.len() && all[cut] >= 5;
+    Some(DuckNumber { neg, digits: all[..cut].to_vec(), zeros: 0, round_up })
 }
 
 impl<const N: usize> std::fmt::Display for Wide<N> {
@@ -332,18 +379,20 @@ mod tests {
         assert!(Wide::<2>::parse_canonical("170141183460469231731687303715884105728").is_err());
     }
 
+    // Each as DuckDB 1.5 read it (`TRY_CAST(... AS HUGEINT)`, `duck-eval`).
     #[test]
-    fn reads_integers_as_duckdb_does_where_exact() {
-        for (s, v) in [("010", "10"), (" 7 ", "7"), ("+1", "1"), ("7.0", "7"), ("-0", "0"), ("-007.00", "-7"), (".0", "0")] {
-            assert_eq!(I320::parse_integer(s).unwrap().to_string(), v, "{s:?}");
+    fn reads_integers_as_duckdb_does() {
+        for (s, v) in [
+            ("010", Some("10")), (" 7 ", Some("7")), ("+1", Some("1")), ("7.0", Some("7")),
+            ("-0", Some("0")), ("-007.00", Some("-7")), (".0", Some("0")), ("7.9", Some("8")),
+            ("1e3", Some("1000")), ("1_000", Some("1000")), ("0x10", None), ("", None), ("-", None),
+            (".", None), ("7.", Some("7")), ("-7.5", Some("-8")), ("1e-1", Some("0")),
+            ("abc", None), (".5", Some("1")),
+        ] {
+            let got = I320::parse_integer(s).unwrap().map(|w| w.to_string());
+            assert_eq!(got.as_deref(), v, "{s:?}");
         }
-        for s in ["7.9", "1e3", "", "-", ".", "1_000", "0x10", "7."] {
-            if s == "7." {
-                assert_eq!(I320::parse_integer(s).unwrap().to_string(), "7");
-                continue;
-            }
-            assert!(I320::parse_integer(s).is_err(), "{s:?}");
-        }
+        assert!(I320::parse_integer("1e400").is_err());
     }
 
     #[test]

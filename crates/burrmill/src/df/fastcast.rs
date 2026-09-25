@@ -248,7 +248,7 @@ fn duck_int_name(t: &DataType) -> &'static str {
 }
 
 /// A `0x`/`0b` literal's value; `Some(None)` when prefixed but malformed, `None` when unprefixed.
-fn prefixed(s: &str) -> Option<Option<u128>> {
+pub(crate) fn prefixed(s: &str) -> Option<Option<u128>> {
     let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
     let (radix, digits) = match t.get(..2) {
         Some("0x" | "0X") => (16, &t[2..]),
@@ -274,53 +274,23 @@ fn prefixed(s: &str) -> Option<Option<u128>> {
     Some(Some(v))
 }
 
-/// Unprefixed text as DuckDB's integer cast reads it: surrounding whitespace, a sign, digits with
-/// underscores between them, an optional fraction and exponent, the whole rounded half away from
-/// zero, exactly. `None` for anything else, or a value past `i128`.
+/// Unprefixed text as DuckDB's integer cast reads it ([`super::wide::duck_number`]); `None` for
+/// anything else, or a value past `i128`.
 fn duck_int(s: &str) -> Option<i128> {
-    let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
-    let (neg, t) = match t.as_bytes().first()? {
-        b'-' => (true, &t[1..]),
-        b'+' => (false, &t[1..]),
-        _ => (false, t),
-    };
-    let (mantissa, exp) = match t.find(['e', 'E']) {
-        Some(i) => (&t[..i], t[i + 1..].parse::<i32>().ok()?),
-        None => (t, 0),
-    };
-    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let digits = |p: &str| {
-        p.is_empty()
-            || (!p.starts_with('_') && !p.ends_with('_') && p.chars().all(|c| c.is_ascii_digit() || c == '_'))
-    };
-    if int.is_empty() && frac.is_empty() || !digits(int) || !digits(frac) {
-        return None;
-    }
-    let all: Vec<u8> = int.chars().chain(frac.chars()).filter(|&c| c != '_').map(|c| c as u8 - b'0').collect();
-    // The value is `all * 10^point`, with `point` places to move the decimal point.
-    let point = exp as i64 - frac.chars().filter(|&c| c != '_').count() as i64;
-    let (kept, dropped): (&[u8], &[u8]) = if point >= 0 {
-        (&all, &[])
-    } else {
-        let cut = all.len().saturating_sub(point.unsigned_abs() as usize);
-        (&all[..cut], &all[cut..])
-    };
+    let n = super::wide::duck_number(s)?;
     let mut v: i128 = 0;
-    for &d in kept {
+    for &d in &n.digits {
         v = v.checked_mul(10)?.checked_add(d as i128)?;
     }
-    for _ in 0..point.max(0) {
-        if v == 0 {
-            break;
+    if v != 0 {
+        for _ in 0..n.zeros {
+            v = v.checked_mul(10)?;
         }
-        v = v.checked_mul(10)?;
     }
-    // Half away from zero on the first digit dropped; a point far to the left drops everything.
-    let first = if dropped.len() as i64 == -point { dropped.first().copied() } else { None };
-    if first.is_some_and(|d| d >= 5) {
+    if n.round_up {
         v = v.checked_add(1)?;
     }
-    Some(if neg { -v } else { v })
+    Some(if n.neg { -v } else { v })
 }
 
 impl ScalarUDFImpl for TextToInt {

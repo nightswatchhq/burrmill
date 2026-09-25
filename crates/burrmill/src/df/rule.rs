@@ -96,6 +96,8 @@ pub struct CheckedArithmetic {
     neg: Arc<ScalarUDF>,
     wide: Arc<ScalarUDF>,
     wide_neg: Arc<ScalarUDF>,
+    wide_hex: Arc<ScalarUDF>,
+    wide_neg_hex: Arc<ScalarUDF>,
     fresh: AtomicUsize,
 }
 
@@ -106,8 +108,10 @@ impl Default for CheckedArithmetic {
             sub: CheckedBinary::udf(Some(Operator::Minus)),
             mul: CheckedBinary::udf(Some(Operator::Multiply)),
             neg: CheckedBinary::udf(None),
-            wide: ExactWide::udf(false),
-            wide_neg: ExactWide::udf(true),
+            wide: ExactWide::udf(false, false),
+            wide_neg: ExactWide::udf(true, false),
+            wide_hex: ExactWide::udf(false, true),
+            wide_neg_hex: ExactWide::udf(true, true),
             fresh: AtomicUsize::new(0),
         }
     }
@@ -336,7 +340,13 @@ impl CheckedArithmetic {
         if !(is_text(&source_ty) || is_exact(&source_ty) && scale(&source_ty) == 0) {
             return None;
         }
-        let f = if neg { &self.wide_neg } else { &self.wide };
+        // Read as the cast read it: DuckDB's casts to 64-bit integers take `0x` text, HUGEINT's not.
+        let f = match (neg, target.is_integer() && is_text(&source_ty)) {
+            (false, false) => &self.wide,
+            (true, false) => &self.wide_neg,
+            (false, true) => &self.wide_hex,
+            (true, true) => &self.wide_neg_hex,
+        };
         let call = ScalarFunction::new_udf(Arc::clone(f), vec![source.clone()]);
         Some((Expr::ScalarFunction(call), target))
     }

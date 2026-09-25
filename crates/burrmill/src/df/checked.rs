@@ -192,6 +192,8 @@ struct Spec {
     /// Text as DuckDB's `TRY_CAST` reads it, where that is still exactly an integer. Otherwise
     /// canonical only.
     lenient: bool,
+    /// With `lenient`, `0x`/`0b` text too, as DuckDB's casts to 64-bit integers read it.
+    hex: bool,
 }
 
 impl CheckedAgg {
@@ -210,6 +212,7 @@ impl CheckedAgg {
             in_ty: args.exprs[0].data_type(args.schema)?,
             out_ty: args.return_field.data_type().clone(),
             lenient: false,
+            hex: false,
         })
     }
 }
@@ -251,8 +254,17 @@ impl<const N: usize> Groups<N> {
         let keep = |i: usize| a.is_valid(i) && filter.is_none_or(|f| f.is_valid(i) && f.value(i));
         let name = self.spec.name;
         let lenient = self.spec.lenient;
-        let parse = |t: &str| {
-            if lenient { Wide::parse_integer(t) } else { Wide::parse_canonical(t) }
+        // Lenient is `TRY_CAST`'s reading, where text that is not a number is NULL.
+        let hex = self.spec.hex;
+        let parse = |t: &str| -> std::result::Result<Option<Wide<N>>, String> {
+            if !lenient {
+                return Wide::parse_canonical(t).map(Some);
+            }
+            match super::fastcast::prefixed(t) {
+                Some(Some(v)) if hex => Wide::parse_canonical(&v.to_string()).map(Some),
+                Some(_) if hex => Ok(None),
+                _ => Wide::parse_integer(t),
+            }
         };
         match a.data_type() {
             DataType::Int64 => {
@@ -282,21 +294,17 @@ impl<const N: usize> Groups<N> {
             DataType::Utf8View => {
                 let a = a.as_string_view();
                 for i in (0..a.len()).filter(|&i| keep(i)) {
-                    f(
-                        i,
-                        parse(a.value(i))
-                            .map_err(|e| exec(format!("{name}: {e}")))?,
-                    )?;
+                    if let Some(v) = parse(a.value(i)).map_err(|e| exec(format!("{name}: {e}")))? {
+                        f(i, v)?;
+                    }
                 }
             }
             DataType::Utf8 => {
                 let a = a.as_string::<i32>();
                 for i in (0..a.len()).filter(|&i| keep(i)) {
-                    f(
-                        i,
-                        parse(a.value(i))
-                            .map_err(|e| exec(format!("{name}: {e}")))?,
-                    )?;
+                    if let Some(v) = parse(a.value(i)).map_err(|e| exec(format!("{name}: {e}")))? {
+                        f(i, v)?;
+                    }
                 }
             }
             DataType::FixedSizeBinary(WIDE_BYTES) if N == 5 => {
@@ -308,11 +316,9 @@ impl<const N: usize> Groups<N> {
             DataType::LargeUtf8 => {
                 let a = a.as_string::<i64>();
                 for i in (0..a.len()).filter(|&i| keep(i)) {
-                    f(
-                        i,
-                        parse(a.value(i))
-                            .map_err(|e| exec(format!("{name}: {e}")))?,
-                    )?;
+                    if let Some(v) = parse(a.value(i)).map_err(|e| exec(format!("{name}: {e}")))? {
+                        f(i, v)?;
+                    }
                 }
             }
             t => return exec_err!("{name}: unsupported input {t}"),
@@ -669,23 +675,27 @@ impl ScalarUDFImpl for CheckedBinary {
 pub struct ExactWide {
     sig: Signature,
     neg: bool,
+    /// The `TRY_CAST` read was to a 64-bit integer, which takes `0x`/`0b` text.
+    hex: bool,
 }
 
 impl ExactWide {
-    pub fn udf(neg: bool) -> Arc<ScalarUDF> {
+    pub fn udf(neg: bool, hex: bool) -> Arc<ScalarUDF> {
         Arc::new(ScalarUDF::from(Self {
             sig: Signature::user_defined(Volatility::Immutable),
             neg,
+            hex,
         }))
     }
 }
 
 impl ScalarUDFImpl for ExactWide {
     fn name(&self) -> &str {
-        if self.neg {
-            "exact_wide_neg"
-        } else {
-            "exact_wide"
+        match (self.neg, self.hex) {
+            (false, false) => "exact_wide",
+            (true, false) => "exact_wide_neg",
+            (false, true) => "exact_wide_hex",
+            (true, true) => "exact_wide_neg_hex",
         }
     }
     fn signature(&self) -> &Signature {
@@ -718,14 +728,11 @@ impl ScalarUDFImpl for ExactWide {
         let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
         let spec = Spec {
             mode: Mode::Sum,
-            name: if self.neg {
-                "exact_wide_neg"
-            } else {
-                "exact_wide"
-            },
+            name: if self.neg { "exact_wide_neg" } else { "exact_wide" },
             in_ty: a.data_type().clone(),
             out_ty: DataType::FixedSizeBinary(WIDE_BYTES),
             lenient: true,
+            hex: self.hex,
         };
         let g = Groups::<5>::new(spec);
         let mut b = FixedSizeBinaryBuilder::with_capacity(a.len(), WIDE_BYTES);

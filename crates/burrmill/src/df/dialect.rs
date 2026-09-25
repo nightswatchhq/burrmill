@@ -16,7 +16,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, Decimal128Builder, Int64Builder};
-use arrow::datatypes::{DataType, Decimal128Type, Int64Type, TimeUnit};
+use arrow::datatypes::{DataType, Decimal128Type, Int64Type, TimeUnit, UInt64Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result as DFResult, exec_err, plan_err};
@@ -553,9 +553,17 @@ impl ScalarUDFImpl for IntDiv {
         if !exact(a) || !exact(b) {
             return plan_err!("// needs integer or scale-0 decimal operands, not {a} and {b}");
         }
-        let wide = matches!(a, DataType::Decimal128(..)) || matches!(b, DataType::Decimal128(..));
+        // As DuckDB types it: unsigned stays unsigned, unsigned beside signed is HUGEINT (a literal
+        // having been fitted to its partner already), the rest BIGINT.
+        let unsigned = |t: &DataType| t.is_unsigned_integer() || t.is_null();
+        let wide = matches!(a, DataType::Decimal128(..))
+            || matches!(b, DataType::Decimal128(..))
+            || (a.is_unsigned_integer() && b.is_signed_integer())
+            || (a.is_signed_integer() && b.is_unsigned_integer());
         let t = if wide {
             DataType::Decimal128(38, 0)
+        } else if unsigned(a) && unsigned(b) && !(a.is_null() && b.is_null()) {
+            DataType::UInt64
         } else {
             DataType::Int64
         };
@@ -573,6 +581,18 @@ impl ScalarUDFImpl for IntDiv {
         let (a, b) = (&arrays[0], &arrays[1]);
         let n = a.len();
         let out: ArrayRef = match a.data_type() {
+            DataType::UInt64 => {
+                let (a, b) = (a.as_primitive::<UInt64Type>(), b.as_primitive::<UInt64Type>());
+                let mut o = arrow::array::UInt64Builder::with_capacity(n);
+                for i in 0..n {
+                    if a.is_null(i) || b.is_null(i) || b.value(i) == 0 {
+                        o.append_null();
+                    } else {
+                        o.append_value(a.value(i) / b.value(i));
+                    }
+                }
+                std::sync::Arc::new(o.finish())
+            }
             DataType::Int64 => {
                 let (a, b) = (a.as_primitive::<Int64Type>(), b.as_primitive::<Int64Type>());
                 let mut o = Int64Builder::with_capacity(n);
@@ -902,7 +922,9 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             }
             Expr::Case(c)
         }
-        Expr::ScalarFunction(mut f) if f.func.name() == "coalesce" => {
+        Expr::ScalarFunction(mut f)
+            if matches!(f.func.name(), "coalesce" | "greatest" | "least" | "burrmill_intdiv") =>
+        {
             let args: Vec<&Expr> = f.args.iter().collect();
             if let Some(t) = sole_integer(&args, schema)? {
                 f.args = f.args.into_iter().map(|a| fit_literal(a, &t)).collect();

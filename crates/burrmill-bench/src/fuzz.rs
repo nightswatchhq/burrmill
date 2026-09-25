@@ -6,7 +6,9 @@
 //! that are not numbers, repeated join keys. Every query is deterministic: rows are compared as a
 //! multiset unless the query orders by every column it returns, and nothing sums a DOUBLE.
 //!
-//! Outcomes: `same`, both refuse, Burrmill alone refuses (stricter, allowed), DuckDB alone refuses
+//! Outcomes: `same`, both refuse, Burrmill alone refuses by the checked rule's design (a sum over
+//! `TRY_CAST` that DuckDB computes by dropping what did not fit), Burrmill alone refuses otherwise
+//! (stricter, allowed, listed by reason), DuckDB alone refuses
 //! (looser, reported), and different answers (reported with the seed that reproduces them:
 //! `SEED=<n> CASES=1 PRINT=1 burrmill-bench fuzz`).
 
@@ -349,7 +351,7 @@ pub fn run() -> anyhow::Result<()> {
     let engine = std::thread::spawn(move || burrmill::Engine::open_segments(&s2)).join().expect("open")?;
     let engine = Arc::new(engine);
 
-    let (mut same, mut both, mut stricter, mut looser, mut differ) = (0, 0, 0, 0, 0);
+    let (mut same, mut both, mut stricter, mut looser, mut differ, mut designed) = (0, 0, 0, 0, 0, 0);
     let mut stricter_why: std::collections::BTreeMap<String, usize> = Default::default();
     for i in 0..cases {
         let case_seed = seed + i as u64;
@@ -377,6 +379,12 @@ pub fn run() -> anyhow::Result<()> {
             (Err(_), Err(_)) => {
                 both += 1;
                 "BOTH-REFUSE"
+            }
+            // The checked rule's refusals of a sum or bound that DuckDB would compute by dropping
+            // values that did not fit: the 6.3 design, not a gap.
+            (Ok(_), Err(e)) if e.contains("TRY_CAST value") => {
+                designed += 1;
+                "DESIGNED"
             }
             (Ok(_), Err(e)) => {
                 stricter += 1;
@@ -410,7 +418,7 @@ pub fn run() -> anyhow::Result<()> {
         println!("  {n:>5}  {k}");
     }
     println!(
-        "FUZZ\tseed={seed}\tcases={cases}\tsame={same}\tboth_refuse={both}\tstricter={stricter}\tlooser={looser}\tdiffer={differ}"
+        "FUZZ\tseed={seed}\tcases={cases}\tsame={same}\tboth_refuse={both}\tdesigned_refusal={designed}\tstricter={stricter}\tlooser={looser}\tdiffer={differ}"
     );
     std::thread::spawn(move || drop(engine)).join().expect("drop engine");
     Ok(())
