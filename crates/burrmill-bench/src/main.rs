@@ -25,6 +25,7 @@ mod encode_parity;
 mod engine_views;
 mod error_parity;
 mod fixture;
+mod fuzz;
 mod generate;
 mod oracles;
 mod reach_parity;
@@ -132,6 +133,7 @@ async fn run() -> anyhow::Result<()> {
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-views <nest>"))?,
         ),
         Some("duck-keywords") => dialect_parity::duck_keywords(),
+        Some("fuzz") => fuzz::run(),
         Some("duck-eval") => dialect_parity::duck_eval(
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: duck-eval <sql>"))?,
         ),

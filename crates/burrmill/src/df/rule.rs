@@ -262,7 +262,6 @@ impl CheckedArithmetic {
                 return plan_err!("refusing plan: {func}(DISTINCT ...) has no checked form");
             }
             let arg = &af.params.args[0];
-            let out = e.get_type(a.input.schema())?;
             let (arg, arg_ty) = if tainted {
                 let Some((new_input, wide, target)) = self.exact_source(&input, arg)? else {
                     return plan_err!(
@@ -283,7 +282,7 @@ impl CheckedArithmetic {
             };
             let udaf = match func {
                 "sum" => CheckedAgg::udaf(Mode::Sum, sum_type(&arg_ty)),
-                _ => CheckedAgg::udaf(Mode::Avg, Some(out)),
+                _ => CheckedAgg::udaf(Mode::Avg, Some(DataType::Float64)),
             };
             let mut params = af.params.clone();
             params.args = vec![arg];
@@ -437,10 +436,9 @@ fn checked_window_sum(
     if wf.params.distinct {
         return plan_err!("refusing plan: {name}(DISTINCT ...) OVER has no checked form");
     }
-    let out = Expr::WindowFunction(Box::new(wf.clone())).get_type(schema)?;
     wf.fun = WindowFunctionDefinition::AggregateUDF(match name.as_str() {
         "sum" => CheckedAgg::udaf(Mode::Sum, sum_type(&t)),
-        _ => CheckedAgg::udaf(Mode::Avg, Some(out)),
+        _ => CheckedAgg::udaf(Mode::Avg, Some(DataType::Float64)),
     });
     Ok(Transformed::yes(Expr::WindowFunction(Box::new(wf))))
 }

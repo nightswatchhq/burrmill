@@ -220,11 +220,12 @@ fn decimal256_sums() {
     assert_eq!(one(&e, "SELECT SUM(v) FROM t"), D76MAX);
 }
 
-// 2g: DataFusion's AVG refuses when a partial overflows; ours only when the answer does.
+// 2g: DataFusion's AVG refuses when a partial overflows; ours only when the answer does. The
+// answer is a DOUBLE, as DuckDB's is for every exact input.
 #[test]
 fn decimal_avg() {
     let (_t, e) = engine(&[("t", vec![dec128(&["1"]), dec128(&["2"])])]);
-    assert_eq!(one(&e, "SELECT AVG(v) FROM t"), "1.5000");
+    assert_eq!(one(&e, "SELECT AVG(v) FROM t"), "1.5");
     let (_t, e) = engine(&[(
         "t",
         vec![
@@ -232,10 +233,7 @@ fn decimal_avg() {
             dec128(&["99999999999999999999999999999999"]),
         ],
     )]);
-    assert_eq!(
-        one(&e, "SELECT AVG(v) FROM t"),
-        "99999999999999999999999999999999.0000"
-    );
+    assert_eq!(one(&e, "SELECT AVG(v) FROM t"), "1e32");
 }
 
 // 1e-1h, 2i: scalar arithmetic, folded or on a column.

@@ -403,6 +403,24 @@ impl<const N: usize> Groups<N> {
                 }
                 Arc::new(b.finish().with_precision_and_scale(*p, *s)?)
             }
+            // DuckDB's `avg` is DOUBLE for every exact input: the exact sum as a DOUBLE, rounded as
+            // DuckDB rounds a hugeint, over the count times 10^scale.
+            DataType::Float64 if self.spec.mode == Mode::Avg => {
+                let unit = 10f64.powi(scale_of(&self.spec.in_ty) as i32);
+                let mut b = arrow::array::Float64Builder::with_capacity(n);
+                for i in 0..n {
+                    if counts[i] == 0 {
+                        b.append_null();
+                        continue;
+                    }
+                    let sum = match sums[i].to_i128() {
+                        Some(x) => super::doubles::decimal_to_double(x, 38, 0),
+                        None => sums[i].to_string().parse::<f64>().unwrap_or(f64::NAN),
+                    };
+                    b.append_value(sum / (counts[i] as f64 * unit));
+                }
+                Arc::new(b.finish())
+            }
             t => return exec_err!("{name}: unsupported output type {t}"),
         })
     }

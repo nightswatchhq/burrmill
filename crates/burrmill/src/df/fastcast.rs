@@ -63,6 +63,22 @@ fn is_text(t: &DataType) -> bool {
 }
 
 fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
+    // `TRY_CAST` to an integer reads hex as `CAST` does, with NULL for what it cannot; this runs
+    // after the checked rule that looks for `TRY_CAST`, so replacing it here hides nothing.
+    if let Expr::TryCast(datafusion_expr::TryCast { expr, field }) = &e
+        && field.data_type().is_integer()
+        && is_text(&expr.get_type(schema)?)
+    {
+        let udf = Arc::new(ScalarUDF::from(TextToInt {
+            sig: Signature::any(1, Volatility::Immutable),
+            to: field.data_type().clone(),
+            safe: true,
+        }));
+        return Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf,
+            vec![expr.as_ref().clone()],
+        ))));
+    }
     let Expr::Cast(Cast { expr, field }) = &e else {
         return Ok(Transformed::no(e));
     };
@@ -73,6 +89,7 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
         let udf = Arc::new(ScalarUDF::from(TextToInt {
             sig: Signature::any(1, Volatility::Immutable),
             to: field.data_type().clone(),
+            safe: false,
         }));
         return Ok(Transformed::yes(Expr::ScalarFunction(
             ScalarFunction::new_udf(udf, vec![expr.as_ref().clone()]),
@@ -213,6 +230,8 @@ mod tests {
 struct TextToInt {
     sig: Signature,
     to: DataType,
+    /// `TRY_CAST`: NULL where `CAST` would refuse.
+    safe: bool,
 }
 
 fn duck_int_name(t: &DataType) -> &'static str {
@@ -255,6 +274,55 @@ fn prefixed(s: &str) -> Option<Option<u128>> {
     Some(Some(v))
 }
 
+/// Unprefixed text as DuckDB's integer cast reads it: surrounding whitespace, a sign, digits with
+/// underscores between them, an optional fraction and exponent, the whole rounded half away from
+/// zero, exactly. `None` for anything else, or a value past `i128`.
+fn duck_int(s: &str) -> Option<i128> {
+    let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
+    let (neg, t) = match t.as_bytes().first()? {
+        b'-' => (true, &t[1..]),
+        b'+' => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let (mantissa, exp) = match t.find(['e', 'E']) {
+        Some(i) => (&t[..i], t[i + 1..].parse::<i32>().ok()?),
+        None => (t, 0),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = |p: &str| {
+        p.is_empty()
+            || (!p.starts_with('_') && !p.ends_with('_') && p.chars().all(|c| c.is_ascii_digit() || c == '_'))
+    };
+    if int.is_empty() && frac.is_empty() || !digits(int) || !digits(frac) {
+        return None;
+    }
+    let all: Vec<u8> = int.chars().chain(frac.chars()).filter(|&c| c != '_').map(|c| c as u8 - b'0').collect();
+    // The value is `all * 10^point`, with `point` places to move the decimal point.
+    let point = exp as i64 - frac.chars().filter(|&c| c != '_').count() as i64;
+    let (kept, dropped): (&[u8], &[u8]) = if point >= 0 {
+        (&all, &[])
+    } else {
+        let cut = all.len().saturating_sub(point.unsigned_abs() as usize);
+        (&all[..cut], &all[cut..])
+    };
+    let mut v: i128 = 0;
+    for &d in kept {
+        v = v.checked_mul(10)?.checked_add(d as i128)?;
+    }
+    for _ in 0..point.max(0) {
+        if v == 0 {
+            break;
+        }
+        v = v.checked_mul(10)?;
+    }
+    // Half away from zero on the first digit dropped; a point far to the left drops everything.
+    let first = if dropped.len() as i64 == -point { dropped.first().copied() } else { None };
+    if first.is_some_and(|d| d >= 5) {
+        v = v.checked_add(1)?;
+    }
+    Some(if neg { -v } else { v })
+}
+
 impl ScalarUDFImpl for TextToInt {
     fn name(&self) -> &str {
         "burrmill_text_to_int"
@@ -270,7 +338,7 @@ impl ScalarUDFImpl for TextToInt {
         let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
         let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
         let strict = CastOptions {
-            safe: false,
+            safe: self.safe,
             ..Default::default()
         };
         let wrap = |out: ArrayRef| -> Result<ColumnarValue> {
@@ -282,13 +350,17 @@ impl ScalarUDFImpl for TextToInt {
         };
         let text = cast_with_options(&a, &DataType::Utf8, &CastOptions::default())?;
         let text = text.as_string::<i32>();
-        if !(0..text.len()).any(|i| text.is_valid(i) && prefixed(text.value(i)).is_some()) {
-            return wrap(cast_with_options(&a, &self.to, &strict)?);
-        }
         let signed = matches!(
             self.to,
             DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
         );
+        let min: i128 = match self.to {
+            DataType::Int8 => i8::MIN as i128,
+            DataType::Int16 => i16::MIN as i128,
+            DataType::Int32 => i32::MIN as i128,
+            DataType::Int64 => i64::MIN as i128,
+            _ => 0,
+        };
         let max: u128 = match self.to {
             DataType::Int8 => i8::MAX as u128,
             DataType::Int16 => i16::MAX as u128,
@@ -313,15 +385,16 @@ impl ScalarUDFImpl for TextToInt {
             }
             let s = text.value(i);
             let v = match prefixed(s) {
-                Some(Some(v)) if v <= max => v as i128,
+                Some(Some(v)) if v <= max => Some(v as i128),
+                Some(_) if self.safe => None,
                 Some(_) => return Err(refuse(s)),
-                None => {
-                    let one = cast_with_options(&text.slice(i, 1), &self.to, &strict)?;
-                    let one = cast_with_options(&one, &DataType::Decimal128(38, 0), &strict)?;
-                    one.as_primitive::<Decimal128Type>().value(0)
-                }
+                None => match duck_int(s) {
+                    Some(v) if v >= min && v <= max as i128 => Some(v),
+                    _ if self.safe => None,
+                    _ => return Err(refuse(s)),
+                },
             };
-            vals.push(Some(v));
+            vals.push(v);
         }
         let wide: ArrayRef = if signed {
             Arc::new(Int64Array::from_iter(
@@ -338,7 +411,22 @@ impl ScalarUDFImpl for TextToInt {
 
 #[cfg(test)]
 mod hex_tests {
-    use super::prefixed;
+    use super::{duck_int, prefixed};
+
+    // Each as DuckDB 1.5 read it (`TRY_CAST(... AS BIGINT)`, `duck-eval`).
+    #[test]
+    fn plain_text_reads_as_duckdb_reads_it() {
+        for (s, v) in [
+            ("1.", Some(1)), (".5", Some(1)), ("1_000", Some(1000)), ("2.4999", Some(2)),
+            ("-0.5", Some(-1)), ("1e-1", Some(0)), ("5e-1", Some(1)), ("00012", Some(12)),
+            ("1 2", None), ("inf", None), ("-", None), ("1.5e1", Some(15)), ("+-1", None),
+            ("\t7\n", Some(7)), (" 12 ", Some(12)), ("1.5", Some(2)), ("-2.5", Some(-3)),
+            ("1e2", Some(100)), ("+7", Some(7)), ("", None), ("abc", None),
+            ("9223372036854775807.5", Some(9223372036854775808)),
+        ] {
+            assert_eq!(duck_int(s), v, "{s:?}");
+        }
+    }
 
     // Each as DuckDB 1.5 read it (`duck-eval`).
     #[test]

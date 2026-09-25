@@ -86,15 +86,18 @@ impl MiniSession {
                 CacheManagerConfig::default().with_metadata_cache_limit(1024 * 1024 * 1024),
             )
             .build_arc()?;
+        // Under every name DataFusion gives a function: `length` is `character_length`'s, and
+        // registering primary names alone refused it.
         let mut scalar = HashMap::new();
         for f in datafusion_functions::all_default_functions() {
+            for a in f.aliases() {
+                scalar.insert(a.clone(), Arc::clone(&f));
+            }
             scalar.insert(f.name().to_string(), f);
         }
         // The only defaults that reach outside the query (roadmap 6.2 audit, `df_functions`):
         // `input_file_name()` would hand a caller the server's segment paths.
-        for name in ["input_file_name", "file_row_index"] {
-            scalar.remove(name);
-        }
+        scalar.retain(|_, f| !matches!(f.name(), "input_file_name" | "file_row_index"));
         if let Some(inner) = scalar.remove("decode") {
             let d = super::dialect::Decode::udf(inner);
             scalar.insert(d.name().to_string(), d);
@@ -130,6 +133,9 @@ impl MiniSession {
         }
         let mut aggregate = HashMap::new();
         for f in datafusion_functions_aggregate::all_default_aggregate_functions() {
+            for a in f.aliases() {
+                aggregate.insert(a.clone(), Arc::clone(&f));
+            }
             aggregate.insert(f.name().to_string(), f);
         }
         // DuckDB's `list(x ORDER BY k)`.
@@ -140,6 +146,9 @@ impl MiniSession {
         aggregate.insert(exact_text.name().to_string(), exact_text);
         let mut window = HashMap::new();
         for f in datafusion_functions_window::all_default_window_functions() {
+            for a in f.aliases() {
+                window.insert(a.clone(), Arc::clone(&f));
+            }
             window.insert(f.name().to_string(), f);
         }
         let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
