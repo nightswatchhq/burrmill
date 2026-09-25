@@ -240,3 +240,11 @@ fn is_distinct_from_binds_tighter_than_and_or() {
     let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
     assert_eq!(serde_json::to_string(&rows).unwrap(), r#"[{"v":true}]"#);
 }
+
+#[test]
+fn substring_plans_without_the_umbrella_crate() {
+    let (_tmp, engine) = nest_with_transfer();
+    let sql = "SELECT substr('abcdef', 2, 3) AS a, SUBSTRING('abcdef' FROM 2 FOR 3) AS b";
+    let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
+    assert_eq!(serde_json::to_string(&rows).unwrap(), r#"[{"a":"bcd","b":"bcd"}]"#);
+}

@@ -155,18 +155,3 @@ fn casts_back_captures_and_keeps_nulls() {
         "{err}"
     );
 }
-
-#[test]
-#[ignore]
-fn probe() {
-    let (_t, e) = engine();
-    for sql in std::env::var("SQL").unwrap().split(";;") {
-        match e.sql(sql) {
-            Ok(_) => println!("OK   {sql}\n  {:?}", text(&e, sql)),
-            Err(err) => println!(
-                "ERR  {sql}\n  {}",
-                err.to_string().lines().last().unwrap_or("")
-            ),
-        }
-    }
-}

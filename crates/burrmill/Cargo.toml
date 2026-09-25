@@ -14,6 +14,9 @@ repository.workspace = true
 # **The default graph stays short.** Arrow and Parquet are rented permanently (RFC-0044 §4.2).
 # DataFusion is the optional host planner (roadmap 6.0, route C): component crates plus an owned
 # physical planner, off unless the consumer enables `datafusion`. DuckDB never enters this crate.
+# Features are named here, not left to unification: the bench's stock arm pulls the umbrella crate,
+# which had been lending this one `unicode_expressions` (SUBSTRING) that a consumer would not get.
+# `recursive_protection` grows the stack for deep expressions rather than aborting the process.
 [features]
 default = []
 datafusion = [
@@ -67,21 +70,21 @@ serde_json = { version = "1", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"], optional = true }
 arrow-schema = { version = "59", default-features = false, optional = true }
 datafusion-catalog = { version = "=55.0.0", default-features = false, optional = true }
-datafusion-common = { version = "=55.0.0", default-features = false, optional = true }
+datafusion-common = { version = "=55.0.0", default-features = false, features = ["recursive_protection"], optional = true }
 datafusion-datasource = { version = "=55.0.0", default-features = false, optional = true }
 datafusion-datasource-parquet = { version = "=55.0.0", default-features = false, optional = true }
 datafusion-execution = { version = "=55.0.0", default-features = false, optional = true }
-datafusion-expr = { version = "=55.0.0", default-features = false, optional = true }
+datafusion-expr = { version = "=55.0.0", default-features = false, features = ["recursive_protection"], optional = true }
 datafusion-functions = { version = "=55.0.0", default-features = false, features = ["datetime_expressions", "encoding_expressions", "math_expressions", "regex_expressions", "string_expressions", "unicode_expressions"], optional = true }
 datafusion-functions-aggregate = { version = "=55.0.0", default-features = false, optional = true }
 datafusion-functions-nested = { version = "=55.0.0", default-features = false, optional = true }
 datafusion-functions-window = { version = "=55.0.0", default-features = false, optional = true }
-datafusion-optimizer = { version = "=55.0.0", default-features = false, optional = true }
-datafusion-physical-expr = { version = "=55.0.0", default-features = false, optional = true }
-datafusion-physical-optimizer = { version = "=55.0.0", default-features = false, optional = true }
+datafusion-optimizer = { version = "=55.0.0", default-features = false, features = ["recursive_protection"], optional = true }
+datafusion-physical-expr = { version = "=55.0.0", default-features = false, features = ["recursive_protection"], optional = true }
+datafusion-physical-optimizer = { version = "=55.0.0", default-features = false, features = ["recursive_protection"], optional = true }
 datafusion-physical-plan = { version = "=55.0.0", default-features = false, optional = true }
 datafusion-session = { version = "=55.0.0", default-features = false, optional = true }
-datafusion-sql = { version = "=55.0.0", default-features = false, optional = true }
+datafusion-sql = { version = "=55.0.0", default-features = false, features = ["recursive_protection", "unicode_expressions"], optional = true }
 
 # Test-only. The seal-layout canary writes throwaway segment directories, and a canary that leaves
 # litter in /tmp on every run is one people start ignoring.
