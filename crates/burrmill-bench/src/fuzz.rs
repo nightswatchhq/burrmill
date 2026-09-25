@@ -294,7 +294,7 @@ impl Gen<'_> {
             }
             // Set operations.
             6 => {
-                let op = self.one(&["UNION ALL", "UNION", "EXCEPT", "INTERSECT"]);
+                let op = self.one(&["UNION ALL", "UNION", "EXCEPT", "INTERSECT", "EXCEPT ALL", "INTERSECT ALL"]);
                 let a = self.int(&sc, 2);
                 let b = self.int(&sc, 2);
                 let p = self.pred(&sc, 1);

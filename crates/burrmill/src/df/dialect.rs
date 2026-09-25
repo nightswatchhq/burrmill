@@ -774,6 +774,9 @@ impl AnalyzerRule for DuckComparisons {
 
     fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> DFResult<LogicalPlan> {
         let changed = plan.transform_up_with_subqueries(|p| {
+            if let Some(n) = set_op_types(&p)? {
+                return Ok(Transformed::yes(n));
+            }
             let mut schema = DFSchema::empty();
             for i in p.inputs() {
                 schema.merge(i.schema());
@@ -813,6 +816,119 @@ impl AnalyzerRule for DuckComparisons {
             })
             .map(|t| t.data)
     }
+}
+
+const DUP_ROW: &str = "__burrmill_dup";
+
+/// DuckDB's type for two integer columns meeting in a set operation, where literals do not adapt:
+/// the wider of one signedness, and for mixed signs a signed type twice the unsigned width, which
+/// past 64 bits is HUGEINT.
+fn duck_union(a: &DataType, b: &DataType) -> Option<DataType> {
+    use DataType::*;
+    let bits = |t: &DataType| match t {
+        Int8 | UInt8 => Some(8),
+        Int16 | UInt16 => Some(16),
+        Int32 | UInt32 => Some(32),
+        Int64 | UInt64 => Some(64),
+        _ => None,
+    };
+    let (x, y) = (bits(a)?, bits(b)?);
+    let signed = |n: u32| match n {
+        8 => Int8,
+        16 => Int16,
+        32 => Int32,
+        64 => Int64,
+        _ => Decimal128(38, 0),
+    };
+    Some(match (a.is_unsigned_integer(), b.is_unsigned_integer()) {
+        (true, true) | (false, false) if x >= y => a.clone(),
+        (true, true) | (false, false) => b.clone(),
+        (true, false) => signed((2 * x).max(y)),
+        (false, true) => signed((2 * y).max(x)),
+    })
+}
+
+/// `INTERSECT` and `EXCEPT` are planned as a semi or anti join on every column, NULLs equal. Two
+/// things are put right here. The join keeps the left side's types, where DuckDB gives each column
+/// the pair's union type, so both sides are cast to it. And the `ALL` forms (no `Distinct` under
+/// the left) were set operations, not bag ones: `EXCEPT ALL` removed every left row with a match
+/// rather than one per match. Numbering each row within its duplicates on both sides, and joining
+/// on that number too, keeps `min(m, n)` copies for `INTERSECT ALL` and `m - n` for `EXCEPT ALL`.
+fn set_op_types(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
+    use datafusion_common::NullEquality;
+    use datafusion_expr::{ExprFunctionExt, JoinType, LogicalPlanBuilder};
+    let LogicalPlan::Join(j) = p else {
+        return Ok(None);
+    };
+    let (ls, rs) = (j.left.schema(), j.right.schema());
+    if !matches!(j.join_type, JoinType::LeftSemi | JoinType::LeftAnti)
+        || j.null_equality != NullEquality::NullEqualsNull
+        || j.filter.is_some()
+        || j.on.len() != ls.fields().len()
+        || rs.fields().len() != ls.fields().len()
+    {
+        return Ok(None);
+    }
+    // Already rewritten: its keys carry the duplicate number.
+    if ls.fields().iter().any(|f| f.name() == DUP_ROW) {
+        return Ok(None);
+    }
+    let types: Vec<Option<DataType>> = ls
+        .fields()
+        .iter()
+        .zip(rs.fields())
+        .map(|(l, r)| duck_union(l.data_type(), r.data_type()).filter(|t| t != l.data_type()))
+        .collect();
+    let bag = !matches!(j.left.as_ref(), LogicalPlan::Distinct(_));
+    if types.iter().all(Option::is_none) && !bag {
+        return Ok(None);
+    }
+    let side = |plan: &Arc<LogicalPlan>| -> DFResult<LogicalPlan> {
+        let s = plan.schema();
+        let exprs: Vec<Expr> = (0..s.fields().len())
+            .map(|i| {
+                let (q, f) = s.qualified_field(i);
+                let c = Expr::Column(datafusion_common::Column::from((q, f)));
+                match &types[i] {
+                    Some(t) => Expr::Cast(Cast::new(Box::new(c), t.clone())).alias_qualified(q.cloned(), f.name()),
+                    None => c,
+                }
+            })
+            .collect();
+        let b = LogicalPlanBuilder::from(plan.as_ref().clone()).project(exprs)?;
+        if !bag {
+            return b.build();
+        }
+        let s = b.schema().clone();
+        let cols: Vec<Expr> = (0..s.fields().len())
+            .map(|i| Expr::Column(datafusion_common::Column::from(s.qualified_field(i))))
+            .collect();
+        let rn = Expr::from(datafusion_expr::expr::WindowFunction::new(
+            datafusion_expr::expr::WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::row_number::row_number_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(cols)
+        .build()?
+        .alias(DUP_ROW);
+        b.window(vec![rn])?.build()
+    };
+    let (left, right) = (side(&j.left)?, side(&j.right)?);
+    let keys = |s: &DFSchema| -> Vec<datafusion_common::Column> {
+        s.fields().iter().map(|f| datafusion_common::Column::from_name(f.name())).collect()
+    };
+    let (lk, rk) = (keys(left.schema()), keys(right.schema()));
+    let joined = LogicalPlanBuilder::from(left)
+        .join_detailed(right, j.join_type, (lk, rk), None, NullEquality::NullEqualsNull)?;
+    if !bag {
+        return Ok(Some(joined.build()?));
+    }
+    let s = joined.schema().clone();
+    let out: Vec<Expr> = (0..s.fields().len() - 1)
+        .map(|i| Expr::Column(datafusion_common::Column::from(s.qualified_field(i))))
+        .collect();
+    Ok(Some(joined.project(out)?.build()?))
 }
 
 fn is_text(t: &DataType) -> bool {
