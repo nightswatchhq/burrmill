@@ -4,6 +4,45 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Fuzzing, widened: time, regex, strings — and a DuckDB bug — 2026-09-25
+
+The grammar now draws what agents write against nests and had never been generated: timestamps
+from `block_timestamp`, `date_trunc`, `extract`/`date_part` and the shorthands (`year()`,
+`dayofweek()`, `epoch()`), `strftime`, `date_diff`, `DATE ± INTERVAL`; `regexp_matches`,
+`regexp_extract`, `regexp_replace`, `ILIKE`, `split_part`, `trim`, `lpad`, `concat_ws`;
+`rank`/`dense_rank`/`ntile`/`lead` and frames; `string_agg`, `bool_and`; `DESC`, `NULLS FIRST`,
+`OFFSET`. The first run: **656 of 2,000 refused, 32 different**. Now: **3,000 and 5,000 cases on two
+seeds, no difference but two from a DuckDB bug, nothing looser.** Fixed:
+
+- **NULL ordering.** DuckDB sorts NULLs last in both directions; DataFusion puts them first under
+  `DESC`, so `ORDER BY x DESC LIMIT n` returned other rows. NULLS LAST is now written wherever an
+  ordering does not say (queries, aggregates, windows).
+- **Missing functions**, each to DuckDB's measured behaviour: `strftime` with DuckDB's own
+  specifiers (`%f` is microseconds, `%g` milliseconds, not chrono's), `date_diff`/`datediff`
+  counting calendar boundaries, `regexp_extract` (`''` where nothing matches),
+  `regexp_replace` (first match unless `g`; a rewrite naming a missing group leaves the string,
+  as RE2 does), `sign` as TINYINT, and the date-part shorthands and `regexp_matches` as renames.
+- **Timestamps as text**: `2024-01-01 00:00:00+00`, fraction trimmed, where arrow wrote ISO `T`/`Z`.
+- **Date arithmetic types**: `date_trunc` of a DATE and `DATE ± INTERVAL` are TIMESTAMP (the
+  latter had kept the DATE and dropped the hours), `DATE + 3` stays a DATE.
+- **Result types of mixed values**: a DOUBLE among `CASE`/`COALESCE`/`greatest`/`least`/`NULLIF`
+  values makes all DOUBLE; mixed-sign integers there take DuckDB's union type (HUGEINT beside
+  UBIGINT), and `NULLIF` fits its literal.
+- DuckDB refuses a string or decimal literal as an `ORDER BY` key; so does Burrmill.
+
+**A DuckDB 1.5 bug**, the two remaining differences: with a date part projected, a comparison
+between text and a cast timestamp drops every row —
+`SELECT year(t) FROM (SELECT to_timestamp(1700000000 + x) AS t FROM range(10) r(x)) WHERE 'bob' <> CAST(t AS VARCHAR)`
+returns nothing, while projecting `t` returns all ten. Burrmill keeps the rows. Recorded as
+`KNOWN` in `dialect-parity` (119/119); not reported upstream, which is Chief's call.
+
+Owed: `lodestar_disputes` is a few milliseconds of mostly planning, 2-4x DuckDB's 3 ms when timed
+alone, and reads 0.8-1.7x in `engine-views` run to run; an A/B against this morning's build shows
+no regression. Why a small statement costs milliseconds to plan is worth finding, since every
+`/sql` call pays it. The nest: 22/22 identical, 0.641x.
+
+---
+
 ## Differential fuzzing — nine faults, three of them silent wrong answers — 2026-09-25
 
 Slice 1 owed a generated corpus against DuckDB. `burrmill-bench fuzz` draws queries from a typed
