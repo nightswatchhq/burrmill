@@ -336,8 +336,11 @@ pub fn sql_files(root: &str, files: &[String]) -> anyhow::Result<()> {
         .join()
         .expect("engine");
         if std::env::var("PRINT").is_ok() {
+            if let Ok(r) = &duck_rows {
+                r.iter().for_each(|row| println!("  duck {row}"));
+            }
             if let Ok(r) = &rows {
-                r.iter().for_each(|row| println!("  row {row}"));
+                r.iter().for_each(|row| println!("  row  {row}"));
             }
         }
         let digest = |r: &Vec<String>| {

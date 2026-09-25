@@ -181,6 +181,7 @@ impl MiniSession {
                 Arc::new(super::fastcast::FastTextCasts),
                 Arc::new(super::sharing::ShareRepeats),
                 Arc::new(TypeCoercion::new()),
+                Arc::new(super::doubles::DuckDoubles::default()),
             ]),
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new().rules,
