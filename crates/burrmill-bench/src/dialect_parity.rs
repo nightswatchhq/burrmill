@@ -54,6 +54,7 @@ const CORPUS: &[&str] = &[
     "SELECT t.\"from\", CAST(t.block_number / 10 AS BIGINT) AS block_number FROM transfer t ORDER BY t.block_number DESC",
     "SELECT CAST(0.5::DOUBLE AS BIGINT) a, CAST(1.5::DOUBLE AS BIGINT) b, CAST(2.5::DOUBLE AS BIGINT) c, CAST(-0.5::DOUBLE AS BIGINT) d, CAST(-1.5::DOUBLE AS BIGINT) e, CAST(0.6::DOUBLE AS BIGINT) f, CAST(2.5::DECIMAL(3,1) AS BIGINT) l, CAST(-2.5::DECIMAL(3,1) AS BIGINT) m, CAST(2.4::DECIMAL(3,1) AS BIGINT) n",
     "SELECT CAST(CAST(value AS DOUBLE) / 3 AS BIGINT) AS q, CAST(block_number / 4 AS INTEGER) AS r FROM transfer WHERE block_number < 100 ORDER BY 1, 2",
+    "SELECT k FROM (SELECT block_number * 100000 + log_index AS k FROM transfer UNION ALL SELECT block_number * 100000 + log_index FROM transfer) ORDER BY 1 LIMIT 3",
     "SELECT max(\"from\") AS m FROM transfer",
     "SELECT (block_number, log_index) > (2, 0) AS gt FROM transfer ORDER BY block_number, log_index",
     "SELECT CAST(block_number AS UBIGINT) AS b FROM transfer ORDER BY 1 LIMIT 1",

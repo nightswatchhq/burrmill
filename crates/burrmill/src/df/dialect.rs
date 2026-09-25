@@ -607,7 +607,7 @@ impl AnalyzerRule for DuckComparisons {
     }
 
     fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> DFResult<LogicalPlan> {
-        plan.transform_up_with_subqueries(|p| {
+        let changed = plan.transform_up_with_subqueries(|p| {
             let mut schema = DFSchema::empty();
             for i in p.inputs() {
                 schema.merge(i.schema());
@@ -630,8 +630,22 @@ impl AnalyzerRule for DuckComparisons {
             } else {
                 Ok(t)
             }
-        })
-        .map(|t| t.data)
+        })?;
+        if !changed.transformed {
+            return Ok(changed.data);
+        }
+        // A union's schema was fixed when the SQL was planned, from the types before this rule, and
+        // `recompute_schema` keeps it while the width is unchanged; everything above inherits it.
+        // Re-derive it from the inputs and recompute upwards, so coercion sees the types as they are.
+        changed
+            .data
+            .transform_up_with_subqueries(|p| match p {
+                LogicalPlan::Union(u) => Ok(Transformed::yes(LogicalPlan::Union(
+                    datafusion_expr::logical_plan::Union::try_new_with_loose_types(u.inputs)?,
+                ))),
+                p => Ok(Transformed::yes(p.recompute_schema()?)),
+            })
+            .map(|t| t.data)
     }
 }
 
