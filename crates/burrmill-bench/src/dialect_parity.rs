@@ -139,7 +139,7 @@ const KNOWN: &[(&str, &str)] = &[
     (
         "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
         "a DuckDB 1.5 bug, not reported upstream yet: with a date part projected, a <> between text and a \
-         cast timestamp drops every row (project the timestamp itself and all rows return). Burrmill keeps them",
+         cast timestamp drops every row, for <>, >= and the rest (project the timestamp itself and all rows return). Burrmill keeps them",
     ),
     (
     "SELECT log_index FROM transfer WHERE block_number - 95 > 0",

@@ -1128,10 +1128,40 @@ fn fit_literal(e: Expr, to: &DataType) -> Expr {
     }
 }
 
-/// A float beside a DECIMAL among values that meet in one result.
+/// A float beside any other number among values that meet in one result: DuckDB makes all of them
+/// DOUBLE. DataFusion agrees for integers, but mixed-sign integers become DECIMAL in its coercion,
+/// after this has run, and DECIMAL beside a float stays DECIMAL there.
 fn floats_win(exprs: &[&Expr], schema: &DFSchema) -> DFResult<bool> {
     let types = exprs.iter().map(|e| e.get_type(schema)).collect::<DFResult<Vec<_>>>()?;
-    Ok(types.iter().any(|t| t.is_floating()) && types.iter().any(|t| matches!(t, DataType::Decimal128(..) | DataType::Decimal256(..))))
+    Ok(types.iter().any(|t| t.is_floating()) && types.iter().any(|t| t.is_numeric() && !t.is_floating()))
+}
+
+/// DuckDB's type for integer values meeting in one result, where they mix signedness and so
+/// DataFusion would pick another (a literal having been fitted already): `None` where it agrees.
+fn integer_union(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType>> {
+    let mut types = Vec::new();
+    for e in exprs {
+        if matches!(e, Expr::Literal(..)) {
+            continue;
+        }
+        let t = e.get_type(schema)?;
+        if t.is_null() {
+            continue;
+        }
+        if !t.is_integer() {
+            return Ok(None);
+        }
+        types.push(t);
+    }
+    let mixed = types.iter().any(|t| t.is_unsigned_integer()) && types.iter().any(|t| t.is_signed_integer());
+    if !mixed {
+        return Ok(None);
+    }
+    Ok(types.iter().skip(1).try_fold(types[0].clone(), |a, b| duck_union(&a, b)))
+}
+
+fn cast_to(e: Expr, t: &DataType, schema: &DFSchema) -> DFResult<Expr> {
+    Ok(if e.get_type(schema)? == *t { e } else { Expr::Cast(Cast::new(Box::new(e), t.clone())) })
 }
 
 fn as_double(e: Expr, schema: &DFSchema) -> DFResult<Expr> {
@@ -1218,6 +1248,15 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
                 }
                 return Ok(Transformed::yes(Expr::Case(c)));
             }
+            if let Some(t) = integer_union(&branches, schema)? {
+                for (_, then) in c.when_then_expr.iter_mut() {
+                    **then = cast_to(then.as_ref().clone(), &t, schema)?;
+                }
+                if let Some(e) = c.else_expr.as_mut() {
+                    **e = cast_to(e.as_ref().clone(), &t, schema)?;
+                }
+                return Ok(Transformed::yes(Expr::Case(c)));
+            }
             if let Some(t) = sole_integer(&branches, schema)? {
                 for (_, then) in c.when_then_expr.iter_mut() {
                     **then = fit_literal(then.as_ref().clone(), &t);
@@ -1233,6 +1272,12 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
         {
             if f.func.name() != "burrmill_intdiv" && floats_win(&f.args.iter().collect::<Vec<_>>(), schema)? {
                 f.args = f.args.into_iter().map(|a| as_double(a, schema)).collect::<DFResult<_>>()?;
+                return Ok(Transformed::yes(Expr::ScalarFunction(f)));
+            }
+            if f.func.name() != "burrmill_intdiv"
+                && let Some(t) = integer_union(&f.args.iter().collect::<Vec<_>>(), schema)?
+            {
+                f.args = f.args.into_iter().map(|a| cast_to(a, &t, schema)).collect::<DFResult<_>>()?;
                 return Ok(Transformed::yes(Expr::ScalarFunction(f)));
             }
             let args: Vec<&Expr> = f.args.iter().collect();
