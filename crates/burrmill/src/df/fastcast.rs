@@ -66,12 +66,21 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
     let Expr::Cast(Cast { expr, field }) = &e else {
         return Ok(Transformed::no(e));
     };
-    let DataType::Decimal128(p, 0) = field.data_type() else {
-        return Ok(Transformed::no(e));
-    };
     if !is_text(&expr.get_type(schema)?) {
         return Ok(Transformed::no(e));
     }
+    if field.data_type().is_integer() {
+        let udf = Arc::new(ScalarUDF::from(TextToInt {
+            sig: Signature::any(1, Volatility::Immutable),
+            to: field.data_type().clone(),
+        }));
+        return Ok(Transformed::yes(Expr::ScalarFunction(
+            ScalarFunction::new_udf(udf, vec![expr.as_ref().clone()]),
+        )));
+    }
+    let DataType::Decimal128(p, 0) = field.data_type() else {
+        return Ok(Transformed::no(e));
+    };
     let udf = Arc::new(ScalarUDF::from(TextToDecimal {
         sig: Signature::any(1, Volatility::Immutable),
         precision: *p,
@@ -193,5 +202,155 @@ mod tests {
             assert_eq!(plain(s, 38), None, "{s:?}");
         }
         assert_eq!(plain("123", 2), None);
+    }
+}
+
+/// `burrmill_text_to_int(x)`: `CAST(x AS <integer>)` as DuckDB reads it. DuckDB takes `0x`/`0X` hex
+/// and `0b`/`0B` binary for integers of 64 bits or fewer (not HUGEINT, not DECIMAL), with
+/// underscores between digits and surrounding spaces, no sign, and refuses what does not fit, as
+/// measured with `burrmill-bench duck-eval`. A column with no such prefix goes to Arrow's cast.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct TextToInt {
+    sig: Signature,
+    to: DataType,
+}
+
+fn duck_int_name(t: &DataType) -> &'static str {
+    match t {
+        DataType::Int8 => "INT8",
+        DataType::Int16 => "INT16",
+        DataType::Int32 => "INT32",
+        DataType::Int64 => "INT64",
+        DataType::UInt8 => "UINT8",
+        DataType::UInt16 => "UINT16",
+        DataType::UInt32 => "UINT32",
+        _ => "UINT64",
+    }
+}
+
+/// A `0x`/`0b` literal's value; `Some(None)` when prefixed but malformed, `None` when unprefixed.
+fn prefixed(s: &str) -> Option<Option<u128>> {
+    let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
+    let (radix, digits) = match t.get(..2) {
+        Some("0x" | "0X") => (16, &t[2..]),
+        Some("0b" | "0B") => (2, &t[2..]),
+        _ => return None,
+    };
+    if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') {
+        return Some(None);
+    }
+    let mut v: u128 = 0;
+    for c in digits.chars().filter(|&c| c != '_') {
+        let Some(d) = c.to_digit(radix) else {
+            return Some(None);
+        };
+        match v
+            .checked_mul(radix as u128)
+            .and_then(|v| v.checked_add(d as u128))
+        {
+            Some(n) => v = n,
+            None => return Some(None),
+        }
+    }
+    Some(Some(v))
+}
+
+impl ScalarUDFImpl for TextToInt {
+    fn name(&self) -> &str {
+        "burrmill_text_to_int"
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(self.to.clone())
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        use arrow::array::{Int64Array, UInt64Array};
+        let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
+        let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let strict = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let wrap = |out: ArrayRef| -> Result<ColumnarValue> {
+            Ok(if scalar {
+                ColumnarValue::Scalar(ScalarValue::try_from_array(&out, 0)?)
+            } else {
+                ColumnarValue::Array(out)
+            })
+        };
+        let text = cast_with_options(&a, &DataType::Utf8, &CastOptions::default())?;
+        let text = text.as_string::<i32>();
+        if !(0..text.len()).any(|i| text.is_valid(i) && prefixed(text.value(i)).is_some()) {
+            return wrap(cast_with_options(&a, &self.to, &strict)?);
+        }
+        let signed = matches!(
+            self.to,
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+        );
+        let max: u128 = match self.to {
+            DataType::Int8 => i8::MAX as u128,
+            DataType::Int16 => i16::MAX as u128,
+            DataType::Int32 => i32::MAX as u128,
+            DataType::Int64 => i64::MAX as u128,
+            DataType::UInt8 => u8::MAX as u128,
+            DataType::UInt16 => u16::MAX as u128,
+            DataType::UInt32 => u32::MAX as u128,
+            _ => u64::MAX as u128,
+        };
+        let refuse = |s: &str| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "Conversion Error: Could not convert string '{s}' to {}",
+                duck_int_name(&self.to)
+            ))
+        };
+        let mut vals: Vec<Option<i128>> = Vec::with_capacity(text.len());
+        for i in 0..text.len() {
+            if text.is_null(i) {
+                vals.push(None);
+                continue;
+            }
+            let s = text.value(i);
+            let v = match prefixed(s) {
+                Some(Some(v)) if v <= max => v as i128,
+                Some(_) => return Err(refuse(s)),
+                None => {
+                    let one = cast_with_options(&text.slice(i, 1), &self.to, &strict)?;
+                    let one = cast_with_options(&one, &DataType::Decimal128(38, 0), &strict)?;
+                    one.as_primitive::<Decimal128Type>().value(0)
+                }
+            };
+            vals.push(Some(v));
+        }
+        let wide: ArrayRef = if signed {
+            Arc::new(Int64Array::from_iter(
+                vals.iter().map(|v| v.map(|v| v as i64)),
+            ))
+        } else {
+            Arc::new(UInt64Array::from_iter(
+                vals.iter().map(|v| v.map(|v| v as u64)),
+            ))
+        };
+        wrap(cast_with_options(&wide, &self.to, &strict)?)
+    }
+}
+
+#[cfg(test)]
+mod hex_tests {
+    use super::prefixed;
+
+    // Each as DuckDB 1.5 read it (`duck-eval`).
+    #[test]
+    fn prefixes_read_as_duckdb_reads_them() {
+        assert_eq!(prefixed("0x1F"), Some(Some(31)));
+        assert_eq!(prefixed("0X1f"), Some(Some(31)));
+        assert_eq!(prefixed(" 0x1f"), Some(Some(31)));
+        assert_eq!(prefixed("0b101"), Some(Some(5)));
+        assert_eq!(prefixed("0x1_f"), Some(Some(31)));
+        assert_eq!(prefixed("0x"), Some(None));
+        assert_eq!(prefixed("0xg1"), Some(None));
+        assert_eq!(prefixed("-0x1f"), None);
+        assert_eq!(prefixed("42"), None);
     }
 }

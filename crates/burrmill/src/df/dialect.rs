@@ -946,3 +946,144 @@ fn round_before_int_cast(
         Expr::Cast(Cast::new(Box::new(rounded), to))
     }))
 }
+
+/// DuckDB's `from_hex(text)`: the bytes a hex string spells, an odd length padded with a leading
+/// zero (`abc` is `0a bc`), a bad digit refused, as measured against DuckDB.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct FromHex {
+    sig: Signature,
+}
+
+impl FromHex {
+    pub fn udf() -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable) }))
+    }
+}
+
+impl ScalarUDFImpl for FromHex {
+    fn name(&self) -> &str {
+        "from_hex"
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn coerce_types(&self, args: &[DataType]) -> DFResult<Vec<DataType>> {
+        match args {
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null] => {
+                Ok(vec![DataType::Utf8])
+            }
+            _ => plan_err!("from_hex takes one text argument"),
+        }
+    }
+    fn return_type(&self, _args: &[DataType]) -> DFResult<DataType> {
+        Ok(DataType::Binary)
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        use arrow::array::BinaryBuilder;
+        let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
+        let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let a = a.as_string::<i32>();
+        let mut out = BinaryBuilder::with_capacity(a.len(), 0);
+        let digit = |c: u8| -> DFResult<u8> {
+            (c as char).to_digit(16).map(|d| d as u8).ok_or_else(|| {
+                datafusion_common::DataFusionError::Execution(format!(
+                    "Invalid Input Error: Invalid input for hex digit: {}",
+                    c as char
+                ))
+            })
+        };
+        let mut buf = Vec::new();
+        for i in 0..a.len() {
+            if a.is_null(i) {
+                out.append_null();
+                continue;
+            }
+            let s = a.value(i).as_bytes();
+            buf.clear();
+            let rest = if s.len() % 2 == 1 {
+                buf.push(digit(s[0])?);
+                &s[1..]
+            } else {
+                s
+            };
+            for pair in rest.chunks(2) {
+                buf.push((digit(pair[0])? << 4) | digit(pair[1])?);
+            }
+            out.append_value(&buf);
+        }
+        let out: ArrayRef = Arc::new(out.finish());
+        Ok(if scalar {
+            ColumnarValue::Scalar(datafusion_common::ScalarValue::try_from_array(&out, 0)?)
+        } else {
+            ColumnarValue::Array(out)
+        })
+    }
+}
+
+/// `decode`: DuckDB's one-argument form, bytes to text, refused unless valid UTF-8. The
+/// two-argument form stays DataFusion's own `decode(x, encoding)`.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct Decode {
+    sig: Signature,
+    inner: Arc<ScalarUDF>,
+}
+
+impl Decode {
+    pub fn udf(inner: Arc<ScalarUDF>) -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable), inner }))
+    }
+}
+
+impl ScalarUDFImpl for Decode {
+    fn name(&self) -> &str {
+        "decode"
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn coerce_types(&self, args: &[DataType]) -> DFResult<Vec<DataType>> {
+        match args {
+            [DataType::Binary | DataType::BinaryView | DataType::LargeBinary | DataType::Null] => {
+                Ok(vec![DataType::Binary])
+            }
+            [_] => plan_err!("decode takes a BLOB"),
+            _ => self.inner.coerce_types(args),
+        }
+    }
+    fn return_type(&self, args: &[DataType]) -> DFResult<DataType> {
+        match args {
+            [_] => Ok(DataType::Utf8),
+            _ => self.inner.return_type(args),
+        }
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        if args.args.len() != 1 {
+            return self.inner.invoke_with_args(args);
+        }
+        use arrow::array::StringBuilder;
+        let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
+        let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let a = a.as_binary::<i32>();
+        let mut out = StringBuilder::new();
+        for i in 0..a.len() {
+            if a.is_null(i) {
+                out.append_null();
+                continue;
+            }
+            match std::str::from_utf8(a.value(i)) {
+                Ok(s) => out.append_value(s),
+                Err(_) => {
+                    return exec_err!(
+                        "Conversion Error: Failure in decode: could not convert blob to UTF8 string, the blob contained invalid UTF8 characters."
+                    );
+                }
+            }
+        }
+        let out: ArrayRef = Arc::new(out.finish());
+        Ok(if scalar {
+            ColumnarValue::Scalar(datafusion_common::ScalarValue::try_from_array(&out, 0)?)
+        } else {
+            ColumnarValue::Array(out)
+        })
+    }
+}

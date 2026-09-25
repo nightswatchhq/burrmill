@@ -50,6 +50,8 @@ const SAFE_SCALARS: &[&str] = &[
     "regexp_instr",
     "burrmill_intdiv",
     "burrmill_round_int",
+    "burrmill_text_to_int",
+    "burrmill_text_to_decimal",
     "checked_add",
     "checked_sub",
     "checked_mul",

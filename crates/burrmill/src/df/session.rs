@@ -93,6 +93,12 @@ impl MiniSession {
         for name in ["input_file_name", "file_row_index"] {
             scalar.remove(name);
         }
+        if let Some(inner) = scalar.remove("decode") {
+            let d = super::dialect::Decode::udf(inner);
+            scalar.insert(d.name().to_string(), d);
+        }
+        let from_hex = super::dialect::FromHex::udf();
+        scalar.insert(from_hex.name().to_string(), from_hex);
         let round = super::dialect::RoundInt::udf();
         scalar.insert(round.name().to_string(), round);
         let intdiv = super::dialect::IntDiv::udf();
