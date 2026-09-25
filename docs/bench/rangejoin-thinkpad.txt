@@ -1,0 +1,25 @@
+# burrmill ab1f171, nest pete/portable-views at 7092337, thinkpad, 1,925 segments, 2026-09-25
+## engine-views (warm medians of 5), with RangeJoin
+SAME  deployment_signal                  rows=14654   duck_ms=33     burrmill_ms=49     ratio=1.48
+SAME  open_allocations                   rows=6812    duck_ms=56     burrmill_ms=44     ratio=0.79
+SAME  port_queue                         rows=3943    duck_ms=68     burrmill_ms=67     ratio=0.99
+SAME  lodestar_allocations               rows=260828  duck_ms=1979   burrmill_ms=1869   ratio=0.94
+SAME  epoch_boundaries                   rows=269     duck_ms=45     burrmill_ms=29     ratio=0.64
+SAME  lodestar_epochs                    rows=269     duck_ms=1343   burrmill_ms=715    ratio=0.53
+SAME  lodestar_disputes                  rows=8       duck_ms=13     burrmill_ms=12     ratio=0.92
+SAME  lodestar_escrow_transactions       rows=77941   duck_ms=284    burrmill_ms=277    ratio=0.98
+SAME  lodestar_delegations               rows=608700  duck_ms=1519   burrmill_ms=1498   ratio=0.99
+SAME  lodestar_network_params            rows=1       duck_ms=51     burrmill_ms=24     ratio=0.47
+SAME  lodestar_indexer_ledger            rows=1678525 duck_ms=6344   burrmill_ms=5729   ratio=0.90
+SAME  lodestar_indexers                  rows=184     duck_ms=2526   burrmill_ms=1009   ratio=0.40
+SAME  lodestar_indexer_pool              rows=143     duck_ms=1975   burrmill_ms=597    ratio=0.30
+SAME  lodestar_delegator_stakes          rows=323180  duck_ms=4504   burrmill_ms=3849   ratio=0.85
+SAME  lodestar_delegators                rows=309868  duck_ms=3520   burrmill_ms=2583   ratio=0.73
+SAME  lodestar_curator_signals           rows=15821   duck_ms=637    burrmill_ms=153    ratio=0.24
+SAME  lodestar_curators                  rows=1825    duck_ms=37     burrmill_ms=18     ratio=0.49
+SAME  lodestar_provisions                rows=95      duck_ms=514    burrmill_ms=138    ratio=0.27
+SAME  lodestar_network                   rows=1       duck_ms=3177   burrmill_ms=1344   ratio=0.42
+SAME  lodestar_deployments               rows=24833   duck_ms=1132   burrmill_ms=165    ratio=0.15
+SAME  lodestar_indexer_deployment_daily  rows=808984  duck_ms=6510   burrmill_ms=4537   ratio=0.70
+SAME  lodestar_indexer_daily             rows=19733   duck_ms=3372   burrmill_ms=1156   ratio=0.34
+VIEWS	views=22	same=22	differing=0	failing=0	checks=2/4

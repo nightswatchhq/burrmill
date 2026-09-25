@@ -158,8 +158,10 @@ best plan measured) and one 9 ms view that is planning. See the progress log.
 
 **Phase 1b, 2026-09-25, same machine and nest:** **22/22 views byte-identical**, 7 of them rewritten
 on the nest's `pete/portable-views` branch (not pushed) and two now running unchanged through
-`list_reduce`; both zero-row checks pass. **0.69x DuckDB time-weighted, 21/22 within 1.5x**; over is
+`list_reduce`; both zero-row checks pass. **0.69x DuckDB time-weighted, 21/22 within 1.5x**; over was
 `lodestar_epochs` at 1.92x, four range joins as nested loops. Transcript `docs/bench/phase1b-thinkpad.txt`.
+With `RangeJoin` the same day: **0.65x time-weighted and 22/22 within 1.5x**, `lodestar_epochs` 0.5x
+(`docs/bench/rangejoin-thinkpad.txt`). Gate 1's speed leg passes on this nest.
 
 **Gate 1:**
 

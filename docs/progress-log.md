@@ -4,6 +4,35 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Range joins — `lodestar_epochs` from 1.92x to 0.5x — 2026-09-25
+
+Phase 1b left one view over 1.5x: `lodestar_epochs`, whose four joins of events to epochs by block
+range (`x >= start AND x <= until`) ran as nested loops, 574-711 ms of CPU each. DataFusion 55
+has no range join. **`RangeJoin`** (`df/rangejoin.rs`) is a physical rule, last in the list, that
+replaces a `NestedLoopJoinExec` of that shape with `RangeJoinExec`, keeping what the nested loop
+did and promised: the left side collected once, the right streamed by partition, the same columns,
+the same plan properties.
+
+The filter normalises to `L_a >= R_a AND L_b <= R_b`, strict or not, written either way round. The
+left rows are sorted by `L_a`; each right row binary-searches its first candidate and scans on
+until a suffix minimum of `L_b` shows nothing further can match. Events against epochs, whichever
+side is which, cost one search and one short scan per row, and overlapping intervals stay correct,
+only slower. Taken for inner and right joins (a left join is planned as a right one), plain column
+operands, one non-float type per comparison; NULL matches nothing.
+
+`tests/df_rangejoin.rs` checks it against brute force in plain Rust: 3,000 points, 60 intervals
+with overlaps, empty and NULL bounds, all four strictness combinations, both table orders, the
+conjuncts reversed, and the outer join keeping unmatched points. Two planted faults, ignoring
+strictness and stopping the scan at the first non-match, both fail it.
+
+**On the thinkpad nest: `lodestar_epochs` 2,564 ms to 682-715 (DuckDB 1,343-1,359), all four
+joins converted, 22/22 still identical. Time-weighted 0.65x DuckDB and 22/22 within 1.5x.** No other
+view contains the shape. `deployment_signal` read 1.48x in one full run; an alternating A/B against
+the build before today's engine work gave 10-12 ms for both, the same median, so that was the
+harness. Transcript: `docs/bench/rangejoin-thinkpad.txt`.
+
+---
+
 ## Phase 1b — every graph-allocations view on Burrmill, byte for byte — 2026-09-25
 
 Gate 1's parity leg wanted every authored statement to reach parity once the DuckDB-only views were
@@ -65,9 +94,7 @@ roundings, both found by measuring DuckDB rather than reading it:
 
 ### Owed
 
-- **`lodestar_epochs`, 1.92x.** Four joins of events to epochs by block range run as nested loops,
-  574-711 ms of CPU each: DataFusion 55 has no range join. A range-join operator would fix the cause
-  for every nest that joins events to epochs, which is most of them.
+- ~~**`lodestar_epochs`, 1.92x.**~~ Range joins, above: 0.5x.
 - Planning is quadratic in expression depth (a 32-term sum: 66 ms). DataFusion recomputes a type
   from the whole subtree whenever asked; the analyzer passes ask at every node.
 - HUGEINT is DECIMAL(38,0), which stops at 10^38 - 1 where HUGEINT reaches 2^127 - 1. A value
