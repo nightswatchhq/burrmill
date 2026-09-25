@@ -400,3 +400,91 @@ pub fn both_engines(root: &str) -> anyhow::Result<(duckdb::Connection, burrmill:
     }
     Ok((conn, engine, same))
 }
+
+/// `rewrite-parity <nest> <views-dir>`: portable rewrites of a nest's views (plan phase 1b). Each
+/// rewritten view must answer on DuckDB exactly as the original does, and on `Engine` exactly as on
+/// DuckDB. Only views whose text changed are compared against the original; every view is run on
+/// both engines.
+pub fn rewrite_parity(root: &str, dir: &str) -> anyhow::Result<()> {
+    let nest = load_nest(Path::new(root))?;
+    let rewritten = crate::df_views::load_views(Path::new(dir))?;
+    let original = duck(&nest)?;
+    for v in &nest.views {
+        if let Err(e) = original.execute_batch(&v.text) {
+            println!("ORIGINAL-FAIL {} {}", v.name, first_line(&e.to_string()));
+        }
+    }
+    let portable = duck(&nest)?;
+    for v in &rewritten {
+        if let Err(e) = portable.execute_batch(&v.text) {
+            println!("REWRITE-DUCK-FAIL {} {}", v.name, first_line(&e.to_string()));
+        }
+    }
+    let root_owned = Path::new(root).to_path_buf();
+    let bodies: Vec<(String, String)> = rewritten.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let (engine, reg) = std::thread::spawn(move || -> anyhow::Result<_> {
+        let mut e = burrmill::Engine::open_nest(&root_owned)?;
+        let reg: Vec<Option<String>> =
+            bodies.iter().map(|(n, b)| e.register_view(n, b).err().map(|e| first_line(&e.to_string()))).collect();
+        Ok((e, reg))
+    })
+    .join()
+    .expect("engine")?;
+    let engine = std::sync::Arc::new(engine);
+    let text_of = |name: &str| nest.views.iter().find(|v| v.name == name).map(|v| v.text.clone());
+    let (mut ok, mut bad) = (0, 0);
+    for (i, v) in rewritten.iter().enumerate() {
+        let sql = format!("SELECT * FROM \"{}\"", v.name);
+        let changed = text_of(&v.name).is_none_or(|t| t != v.text);
+        let on_portable = crate::encode_parity::nuthatch_rows(&portable, &sql).map(sorted_rows);
+        let vs_original = if changed {
+            let orig = crate::encode_parity::nuthatch_rows(&original, &sql).map(sorted_rows);
+            match (&orig, &on_portable) {
+                (Ok(a), Ok(b)) if a == b => "same-as-original".to_string(),
+                (Ok(a), Ok(b)) => format!("DIFFERS-FROM-ORIGINAL rows {} vs {}", a.len(), b.len()),
+                (Err(e), _) => format!("original fails: {}", first_line(&e.to_string())),
+                (_, Err(e)) => format!("REWRITE FAILS ON DUCKDB: {}", first_line(&e.to_string())),
+            }
+        } else {
+            "unchanged".to_string()
+        };
+        let on_engine = match &reg[i] {
+            Some(why) => Err(why.clone()),
+            None => {
+                let e2 = std::sync::Arc::clone(&engine);
+                let q = sql.clone();
+                std::thread::spawn(move || -> Result<Vec<String>, String> {
+                    let bs = e2.sql(&q).map_err(|e| first_line(&e.to_string()))?;
+                    let mut r = Vec::new();
+                    for b in &bs {
+                        r.extend(burrmill::df::encode::rows(b).map_err(|e| e.to_string())?);
+                    }
+                    Ok(sorted_rows(Value::Array(r)))
+                })
+                .join()
+                .expect("engine")
+            }
+        };
+        let vs_engine = match (&on_portable, &on_engine) {
+            (Ok(a), Ok(b)) if a == b => format!("burrmill-same rows={}", a.len()),
+            (Ok(a), Ok(b)) => {
+                let at = a.iter().zip(b).position(|(x, y)| x != y).unwrap_or(0);
+                format!(
+                    "BURRMILL-DIFFERS rows {} vs {}\n      duck     {}\n      burrmill {}",
+                    a.len(),
+                    b.len(),
+                    a.get(at).map(|s| s.chars().take(240).collect::<String>()).unwrap_or_default(),
+                    b.get(at).map(|s| s.chars().take(240).collect::<String>()).unwrap_or_default()
+                )
+            }
+            (_, Err(e)) => format!("BURRMILL-FAILS {e}"),
+            (Err(_), _) => "duckdb-fails".to_string(),
+        };
+        let good = !vs_original.contains("DIFFERS") && !vs_original.contains("FAILS") && vs_engine.starts_with("burrmill-same");
+        if good { ok += 1 } else { bad += 1 }
+        println!("{} {:<36} {vs_original:<22} {vs_engine}", if good { "OK  " } else { "TODO" }, v.name);
+    }
+    println!("REWRITE\tviews={}\tok={ok}\ttodo={bad}", rewritten.len());
+    std::thread::spawn(move || drop(engine)).join().expect("drop");
+    Ok(())
+}

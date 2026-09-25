@@ -150,7 +150,15 @@ pub(crate) fn load_nest(root: &Path) -> anyhow::Result<Nest> {
         tables.push(Table { name: name.clone(), schema, files, wide });
     }
 
-    let mut vfiles: Vec<PathBuf> = std::fs::read_dir(root.join("views"))?
+    let views = load_views(&root.join("views"))?;
+    anyhow::ensure!(!views.is_empty(), "no CREATE VIEW statements under {}", root.display());
+    let wants_dec = views.iter().any(|v| v.body.contains("_dec"));
+    Ok(Nest { tables, views, wants_dec })
+}
+
+/// Every `CREATE VIEW` in the `.sql` files of `dir`, in file order.
+pub(crate) fn load_views(dir: &Path) -> anyhow::Result<Vec<View>> {
+    let mut vfiles: Vec<PathBuf> = std::fs::read_dir(dir)?
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "sql"))
@@ -164,9 +172,7 @@ pub(crate) fn load_nest(root: &Path) -> anyhow::Result<Nest> {
             views.push(View { name, file: short.clone(), text, body });
         }
     }
-    anyhow::ensure!(!views.is_empty(), "no CREATE VIEW statements under {}", root.display());
-    let wants_dec = views.iter().any(|v| v.body.contains("_dec"));
-    Ok(Nest { tables, views, wants_dec })
+    Ok(views)
 }
 
 /// Each `CREATE VIEW` in a file, split on the line it starts, comment lines dropped so a `;` in

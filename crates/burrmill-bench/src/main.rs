@@ -100,6 +100,10 @@ async fn main() -> anyhow::Result<()> {
         Some("serve-views") => serve::run_views(
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: serve-views <nest>"))?,
         ),
+        Some("rewrite-parity") => engine_views::rewrite_parity(
+            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: rewrite-parity <nest> <views-dir>"))?,
+            &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: rewrite-parity <nest> <views-dir>"))?,
+        ),
         Some("engine-views") => engine_views::run(
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-views <nest>"))?,
         ),
