@@ -14,3 +14,9 @@ FUZZ	seed=7000000	cases=5000	same=4421	both_refuse=89	designed_refusal=298	desig
 FUZZ	seed=100000	cases=3000	same=2737	both_refuse=22	designed_refusal=113	designed_exact=0	overflow_order=4	stricter=124	looser=0	differ=0
 FUZZ	seed=9100000	cases=5000	same=4616	both_refuse=48	designed_refusal=171	designed_exact=1	overflow_order=0	stricter=162	looser=0	differ=2
 (the two differences at seed 9100000 are the DuckDB 1.5 bug recorded as KNOWN in dialect-parity)
+
+## e24e482, subqueries in select lists, aggregates and OR/NOT/CASE, 2026-09-26
+FUZZ	seed=9100000	cases=5000	same=4765	both_refuse=48	designed_refusal=166	designed_exact=1	overflow_order=0	stricter=18	looser=0	differ=2
+FUZZ	seed=100000	cases=3000	same=2849	both_refuse=24	designed_refusal=107	designed_exact=0	overflow_order=4	stricter=16	looser=0	differ=0
+FUZZ	seed=424242	cases=5000	same=4787	both_refuse=46	designed_refusal=140	designed_exact=4	overflow_order=0	stricter=21	looser=0	differ=2
+(the differences are DuckDB's: the 1.5 text/timestamp bug at 9100000, and TIMESTAMPTZ + INTERVAL without ICU at 424242)

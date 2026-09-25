@@ -4,6 +4,50 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Subqueries as predicates — and a DataFusion wrong answer — 2026-09-26
+
+The fuzzer's largest stricter class was `EXISTS`/`IN (subquery)` outside a `WHERE`: DataFusion
+decorrelates them only as filter predicates. It does decorrelate scalar aggregates anywhere, so
+(`df/subqueries.rs`):
+
+- **In a select list**, `EXISTS (q)` is `(SELECT count(*) ... q's WHERE) > 0`, and `x IN (SELECT y
+  ...)` is three counts giving SQL's three values exactly as DuckDB does (no rows false, NULL `x`
+  NULL, a match true, a NULL `y` NULL, else false). `x` moves into the subquery's `WHERE`, so it
+  is rewritten only when every column in it is qualified by a name the subquery does not bind; a
+  bare column is qualified first when the outer query reads one relation.
+- **Inside an aggregate** (`bool_and(x IN (...))`, `sum(CASE WHEN x IN (...) ...)`), over one
+  relation, the predicate is computed per row in a wrapper keeping the relation's name.
+
+Measured on 5,000 cases: stricter **162 to 18**, all but one subqueries correlated through an
+expression of the outer row, which DataFusion 55 cannot decorrelate anywhere (`KNOWN`).
+
+**Found on the way, a DataFusion wrong answer**: `IN (subquery)` inside `OR`, `NOT` or `CASE` in a
+filter goes through a mark join that loses SQL's NULL. `WHERE x = 3 OR x NOT IN (SELECT y FROM
+(VALUES (1), (NULL)))` returned `x = 2`; the answer is NULL, so only 3. As a condition of its own it
+is right (a null-aware anti join). There, Burrmill now keeps DataFusion's membership test and
+supplies the NULL cases from counts over the subquery alone, so nothing moves between scopes;
+a subquery that is not a plain SELECT is refused.
+
+**Two faults of my own, both caught by the nest before they left the machine.** The first version
+walked into nested queries and rewrote a `NOT IN` in a scalar subquery's `WHERE`, where the moved
+operand, a bare `"subgraphID"`, rebound to the inner table: `lodestar_network`'s active subgraph
+count read 0 against 16,154. The second correlated counts through `LOWER(...)`, which DataFusion
+could not plan, and `lodestar_indexers` failed. Rewrites now stay at their own level, and the fuzz
+grammar now draws bare outer names that the subquery also binds, `NOT IN` in a scalar subquery's
+`WHERE`, and `IN` under `OR`. The first shape is also in `dialect-parity` (135/135).
+
+Also: `//` beside a DOUBLE is ordinary DOUBLE division in DuckDB (`7.5 // 2` is 3.75);
+`f(flag = 'x')`, which sqlparser reads as a named argument, is a comparison again;
+`to_timestamp` of a number is built in microseconds, so dates past 2262 no longer overflow; and a
+`CASE` DataFusion's logical planner proves non-null but its physical one cannot is declared
+nullable, which had made DataFusion refuse its own plan wherever such a value was grouped twice.
+
+Nuthatch's DuckDB, built without ICU, cannot add an INTERVAL to a TIMESTAMPTZ (a binder error, and
+in one fuzzed form a NULL); Burrmill computes it. Fuzz, 13,000 cases on three seeds: no difference
+but DuckDB's, nothing looser. The nest: 22/22, 0.638x, all within 1.5x.
+
+---
+
 ## The fixed cost of a query — 2026-09-25
 
 Timed on the thinkpad nest with temporary hooks (not committed), last of six runs:
