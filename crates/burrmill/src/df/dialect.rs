@@ -510,6 +510,7 @@ impl VisitorMut for Rewriter {
     }
 
     fn pre_visit_query(&mut self, q: &mut sq::Query) -> ControlFlow<()> {
+        super::subqueries::predicates_as_counts(q);
         match q.order_by.as_mut().map(|o| &mut o.kind) {
             Some(sq::OrderByKind::Expressions(v)) => {
                 if let Some(why) = literal_key(v) {

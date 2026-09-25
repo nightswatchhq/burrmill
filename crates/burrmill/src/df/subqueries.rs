@@ -246,3 +246,137 @@ fn select(s: &mut Select, known: &Known, ctes: &mut Ctes, rename: bool) -> Optio
     s.projection = projection;
     Some(finals)
 }
+
+/// `EXISTS` and `IN (subquery)` in a select list, as counts. DataFusion decorrelates them only as
+/// `WHERE` predicates and refused them here, where DuckDB answers; it does decorrelate a scalar
+/// aggregate anywhere, counting nothing as 0. `IN` keeps its three values, as DuckDB gives them:
+/// false against no rows, NULL for a NULL operand, true on a match, NULL where only a NULL could
+/// have matched, false otherwise. Only a plain subquery is rewritten (one SELECT, no grouping,
+/// `DISTINCT`, `LIMIT` or aggregate); anything else is left for DataFusion to refuse.
+pub fn predicates_as_counts(q: &mut Query) {
+    let SetExpr::Select(s) = q.body.as_mut() else {
+        return;
+    };
+    for item in s.projection.iter_mut() {
+        let e = match item {
+            SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => e,
+            _ => continue,
+        };
+        let _ = sq::visit_expressions_mut(e, |x| {
+            if let Some(n) = as_counts(x) {
+                *x = n;
+            }
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+    }
+}
+
+const AGGREGATES: &[&str] = &[
+    "count", "sum", "min", "max", "avg", "mean", "any_value", "first", "last", "string_agg", "list",
+    "array_agg", "bool_and", "bool_or", "stddev", "variance", "median", "arg_max", "arg_min",
+    "approx_count_distinct", "count_star", "group_concat", "listagg",
+];
+
+fn plain(q: &Query) -> Option<&Select> {
+    if q.with.is_some() || q.limit_clause.is_some() || q.fetch.is_some() {
+        return None;
+    }
+    let SetExpr::Select(s) = q.body.as_ref() else {
+        return None;
+    };
+    let grouped = !matches!(&s.group_by, sq::GroupByExpr::Expressions(v, m) if v.is_empty() && m.is_empty());
+    if grouped || s.distinct.is_some() || s.having.is_some() || s.qualify.is_some() || s.top.is_some() {
+        return None;
+    }
+    let mut aggregate = false;
+    let _ = sq::visit_expressions(&s.projection, |x| {
+        if let Expr::Function(f) = x
+            && f.over.is_none()
+            && AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str())
+        {
+            aggregate = true;
+        }
+        std::ops::ControlFlow::<()>::Continue(())
+    });
+    (!aggregate).then_some(s.as_ref())
+}
+
+/// `(SELECT count(*) FROM <q's FROM> WHERE <q's WHERE> [AND extra])`.
+fn count(q: &Query, extra: Option<Expr>) -> Expr {
+    let mut c = q.clone();
+    c.order_by = None;
+    let SetExpr::Select(s) = c.body.as_mut() else { unreachable!("checked plain") };
+    s.projection = vec![SelectItem::UnnamedExpr(Expr::Function(sq::Function {
+        name: sq::ObjectName::from(vec![Ident::new("count")]),
+        uses_odbc_syntax: false,
+        parameters: sq::FunctionArguments::None,
+        args: sq::FunctionArguments::List(sq::FunctionArgumentList {
+            duplicate_treatment: None,
+            args: vec![sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Wildcard)],
+            clauses: vec![],
+        }),
+        filter: None,
+        null_treatment: None,
+        over: None,
+        within_group: vec![],
+    }))];
+    if let Some(extra) = extra {
+        s.selection = Some(match s.selection.take() {
+            Some(w) => and(nested(w), extra),
+            None => extra,
+        });
+    }
+    Expr::Subquery(Box::new(c))
+}
+
+fn nested(e: Expr) -> Expr {
+    Expr::Nested(Box::new(e))
+}
+
+fn and(a: Expr, b: Expr) -> Expr {
+    Expr::BinaryOp { left: Box::new(a), op: sq::BinaryOperator::And, right: Box::new(b) }
+}
+
+fn cmp(a: Expr, op: sq::BinaryOperator, n: i64) -> Expr {
+    Expr::BinaryOp { left: Box::new(a), op, right: Box::new(Expr::Value(sq::Value::Number(n.to_string(), false).into())) }
+}
+
+fn as_counts(x: &Expr) -> Option<Expr> {
+    use sq::BinaryOperator::{Eq, Gt};
+    match x {
+        Expr::Exists { subquery, negated } => {
+            plain(subquery)?;
+            Some(nested(cmp(count(subquery, None), if *negated { Eq } else { Gt }, 0)))
+        }
+        Expr::InSubquery { expr, subquery, negated } => {
+            let s = plain(subquery)?;
+            let [SelectItem::UnnamedExpr(y) | SelectItem::ExprWithAlias { expr: y, .. }] = s.projection.as_slice() else {
+                return None;
+            };
+            let (x, y) = (nested(expr.as_ref().clone()), nested(y.clone()));
+            let lit = |b: Option<bool>| {
+                Expr::Value(match b {
+                    Some(b) => sq::Value::Boolean(b),
+                    None => sq::Value::Null,
+                }.into())
+            };
+            let all = count(subquery, None);
+            let matched = count(subquery, Some(Expr::BinaryOp { left: Box::new(y.clone()), op: Eq, right: Box::new(x.clone()) }));
+            let nulls = count(subquery, Some(Expr::IsNull(Box::new(y))));
+            let case = Expr::Case {
+                case_token: sq::helpers::attached_token::AttachedToken::empty(),
+                end_token: sq::helpers::attached_token::AttachedToken::empty(),
+                operand: None,
+                conditions: vec![
+                    sq::CaseWhen { condition: cmp(all, Eq, 0), result: lit(Some(false)) },
+                    sq::CaseWhen { condition: Expr::IsNull(Box::new(x)), result: lit(None) },
+                    sq::CaseWhen { condition: cmp(matched, Gt, 0), result: lit(Some(true)) },
+                    sq::CaseWhen { condition: cmp(nulls, Gt, 0), result: lit(None) },
+                ],
+                else_result: Some(Box::new(lit(Some(false)))),
+            };
+            Some(if *negated { Expr::UnaryOp { op: sq::UnaryOperator::Not, expr: Box::new(nested(case)) } } else { nested(case) })
+        }
+        _ => None,
+    }
+}
