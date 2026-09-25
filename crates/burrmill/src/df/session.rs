@@ -104,6 +104,12 @@ impl MiniSession {
         }
         let mark = super::dialect::HugeintMark::udf();
         scalar.insert(mark.name().to_string(), mark);
+        for f in super::duckfns::all() {
+            for a in f.aliases() {
+                scalar.insert(a.clone(), Arc::clone(&f));
+            }
+            scalar.insert(f.name().to_string(), f);
+        }
         let from_hex = super::dialect::FromHex::udf();
         scalar.insert(from_hex.name().to_string(), from_hex);
         let round = super::dialect::RoundInt::udf();

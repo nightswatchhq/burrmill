@@ -41,6 +41,11 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
     let pick = |r: &mut Rng, xs: &[Option<&'static str>]| xs[r.below(xs.len())];
     let (mut bn, mut li, mut from, mut to, mut value, mut amount, mut flag, mut kind) =
         (vec![], vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    let (mut ts, mut memo) = (vec![], vec![]);
+    let memos = [
+        Some("swap 12 GRT"), Some("Swap 7 grt"), Some("stake:alice"), Some("stake:Bob"), Some(""),
+        Some("a,b,,c"), Some("  padded  "), Some("0xDEADbeef"), Some("naïve café"), None,
+    ];
     for i in 0..n {
         bn.push(1 + (i / 3) as u64);
         li.push((i % 3) as u64);
@@ -50,6 +55,12 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
         amount.push(if r.below(8) == 0 { None } else { Some(r.below(200) as i64 - 60) });
         flag.push(pick(&mut r, &[Some("true"), Some("false"), None]));
         kind.push(pick(&mut r, &[Some("in"), Some("out")]));
+        // Two years from 2023-11-14, with some rows on the exact day, month and year boundaries.
+        ts.push(match r.below(6) {
+            0 => 1_704_067_200 + (r.below(3) as u64) * 86_400,
+            _ => 1_700_000_000 + (r.below(63_000_000) as u64),
+        });
+        memo.push(pick(&mut r, &memos));
     }
     let s = |v: Vec<Option<&str>>| Arc::new(StringArray::from(v)) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
@@ -61,6 +72,8 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
         Field::new("amount", DataType::Int64, true),
         Field::new("flag", DataType::Utf8, true),
         Field::new("kind", DataType::Utf8, true),
+        Field::new("ts", DataType::UInt64, false),
+        Field::new("memo", DataType::Utf8, true),
     ]));
     write(
         dir,
@@ -75,6 +88,8 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
             Arc::new(Int64Array::from(amount)),
             s(flag),
             s(kind),
+            Arc::new(UInt64Array::from(ts)),
+            s(memo),
         ],
     )?;
     let schema = Arc::new(Schema::new(vec![
@@ -115,7 +130,7 @@ impl Gen<'_> {
     fn int(&mut self, sc: &Scope, d: usize) -> String {
         let leaf = d == 0 || self.chance(3);
         if leaf {
-            let mut cols = vec!["e.block_number", "e.log_index", "e.amount"];
+            let mut cols = vec!["e.block_number", "e.log_index", "e.amount", "e.ts"];
             if sc.joined {
                 cols.push("l.weight");
             }
@@ -124,7 +139,7 @@ impl Gen<'_> {
                 _ => self.one(&cols).to_string(),
             };
         }
-        match self.r.below(12) {
+        match self.r.below(20) {
             0 => format!("({} + {})", self.int(sc, d - 1), self.int(sc, d - 1)),
             1 => format!("({} - {})", self.int(sc, d - 1), self.int(sc, d - 1)),
             2 => format!("({} * {})", self.int(sc, d - 1), self.int(sc, d - 1)),
@@ -141,13 +156,36 @@ impl Gen<'_> {
             8 => format!("TRY_CAST({} AS BIGINT)", self.text(sc, d - 1)),
             9 => format!("length({})", self.text(sc, d - 1)),
             10 => format!("CAST({} AS BIGINT)", self.int(sc, d - 1)),
-            _ => format!("greatest({}, {})", self.int(sc, d - 1), self.int(sc, d - 1)),
+            11 => format!("greatest({}, {})", self.int(sc, d - 1), self.int(sc, d - 1)),
+            12 => format!("{}({})", self.one(&["year", "month", "day", "hour", "dayofweek", "epoch"]), self.time(sc, d - 1)),
+            13 => format!("extract({} FROM {})", self.one(&["year", "month", "minute", "doy", "quarter"]), self.time(sc, d - 1)),
+            14 => format!("date_part('{}', {})", self.one(&["hour", "dow", "week", "second"]), self.time(sc, d - 1)),
+            15 => format!("strpos({}, '{}')", self.text(sc, d - 1), self.one(&["a", "0x", ":", " "])),
+            16 => format!("NULLIF({}, {})", self.int(sc, d - 1), self.r.below(5)),
+            17 => format!("sign({})", self.int(sc, d - 1)),
+            18 => format!("CAST(floor({} / 7.0) AS BIGINT)", self.int(sc, d - 1)),
+            _ => format!("date_diff('{}', {}, {})", self.one(&["day", "hour", "month"]), self.time(sc, d - 1), self.time(sc, d - 1)),
+        }
+    }
+
+    /// A TIMESTAMP (WITH TIME ZONE, from `to_timestamp`) or DATE expression.
+    fn time(&mut self, sc: &Scope, d: usize) -> String {
+        let base = "to_timestamp(e.ts)";
+        if d == 0 || self.chance(3) {
+            return base.into();
+        }
+        match self.r.below(5) {
+            0 => format!("date_trunc('{}', {})", self.one(&["day", "hour", "month", "year", "week"]), self.time(sc, d - 1)),
+            1 => format!("CAST({} AS DATE)", self.time(sc, d - 1)),
+            2 => format!("({} + INTERVAL {} {})", self.time(sc, d - 1), self.r.below(40), self.one(&["DAY", "HOUR", "MINUTE"])),
+            3 => format!("to_timestamp(e.ts + {})", self.int(sc, d - 1)),
+            _ => base.into(),
         }
     }
 
     fn text(&mut self, sc: &Scope, d: usize) -> String {
         if d == 0 || self.chance(3) {
-            let mut cols = vec!["e.\"from\"", "e.\"to\"", "e.value", "e.flag", "e.kind"];
+            let mut cols = vec!["e.\"from\"", "e.\"to\"", "e.value", "e.flag", "e.kind", "e.memo"];
             if sc.joined {
                 cols.extend(["l.addr", "l.name"]);
             }
@@ -156,7 +194,7 @@ impl Gen<'_> {
                 _ => self.one(&cols).to_string(),
             };
         }
-        match self.r.below(8) {
+        match self.r.below(19) {
             0 => format!("lower({})", self.text(sc, d - 1)),
             1 => format!("upper({})", self.text(sc, d - 1)),
             2 => format!("({} || {})", self.text(sc, d - 1), self.text(sc, d - 1)),
@@ -169,7 +207,18 @@ impl Gen<'_> {
                 self.text(sc, d - 1),
                 self.text(sc, d - 1)
             ),
-            _ => format!("replace({}, '0x', '')", self.text(sc, d - 1)),
+            7 => format!("replace({}, '0x', '')", self.text(sc, d - 1)),
+            8 => format!("split_part({}, '{}', {})", self.text(sc, d - 1), self.one(&[",", ":", " "]), 1 + self.r.below(3)),
+            9 => format!("{}({})", self.one(&["trim", "ltrim", "rtrim", "reverse"]), self.text(sc, d - 1)),
+            10 => format!("{}({}, {})", self.one(&["left", "right"]), self.text(sc, d - 1), self.r.below(5)),
+            11 => format!("{}({}, {}, '*')", self.one(&["lpad", "rpad"]), self.text(sc, d - 1), self.r.below(12)),
+            12 => format!("regexp_replace({}, '{}', '{}')", self.text(sc, d - 1), self.one(&["[0-9]+", "^s", "[aeiou]", "(\\w+):(\\w+)"]), self.one(&["#", "", "\\2-\\1"])),
+            13 => format!("regexp_extract({}, '{}')", self.text(sc, d - 1), self.one(&["[0-9]+", "[A-Za-z]+", "0x[0-9a-fA-F]+"])),
+            14 => format!("strftime({}, '{}')", self.time(sc, d - 1), self.one(&["%Y-%m-%d", "%H:%M", "%Y-%m-%d %H:%M:%S", "%b %d"])),
+            15 => format!("CAST({} AS VARCHAR)", self.time(sc, d - 1)),
+            16 => format!("concat_ws('-', {}, {})", self.text(sc, d - 1), self.text(sc, d - 1)),
+            17 => format!("repeat({}, {})", self.text(sc, d - 1), self.r.below(3)),
+            _ => format!("NULLIF({}, '')", self.text(sc, d - 1)),
         }
     }
 
@@ -185,7 +234,7 @@ impl Gen<'_> {
 
     fn pred(&mut self, sc: &Scope, d: usize) -> String {
         let d = d.min(3);
-        match self.r.below(if d == 0 { 7 } else { 13 }) {
+        match self.r.below(if d == 0 { 7 } else { 14 }) {
             0 => format!("{} {} {}", self.int(sc, d), self.one(&["=", "<>", "<", ">", "<=", ">="]), self.int(sc, d)),
             1 => format!("{} {} {}", self.text(sc, d), self.one(&["=", "<>", "<", ">="]), self.text(sc, d)),
             2 => format!("{} LIKE '{}'", self.text(sc, d), self.one(&["0x%", "%a", "_x%", "%"])),
@@ -198,6 +247,10 @@ impl Gen<'_> {
             9 => format!("({} OR {})", self.pred(sc, d - 1), self.pred(sc, d - 1)),
             10 => format!("{} IS {}DISTINCT FROM {}", self.text(sc, d), self.one(&["", "NOT "]), self.text(sc, d)),
             11 => format!("e.\"to\" IN (SELECT addr FROM lbl WHERE weight > {})", self.r.below(5) as i64 - 2),
+            12 if self.chance(2) => format!("regexp_matches({}, '{}')", self.text(sc, d), self.one(&["^0x", "[0-9]{2}", "(?i)grt", "^$", "a|b"])),
+            12 if self.chance(2) => format!("{}({}, '{}')", self.one(&["starts_with", "contains", "ends_with"]), self.text(sc, d), self.one(&["0x", "a", "GRT", ""])),
+            12 if self.chance(2) => format!("{} {} TIMESTAMPTZ '2024-{:02}-01 00:00:00+00'", self.time(sc, d), self.one(&["<", ">=", "="]), 1 + self.r.below(12)),
+            12 => format!("{} ILIKE '{}'", self.text(sc, d), self.one(&["%grt%", "STAKE%", "_x%"])),
             _ => format!(
                 "{}EXISTS (SELECT 1 FROM lbl x WHERE x.addr = e.\"from\")",
                 self.one(&["", "NOT "])
@@ -237,16 +290,33 @@ impl Gen<'_> {
                 let distinct = if self.chance(4) { "DISTINCT " } else { "" };
                 let base = format!("SELECT {distinct}{} FROM {from}{filter}", items.join(", "));
                 if self.chance(3) {
-                    let order: Vec<String> = (1..=n).map(|i| i.to_string()).collect();
-                    (format!("{base} ORDER BY {} LIMIT {}", order.join(", "), 1 + self.r.below(20)), true)
+                    let order: Vec<String> = (1..=n)
+                        .map(|i| format!("{i}{}{}", self.one(&["", " DESC"]), self.one(&["", " NULLS FIRST", " NULLS LAST"])))
+                        .collect();
+                    let offset = if self.chance(3) { format!(" OFFSET {}", self.r.below(10)) } else { String::new() };
+                    (format!("{base} ORDER BY {} LIMIT {}{offset}", order.join(", "), 1 + self.r.below(20)), true)
                 } else {
                     (base, false)
                 }
             }
             // Grouped.
             2 | 3 => {
-                let key = if self.chance(2) { self.text(&sc, 1) } else { self.int(&sc, 1) };
+                let key = match self.r.below(3) {
+                    0 => self.text(&sc, 1),
+                    1 => self.int(&sc, 1),
+                    _ => self.time(&sc, 2),
+                };
                 let aggs = [
+                    {
+                        // The value itself breaks ties a join's repeated rows leave.
+                        let t = self.text(&sc, 1);
+                        format!("string_agg({t}, ',' ORDER BY e.block_number, e.log_index, {t})")
+                    },
+                    format!("bool_and({})", self.pred(&sc, 1)),
+                    format!("bool_or({})", self.pred(&sc, 1)),
+                    format!("count(DISTINCT {})", self.int(&sc, 1)),
+                    format!("min({})", self.time(&sc, 1)),
+                    format!("max(strftime({}, '%Y-%m'))", self.time(&sc, 1)),
                     "count(*)".to_string(),
                     format!("count({})", self.text(&sc, 1)),
                     format!("sum({})", self.int(&sc, 2)),
@@ -282,12 +352,29 @@ impl Gen<'_> {
                     "sum(e.amount)",
                     "count(*)",
                     "lag(e.amount)",
+                    "lead(e.memo, 2)",
                     "first_value(e.value)",
+                    "last_value(e.amount)",
                     "max(e.amount)",
+                    "avg(e.amount)",
+                    "ntile(3)",
                 ]);
+                let frame = self.one(&[
+                    "",
+                    " ROWS BETWEEN 1 PRECEDING AND CURRENT ROW",
+                    " ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING",
+                    " ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING",
+                ]);
+                let frame = if matches!(f, "row_number()" | "lag(e.amount)" | "lead(e.memo, 2)" | "ntile(3)") { "" } else { frame };
+                // rank and dense_rank over a key with ties, which is where they differ.
+                let (f, order) = if self.chance(4) {
+                    (self.one(&["rank()", "dense_rank()", "percent_rank()"]), "e.kind, e.block_number % 5".to_string())
+                } else {
+                    (f, "e.block_number, e.log_index".to_string())
+                };
                 (
                     format!(
-                        "SELECT e.block_number, e.log_index, {f} OVER (PARTITION BY {part} ORDER BY e.block_number, e.log_index) AS w FROM {from}{filter}"
+                        "SELECT e.block_number, e.log_index, {f} OVER (PARTITION BY {part} ORDER BY {order}{frame}) AS w FROM {from}{filter}"
                     ),
                     false,
                 )
@@ -430,7 +517,7 @@ pub fn run() -> anyhow::Result<()> {
             }
             // One engine overflowed where the other, having rewritten or skipped the arithmetic,
             // did not: which overflows surface is each optimiser's, and neither answer is wrong.
-            (Ok(_), Err(e)) | (Err(e), Ok(_)) if e.contains("verflow") => {
+            (Ok(_), Err(e)) | (Err(e), Ok(_)) if e.contains("verflow") && !e.contains("refusing plan") => {
                 overflow_order += 1;
                 "OVERFLOW-ORDER"
             }

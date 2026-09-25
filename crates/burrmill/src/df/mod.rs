@@ -23,6 +23,7 @@ mod checked;
 mod dialect;
 mod distinct;
 mod doubles;
+mod duckfns;
 mod fastcast;
 mod fold;
 mod names;

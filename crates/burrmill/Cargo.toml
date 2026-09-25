@@ -28,6 +28,7 @@ datafusion = [
     "dep:itertools",
     "dep:log",
     "dep:object_store",
+    "dep:regex",
     "dep:serde_json",
     "dep:tokio",
     "dep:arrow-schema",
@@ -60,6 +61,7 @@ sqlparser = { workspace = true, features = ["visitor"] }
 
 async-trait = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
+regex = { version = "1", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
 futures = { version = "0.3", optional = true }
 indexmap = { version = "2", optional = true }

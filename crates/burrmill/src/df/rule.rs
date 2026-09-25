@@ -51,6 +51,9 @@ const SAFE_SCALARS: &[&str] = &[
     "regexp_count",
     "regexp_instr",
     "burrmill_intdiv",
+    // A count of boundaries, checked where it could leave 64 bits; -1, 0 or 1.
+    "date_diff",
+    "sign",
     "burrmill_round_int",
     "burrmill_text_to_int",
     "burrmill_text_to_decimal",

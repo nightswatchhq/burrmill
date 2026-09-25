@@ -362,6 +362,63 @@ struct Rewriter {
     lambda: Vec<String>,
 }
 
+/// DuckDB sorts NULLs last in both directions unless told otherwise; DataFusion, as Postgres,
+/// puts them first under `DESC`. An ordering that does not say is told.
+fn nulls_last(v: &mut [sq::OrderByExpr]) {
+    for o in v {
+        o.options.nulls_first.get_or_insert(false);
+    }
+}
+
+/// DuckDB refuses a string or non-integer number as an ordering key in a query or an aggregate
+/// (though not in a window): it would order nothing.
+fn literal_key(v: &[sq::OrderByExpr]) -> Option<String> {
+    v.iter().any(|o| match &o.expr {
+        SqlExpr::Value(v) => match &v.value {
+            sq::Value::SingleQuotedString(_) | sq::Value::DoubleQuotedString(_) => true,
+            sq::Value::Number(n, _) => n.parse::<i64>().is_err(),
+            _ => false,
+        },
+        _ => false,
+    })
+    .then(|| "Binder Error: ORDER BY non-integer literal has no effect.".to_string())
+}
+
+/// DuckDB's names for functions DataFusion has under another: the date-part shorthands
+/// (`year(t)` is `date_part('year', t)`) and `regexp_matches`, which is `regexp_like`.
+fn rename_function(f: &mut sq::Function) {
+    let [sq::ObjectNamePart::Identifier(name)] = f.name.0.as_slice() else {
+        return;
+    };
+    let lower = name.value.to_ascii_lowercase();
+    let part = match lower.as_str() {
+        "year" | "month" | "day" | "hour" | "minute" | "second" | "quarter" | "week" | "epoch"
+        | "millisecond" | "microsecond" | "isodow" | "decade" | "century" | "millennium" => lower.clone(),
+        "dayofweek" => "dow".into(),
+        "dayofyear" => "doy".into(),
+        "dayofmonth" => "day".into(),
+        "weekofyear" => "week".into(),
+        "regexp_matches" => {
+            f.name = sq::ObjectName::from(vec![sq::Ident::new("regexp_like")]);
+            return;
+        }
+        _ => return,
+    };
+    let sq::FunctionArguments::List(l) = &mut f.args else {
+        return;
+    };
+    if l.args.len() != 1 {
+        return;
+    }
+    l.args.insert(
+        0,
+        sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(SqlExpr::Value(
+            sq::Value::SingleQuotedString(part).into(),
+        ))),
+    );
+    f.name = sq::ObjectName::from(vec![sq::Ident::new("date_part")]);
+}
+
 fn call(name: &str, args: Vec<SqlExpr>) -> SqlExpr {
     SqlExpr::Function(sq::Function {
         name: sq::ObjectName::from(vec![sq::Ident::new(name)]),
@@ -428,7 +485,42 @@ impl VisitorMut for Rewriter {
         ControlFlow::Continue(())
     }
 
+    fn pre_visit_query(&mut self, q: &mut sq::Query) -> ControlFlow<()> {
+        match q.order_by.as_mut().map(|o| &mut o.kind) {
+            Some(sq::OrderByKind::Expressions(v)) => {
+                if let Some(why) = literal_key(v) {
+                    self.refused = Some(why);
+                    return ControlFlow::Break(());
+                }
+                nulls_last(v)
+            }
+            Some(sq::OrderByKind::All(o)) => {
+                o.nulls_first.get_or_insert(false);
+            }
+            None => {}
+        }
+        ControlFlow::Continue(())
+    }
+
     fn pre_visit_expr(&mut self, e: &mut SqlExpr) -> ControlFlow<()> {
+        if let SqlExpr::Function(f) = e {
+            if let Some(sq::WindowType::WindowSpec(w)) = f.over.as_mut() {
+                nulls_last(&mut w.order_by);
+            }
+            if let sq::FunctionArguments::List(l) = &mut f.args {
+                for c in l.clauses.iter_mut() {
+                    if let sq::FunctionArgumentClause::OrderBy(v) = c {
+                        if let Some(why) = literal_key(v) {
+                            self.refused = Some(why);
+                            return ControlFlow::Break(());
+                        }
+                        nulls_last(v);
+                    }
+                }
+            }
+            nulls_last(&mut f.within_group);
+            rename_function(f);
+        }
         match e {
             SqlExpr::Lambda(l) => self.lambda.extend(l.params.iter().map(|p| p.name.value.clone())),
             // DuckDB types a literal by its spelling: `1e3` is DOUBLE, `0.5` DECIMAL(2,1) and `.5`
@@ -685,6 +777,7 @@ impl AnalyzerRule for DuckSemantics {
                     let t = divide_as_double(e, &schema)?;
                     let t = t.transform_data(|e| timestamp_as_duckdb(e, &schema))?;
                     let t = t.transform_data(|e| round_before_int_cast(e, &schema, &self.round))?;
+                    let t = t.transform_data(|e| timestamp_as_text(e, &schema))?;
                     t.transform_data(|e| hugeint_rounding(e, &schema, &self.round))
                 })?;
                 if t.transformed && names_matter && t.data.schema_name().to_string() != name {
@@ -701,6 +794,22 @@ impl AnalyzerRule for DuckSemantics {
         })
         .map(|t| t.data)
     }
+}
+
+/// A timestamp cast to text in DuckDB's form (`2024-01-01 00:00:00+00`, not arrow's ISO `T`/`Z`).
+fn timestamp_as_text(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
+    let (inner, to) = match &e {
+        Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => (expr, field.data_type()),
+        _ => return Ok(Transformed::no(e)),
+    };
+    if !is_text(to) || !matches!(inner.get_type(schema)?, DataType::Timestamp(..)) {
+        return Ok(Transformed::no(e));
+    }
+    let f = Arc::new(ScalarUDF::from(super::duckfns::TimestampText(Signature::user_defined(
+        Volatility::Immutable,
+    ))));
+    let text = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(f, vec![inner.as_ref().clone()]));
+    Ok(Transformed::yes(if *to == DataType::Utf8 { text } else { Expr::Cast(Cast::new(Box::new(text), to.clone())) }))
 }
 
 /// `to_timestamp` is TIMESTAMPTZ in DuckDB: microseconds, UTC. DataFusion's is nanoseconds with
@@ -1049,7 +1158,7 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             Expr::Case(c)
         }
         Expr::ScalarFunction(mut f)
-            if matches!(f.func.name(), "coalesce" | "greatest" | "least" | "burrmill_intdiv") =>
+            if matches!(f.func.name(), "coalesce" | "greatest" | "least" | "nullif" | "burrmill_intdiv") =>
         {
             let args: Vec<&Expr> = f.args.iter().collect();
             if let Some(t) = sole_integer(&args, schema)? {
