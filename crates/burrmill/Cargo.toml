@@ -36,6 +36,7 @@ datafusion = [
     "dep:datafusion-expr",
     "dep:datafusion-functions",
     "dep:datafusion-functions-aggregate",
+    "dep:datafusion-functions-nested",
     "dep:datafusion-functions-window",
     "dep:datafusion-optimizer",
     "dep:datafusion-physical-expr",
@@ -73,6 +74,7 @@ datafusion-execution = { version = "=55.0.0", default-features = false, optional
 datafusion-expr = { version = "=55.0.0", default-features = false, optional = true }
 datafusion-functions = { version = "=55.0.0", default-features = false, features = ["datetime_expressions", "encoding_expressions", "math_expressions", "regex_expressions", "string_expressions", "unicode_expressions"], optional = true }
 datafusion-functions-aggregate = { version = "=55.0.0", default-features = false, optional = true }
+datafusion-functions-nested = { version = "=55.0.0", default-features = false, optional = true }
 datafusion-functions-window = { version = "=55.0.0", default-features = false, optional = true }
 datafusion-optimizer = { version = "=55.0.0", default-features = false, optional = true }
 datafusion-physical-expr = { version = "=55.0.0", default-features = false, optional = true }
@@ -108,6 +110,11 @@ required-features = ["datafusion"]
 [[test]]
 name = "df_fold"
 path = "tests/df_fold.rs"
+required-features = ["datafusion"]
+
+[[test]]
+name = "df_lambda"
+path = "tests/df_lambda.rs"
 required-features = ["datafusion"]
 
 [[test]]

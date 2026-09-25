@@ -264,7 +264,7 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
     if let sq::Statement::Query(q) = s.as_mut() {
         dedupe_output_names(q, names);
     }
-    let mut rw = Rewriter { refused: None };
+    let mut rw = Rewriter { refused: None, lambda: vec![] };
     let _ = sq::VisitMut::visit(s.as_mut(), &mut rw);
     match rw.refused {
         Some(why) => Err(BurrmillError::NotAllowed(why)),
@@ -274,6 +274,8 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
 
 struct Rewriter {
     refused: Option<String>,
+    /// Parameters of the lambdas the walk is inside.
+    lambda: Vec<String>,
 }
 
 fn binop(l: SqlExpr, op: BinaryOperator, r: SqlExpr) -> SqlExpr {
@@ -315,8 +317,32 @@ fn retype(t: &mut SqlType) -> Option<String> {
 impl VisitorMut for Rewriter {
     type Break = ();
 
+    fn post_visit_expr(&mut self, e: &mut SqlExpr) -> ControlFlow<()> {
+        if let SqlExpr::Lambda(l) = e {
+            self.lambda.truncate(self.lambda.len() - l.params.len());
+        }
+        ControlFlow::Continue(())
+    }
+
     fn pre_visit_expr(&mut self, e: &mut SqlExpr) -> ControlFlow<()> {
         match e {
+            SqlExpr::Lambda(l) => self.lambda.extend(l.params.iter().map(|p| p.name.value.clone())),
+            // DataFusion looks lambda parameters up by bare name only; `acc.rate` would be read as
+            // column `rate` of a table `acc`. As a field access on `acc`, it reaches the parameter.
+            SqlExpr::CompoundIdentifier(parts)
+                if parts.len() > 1 && self.lambda.contains(&parts[0].value) =>
+            {
+                let root = SqlExpr::Identifier(parts[0].clone());
+                let access_chain = parts[1..]
+                    .iter()
+                    .map(|f| {
+                        sq::AccessExpr::Dot(SqlExpr::Value(
+                            sq::Value::SingleQuotedString(f.value.clone()).into(),
+                        ))
+                    })
+                    .collect();
+                *e = SqlExpr::CompoundFieldAccess { root: Box::new(root), access_chain };
+            }
             SqlExpr::BinaryOp {
                 left,
                 op: BinaryOperator::DuckIntegerDivide,

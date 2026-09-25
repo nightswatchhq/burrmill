@@ -103,9 +103,34 @@ impl MiniSession {
         scalar.insert(round.name().to_string(), round);
         let intdiv = super::dialect::IntDiv::udf();
         scalar.insert(intdiv.name().to_string(), intdiv);
+        for f in datafusion_functions_nested::all_default_nested_functions() {
+            let f = match f.name() {
+                "array_prepend" => super::lists::ElementAndList::udf(f, true),
+                "array_append" => super::lists::ElementAndList::udf(f, false),
+                _ => f,
+            };
+            for a in f.aliases() {
+                scalar.insert(a.clone(), Arc::clone(&f));
+            }
+            scalar.insert(f.name().to_string(), f);
+        }
+        let mut higher = HashMap::new();
+        for f in datafusion_functions_nested::all_default_higher_order_functions()
+            .into_iter()
+            .chain([super::lists::ListReduce::udf()])
+        {
+            for a in f.aliases() {
+                higher.insert(a.clone(), Arc::clone(&f));
+            }
+            higher.insert(f.name().to_string(), f);
+        }
         let mut aggregate = HashMap::new();
         for f in datafusion_functions_aggregate::all_default_aggregate_functions() {
             aggregate.insert(f.name().to_string(), f);
+        }
+        // DuckDB's `list(x ORDER BY k)`.
+        if let Some(f) = aggregate.get("array_agg").cloned() {
+            aggregate.insert("list".into(), f);
         }
         let exact_text = CheckedAgg::udaf(Mode::SumText, None);
         aggregate.insert(exact_text.name().to_string(), exact_text);
@@ -117,6 +142,8 @@ impl MiniSession {
             Arc::new(CoreFunctionPlanner::default()),
             Arc::new(datafusion_functions::datetime::planner::DatetimeFunctionPlanner),
             Arc::new(datafusion_functions::unicode::planner::UnicodeFunctionPlanner),
+            Arc::new(datafusion_functions_nested::planner::NestedFunctionPlanner),
+            Arc::new(datafusion_functions_nested::planner::FieldAccessPlanner),
             Arc::new(datafusion_functions_aggregate::planner::AggregateFunctionPlanner),
             Arc::new(datafusion_functions_window::planner::WindowFunctionPlanner),
         ];
@@ -133,7 +160,7 @@ impl MiniSession {
             runtime,
             catalog_list,
             scalar,
-            higher: HashMap::new(),
+            higher,
             aggregate,
             window,
             expr_planners,

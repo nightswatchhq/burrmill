@@ -25,6 +25,7 @@ mod distinct;
 mod fastcast;
 mod fold;
 mod names;
+mod lists;
 mod rule;
 mod session;
 mod sharing;
