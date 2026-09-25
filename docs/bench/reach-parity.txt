@@ -1,0 +1,63 @@
+SAME     SELECT count(*) FROM transfer
+SAME     SELECT * FROM Transfer t JOIN label l ON l.addr = t."to"
+SAME     WITH c AS (SELECT * FROM transfer) SELECT * FROM c
+SAME     WITH c AS (SELECT * FROM transfer), d AS (SELECT * FROM c) SELECT * FROM d JOIN mint USING (addr)
+SAME     SELECT * FROM transfer WHERE x IN (SELECT y FROM burn) AND EXISTS (SELECT 1 FROM mint)
+SAME     SELECT (SELECT max(v) FROM mint) AS m FROM transfer
+SAME     SELECT * FROM transfer UNION ALL SELECT * FROM mint EXCEPT SELECT * FROM burn
+SAME     SELECT * FROM (SELECT * FROM (SELECT * FROM deep) a) b
+SAME     SELECT * FROM range(10)
+SAME     SELECT * FROM generate_series(1, 3) g(x)
+SAME     SELECT * FROM unnest([1, 2]) u(x)
+SAME     SELECT * FROM transfer, unnest([1,2]) u(x)
+SAME     SELECT * FROM read_csv('/etc/passwd')
+SAME     SELECT * FROM "read_csv"('/etc/passwd')
+SAME     SELECT * FROM READ_CSV_AUTO('/etc/passwd')
+SAME     SELECT * FROM read_parquet(['a.parquet'])
+SAME     SELECT * FROM glob('/*')
+SAME     SELECT * FROM duckdb_tables()
+SAME     SELECT * FROM duckdb_settings()
+SAME     SELECT * FROM '/etc/passwd'
+SAME     SELECT * FROM 'data.parquet'
+SAME     SELECT * FROM "weird-name"
+SAME     SELECT * FROM "/etc/passwd"
+SAME     SELECT table_name FROM information_schema.tables
+SAME     SELECT * FROM main.transfer
+SAME     SELECT * FROM memory.main.transfer
+SAME     SELECT * FROM pg_catalog.pg_class
+SAME     SELECT 'FROM read_csv(x)' AS s FROM transfer
+SAME     SELECT 1
+SAME     SELECT * FROM transfer -- FROM read_csv('/x')
+SAME     SELECT * FROM transfer /* FROM '/etc/passwd' */
+SAME     SELECT * FROM transfer t1, transfer t2
+STRICTER SELECT * FROM transfer ASOF JOIN label l ON t.a = l.a AND t.k >= l.k
+         nuthatch Reach({"label", "transfer"}, false)
+         burrmill Refused
+SAME     SELECT * FROM transfer POSITIONAL JOIN mint
+SAME     FROM transfer SELECT *
+SAME     SELECT * FROM transfer QUALIFY row_number() OVER () = 1
+STRICTER SELECT 1; SELECT 2
+         nuthatch Reach({}, false)
+         burrmill Refused
+STRICTER COPY (SELECT 1) TO '/tmp/x'
+         nuthatch Open
+         burrmill Refused
+STRICTER ATTACH '/tmp/x.db'
+         nuthatch Open
+         burrmill Refused
+STRICTER INSTALL httpfs
+         nuthatch Open
+         burrmill Refused
+STRICTER PIVOT transfer ON addr USING sum(v)
+         nuthatch Open
+         burrmill Refused
+SAME     SELECT * FROM (VALUES (1), (2)) v(x)
+STRICTER SELECT * FROM transfer AS OF 1
+         nuthatch Open
+         burrmill Refused
+STRICTER SELECT * FROM transfer TABLESAMPLE 10%
+         nuthatch Reach({"transfer"}, false)
+         burrmill Refused
+SAME     SELECT * FROM lateral_fn() l
+SAME     SELECT * FROM LATERAL (SELECT * FROM mint) m
+REACH	statements=46	same=38	stricter=8	differing=0

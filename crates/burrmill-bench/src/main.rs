@@ -27,6 +27,7 @@ mod error_parity;
 mod fixture;
 mod generate;
 mod oracles;
+mod reach_parity;
 mod serve;
 mod shapes;
 mod views;
@@ -87,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
         Some("encode-parity") => encode_parity::run(),
         Some("error-parity") => error_parity::run(),
         Some("dialect-parity") => dialect_parity::run(),
+        Some("reach-parity") => reach_parity::run(),
         Some("engine-analyze") => engine_views::analyze(
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,
             &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,

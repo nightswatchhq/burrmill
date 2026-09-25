@@ -51,7 +51,8 @@ parquet.workspace = true
 rustc-hash.workspace = true
 hashbrown.workspace = true
 rayon.workspace = true
-sqlparser.workspace = true
+# `visitor` for `inspect`, the AST walk that answers what a statement reaches (roadmap 6.7).
+sqlparser = { workspace = true, features = ["visitor"] }
 
 async-trait = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }

@@ -47,6 +47,7 @@
 
 pub mod error;
 pub mod gate;
+pub mod inspect;
 pub mod exec;
 pub mod limits;
 pub mod plan;

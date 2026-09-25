@@ -4,6 +4,36 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.7 — what a statement reaches, answered by sqlparser — 2026-09-25
+
+nuthatch asks DuckDB's parser (`json_serialize_sql`) which tables and table functions a `/sql`
+statement touches, refuses anything unrecognised, and bounds its integrity sweep by the tables
+reached. **`burrmill::inspect::reach`** answers the same from sqlparser's AST. It is in the default
+build, with no DataFusion needed; sqlparser's `visitor` feature is now on there, which adds one
+small proc-macro crate. The rules are nuthatch's:
+
+- table functions `generate_series`, `range` and `unnest` only;
+- base tables named `[A-Za-z0-9_]+`, which is what stops `FROM '/etc/passwd'`;
+- a schema other than `main` surveys the catalogue;
+- tables reached, lowercased, CTE names included.
+
+It is stricter where nuthatch's walk is open: an unparseable statement, more than one statement, or
+anything but a query is refused, not passed to other guards.
+
+`burrmill-bench reach-parity` runs 46 statements through nuthatch's own walk (copied, over DuckDB's
+`json_serialize_sql`) and through `reach`. **38 identical, 8 stricter, none looser.** The hostile
+cases (`read_csv` bare and quoted, `glob`, `duckdb_settings()`, `FROM '/etc/passwd'`, a keyword
+inside a literal or a comment) are refused alike. The stricter ones are `COPY`, `ATTACH`, `INSTALL`,
+`PIVOT` and `AS OF`, which DuckDB will not serialise, so nuthatch's walk does not decide them; two
+stacked statements; and `ASOF`/`TABLESAMPLE`, which sqlparser cannot parse. Transcript:
+`docs/bench/reach-parity.txt`.
+
+Not done: the other `json_serialize_sql` consumers, which are graft's canonical plan, the entity
+shape gate, the Dune translation and entity lowering. They depend on DuckDB's own AST shape and
+belong with phase 2's engine trait.
+
+---
+
 ## 6.8 — concurrency on the DataFusion path, on real views — 2026-09-24
 
 Two sweeps on the thinkpad, 8 threads per query, worst client's own p99 and fairness
