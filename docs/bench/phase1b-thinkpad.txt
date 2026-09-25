@@ -1,0 +1,55 @@
+    Finished `release` profile [optimized] target(s) in 57.79s
+# burrmill 05e4f02, nest pete/portable-views at 7092337, thinkpad, 1,925 segments, 2026-09-25
+## rewrite-parity (original views on DuckDB vs rewrites on DuckDB and Burrmill)
+OK   deployment_signal                    unchanged              burrmill-same rows=14654
+OK   open_allocations                     unchanged              burrmill-same rows=6812
+OK   port_queue                           unchanged              burrmill-same rows=3943
+OK   lodestar_allocations                 unchanged              burrmill-same rows=260828
+OK   epoch_boundaries                     unchanged              burrmill-same rows=269
+OK   lodestar_epochs                      same-as-original       burrmill-same rows=269
+OK   lodestar_disputes                    unchanged              burrmill-same rows=8
+OK   lodestar_escrow_transactions         unchanged              burrmill-same rows=77941
+OK   lodestar_delegations                 unchanged              burrmill-same rows=608700
+OK   lodestar_network_params              same-as-original       burrmill-same rows=1
+OK   lodestar_indexer_ledger              same-as-original       burrmill-same rows=1678525
+OK   lodestar_indexers                    same-as-original       burrmill-same rows=184
+OK   lodestar_indexer_pool                unchanged              burrmill-same rows=143
+OK   lodestar_delegator_stakes            unchanged              burrmill-same rows=323180
+OK   lodestar_delegators                  unchanged              burrmill-same rows=309868
+OK   lodestar_curator_signals             unchanged              burrmill-same rows=15821
+OK   lodestar_curators                    unchanged              burrmill-same rows=1825
+OK   lodestar_provisions                  unchanged              burrmill-same rows=95
+OK   lodestar_network                     same-as-original       burrmill-same rows=1
+OK   lodestar_deployments                 unchanged              burrmill-same rows=24833
+OK   lodestar_indexer_deployment_daily    same-as-original       burrmill-same rows=808984
+OK   lodestar_indexer_daily               unchanged              burrmill-same rows=19733
+REWRITE	views=22	ok=22	todo=0
+
+## engine-views (warm medians of 5)
+SAME  deployment_signal                  rows=14654   duck_ms=33     burrmill_ms=36     ratio=1.09
+SAME  open_allocations                   rows=6812    duck_ms=56     burrmill_ms=56     ratio=1.00
+SAME  port_queue                         rows=3943    duck_ms=67     burrmill_ms=70     ratio=1.04
+SAME  lodestar_allocations               rows=260828  duck_ms=1980   burrmill_ms=1842   ratio=0.93
+SAME  epoch_boundaries                   rows=269     duck_ms=42     burrmill_ms=22     ratio=0.52
+SAME  lodestar_epochs                    rows=269     duck_ms=1332   burrmill_ms=2564   ratio=1.92
+SAME  lodestar_disputes                  rows=8       duck_ms=10     burrmill_ms=11     ratio=1.10
+SAME  lodestar_escrow_transactions       rows=77941   duck_ms=292    burrmill_ms=279    ratio=0.96
+SAME  lodestar_delegations               rows=608700  duck_ms=1518   burrmill_ms=1486   ratio=0.98
+SAME  lodestar_network_params            rows=1       duck_ms=49     burrmill_ms=33     ratio=0.67
+SAME  lodestar_indexer_ledger            rows=1678525 duck_ms=6435   burrmill_ms=5652   ratio=0.88
+SAME  lodestar_indexers                  rows=184     duck_ms=2516   burrmill_ms=987    ratio=0.39
+SAME  lodestar_indexer_pool              rows=143     duck_ms=1986   burrmill_ms=616    ratio=0.31
+SAME  lodestar_delegator_stakes          rows=323180  duck_ms=4451   burrmill_ms=3842   ratio=0.86
+SAME  lodestar_delegators                rows=309868  duck_ms=3617   burrmill_ms=2641   ratio=0.73
+SAME  lodestar_curator_signals           rows=15821   duck_ms=635    burrmill_ms=153    ratio=0.24
+SAME  lodestar_curators                  rows=1825    duck_ms=39     burrmill_ms=19     ratio=0.49
+SAME  lodestar_provisions                rows=95      duck_ms=537    burrmill_ms=137    ratio=0.26
+SAME  lodestar_network                   rows=1       duck_ms=3329   burrmill_ms=1343   ratio=0.40
+SAME  lodestar_deployments               rows=24833   duck_ms=1112   burrmill_ms=176    ratio=0.16
+SAME  lodestar_indexer_deployment_daily  rows=808984  duck_ms=6309   burrmill_ms=4486   ratio=0.71
+SAME  lodestar_indexer_daily             rows=19733   duck_ms=3206   burrmill_ms=1012   ratio=0.32
+CHECK indexer-daily-sums burrmill=expected duckdb=expected
+CHECK pool-agrees    burrmill=expected duckdb=expected
+CHECK populations    burrmill=Ok(Array [Object {"deployments_ever_signalled": Number(14654), "still_signalled": Number(8382), "deployments_with_open_alloc": Number(6812)}]) duckdb=Ok(Array [Object {"d
+CHECK port-queue     burrmill=Ok(Array [Object {"unserved_signalled": Number(3943), "unserved_over_1000": Number(65), "largest_net_signal": Number(54336)}]) duckdb=Ok(Array [Object {"unserved_signalle
+VIEWS	views=22	same=22	differing=0	failing=0	checks=2/4

@@ -4,6 +4,78 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Phase 1b — every graph-allocations view on Burrmill, byte for byte — 2026-09-25
+
+Gate 1's parity leg wanted every authored statement to reach parity once the DuckDB-only views were
+rewritten. **22/22 now do**, on the thinkpad's 1,925-segment copy: each rewrite gives DuckDB the
+same rows as the original, and Burrmill gives the same rows as DuckDB (`rewrite-parity`, byte
+identical in nuthatch's JSON). The two zero-row checks pass on both engines. The two pinned checks
+agree between the engines but not with their fixtures, which were taken on 19 August from a
+smaller nest.
+
+**Time-weighted 0.69x DuckDB** (27.5 s against 39.6 s over the 22), and **21/22 within 1.5x**.
+Transcript: `docs/bench/phase1b-thinkpad.txt`.
+
+### The nest side (branch `pete/portable-views`, local on the thinkpad, not pushed)
+
+Seven commits, each checked by `rewrite-parity` before the next. ASOF joins become a newest key
+carried forward over a union in key order, then an equality join; `LATERAL` becomes one more level;
+a `FILTER` subquery becomes a scalar subquery; list comprehensions over a hex word become two
+64-bit halves, `CAST('0x' || substr(h, 1, 16) AS UBIGINT)`, since DuckDB casts `0x` text to UBIGINT
+but not to HUGEINT. The first version wrote the 32-digit fold out term by term; it planned in
+532 ms against DuckDB's 82 and was replaced.
+
+### The engine side
+
+Two views, `lodestar_delegator_stakes` and `lodestar_delegators`, now run **unchanged**:
+
+- **`list_reduce`**, DuckDB's, as a DataFusion higher-order function (`df/lists.rs`). One batch
+  evaluation of the lambda per list position, rows ordered longest first so the live rows are a
+  prefix; NULL list NULL, empty list refused as DuckDB refuses it, the result cast back to the
+  element type. DataFusion's nested list functions and planners are registered with it, and
+  `list` as `array_agg`.
+- **`list_prepend`/`list_append` of a struct.** DataFusion unifies the element and the list's
+  elements, then refuses to cast a struct to that type; `Utf8` against `Utf8View` was enough.
+- **`acc.rate` inside a lambda.** DataFusion resolves a lambda parameter only by its bare name;
+  the dialect rewrites `p.f` into a field access on `p`.
+
+Then the fold agreed on shape and disagreed in the last digits, 16,384 wei on 6.4e18. Two
+roundings, both found by measuring DuckDB rather than reading it:
+
+- **DECIMAL to DOUBLE.** DuckDB converts a hugeint as `lower + upper * 2^64`, rounding twice, and a
+  scaled decimal past 2^53 as integer part plus fraction. arrow rounds once, correctly, and
+  disagreed on 24 of 3,011 sampled HUGEINTs. `DuckDoubles` models DuckDB and matched it on all
+  3,011 and on 1,458 DECIMAL(38,9)s.
+- **DOUBLE to HUGEINT is half to even** (`nearbyint`), while DOUBLE to DECIMAL(38,0) is half away.
+  Both are DECIMAL(38,0) here, so a HUGEINT cast now carries a marker until the analyzer has seen
+  its source type.
+
+### Found on the way
+
+- **`a IS DISTINCT FROM b OR c ...`** parsed as `a IS DISTINCT FROM (b OR c ...)`: sqlparser reads
+  that operand at the lowest precedence. Both zero-row checks failed on it. The DuckDB dialect is
+  now wrapped to parse it at `IS`'s precedence, as DuckDB and Postgres do.
+- **`SUBSTRING` only planned in the bench.** datafusion-sql plans it only with its
+  `unicode_expressions` feature, which Burrmill never named; the bench's stock arm pulls the
+  umbrella crate, and unification lent it. A consumer depending on Burrmill alone would have been
+  refused. Burrmill names it now, with `recursive_protection`, which the bench had also been
+  lending and without which a deep enough expression aborts the process instead of the query.
+- **engine-views swallowed its own error** in a tokio panic from dropping the engine inside `main`'s
+  runtime; the error was a check with no fixture, which means zero rows.
+
+### Owed
+
+- **`lodestar_epochs`, 1.92x.** Four joins of events to epochs by block range run as nested loops,
+  574-711 ms of CPU each: DataFusion 55 has no range join. A range-join operator would fix the cause
+  for every nest that joins events to epochs, which is most of them.
+- Planning is quadratic in expression depth (a 32-term sum: 66 ms). DataFusion recomputes a type
+  from the whole subtree whenever asked; the analyzer passes ask at every node.
+- HUGEINT is DECIMAL(38,0), which stops at 10^38 - 1 where HUGEINT reaches 2^127 - 1. A value
+  between refuses; it does not answer wrongly.
+- An integer compared with a boolean (`1 = false`): DuckDB casts, Burrmill refuses.
+
+---
+
 ## 6.2 closed — the function surface audited; one path leak removed — 2026-09-25
 
 6.2 left "a function allowlist built from the census" open. The census counts features, not

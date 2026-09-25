@@ -156,6 +156,11 @@ was 1.54x DuckDB (stock DataFusion 1.81-1.87x), and **two owned plan shapes (`To
 statement, 9/12 within 1.5x; over are two views on a null-aware anti-join (41 and 51 ms, the
 best plan measured) and one 9 ms view that is planning. See the progress log.
 
+**Phase 1b, 2026-09-25, same machine and nest:** **22/22 views byte-identical**, 7 of them rewritten
+on the nest's `pete/portable-views` branch (not pushed) and two now running unchanged through
+`list_reduce`; both zero-row checks pass. **0.69x DuckDB time-weighted, 21/22 within 1.5x**; over is
+`lodestar_epochs` at 1.92x, four range joins as nested loops. Transcript `docs/bench/phase1b-thinkpad.txt`.
+
 **Gate 1:**
 
 - every authored statement reaches parity once the Lodestar and qos views are rewritten (plan
