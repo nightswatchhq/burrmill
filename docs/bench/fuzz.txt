@@ -1,0 +1,11 @@
+# burrmill 48781c6, MacBook, 2026-09-25
+## SEED=1 CASES=500 (first run, before any fix)
+FUZZ	seed=1	cases=500	same=336	both_refuse=8	stricter=138	looser=0	differ=18
+## SEED=100000 CASES=3000
+STRICTER reasons:
+    102  substrate error: This feature is not implemented: Physical plan does not support logical e
+FUZZ	seed=100000	cases=3000	same=2656	both_refuse=57	designed_refusal=171	designed_exact=11	overflow_order=3	stricter=102	looser=0	differ=0
+## SEED=7000000 CASES=5000
+STRICTER reasons:
+    184  substrate error: This feature is not implemented: Physical plan does not support logical e
+FUZZ	seed=7000000	cases=5000	same=4421	both_refuse=89	designed_refusal=298	designed_exact=3	overflow_order=5	stricter=184	looser=0	differ=0

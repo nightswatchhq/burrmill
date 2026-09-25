@@ -4,6 +4,47 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Differential fuzzing — nine faults, three of them silent wrong answers — 2026-09-25
+
+Slice 1 owed a generated corpus against DuckDB. `burrmill-bench fuzz` draws queries from a typed
+grammar (integer, text, decimal and boolean expressions; `CASE`, `COALESCE`, casts and `TRY_CAST`,
+`LIKE`, `IN`, `BETWEEN`, `IS DISTINCT FROM`; aggregates with `GROUP BY`/`HAVING`; joins, derived
+tables, CTEs, scalar/`IN`/`EXISTS` subqueries, windows, all six set operations) over a seeded
+fixture chosen to be awkward: mixed-case and NULL text, UBIGINT keys as nests have them, negative
+and missing amounts, integer text past 64 bits and text that is no number. Every query is
+deterministic; rows compare as a multiset unless the query orders by every column. Outcomes are
+counted apart: identical, both refuse, the checked rule's designed refusals, designed exact sums
+(DuckDB rerun with those casts widened agrees with Burrmill), overflows that depend on each
+optimiser's rewrites, stricter, looser, and different.
+
+First run, 500 cases: **336 identical, 18 different, 138 stricter**. After the fixes, **3,000
+cases on that seed and 5,000 on a fresh one: no different answers, nothing looser.** What it found:
+
+- **Silent wrong answers.** `TRY_CAST('0xa' AS BIGINT)` was NULL where DuckDB reads 10, emptying
+  whole filters. `EXCEPT ALL`/`INTERSECT ALL` were set operations, not bag ones (DataFusion plans
+  them as anti/semi joins): now rows are numbered within their duplicates on both sides and joined
+  on that number too. And one of my own, caught the same afternoon: the exact sum over `TRY_CAST`
+  read `0x` text with HUGEINT's grammar, so `sum(TRY_CAST(hex AS BIGINT))` came out NULL.
+- **Text to integer, as DuckDB reads it**: trimmed, signed, underscores, fractions and exponents
+  rounded half away (`'1.5'` is 2, `'5e-1'` 1), in one grammar (`wide::duck_number`) shared by the
+  casts and the exact sums. Text that is no number is NULL under `TRY_CAST`, and no longer refuses
+  an exact sum.
+- **`avg` is DOUBLE** for every exact input, as DuckDB's is: exact sum, DuckDB's hugeint-to-double
+  rounding, over count times 10^scale. It had been a DECIMAL (`"18.0000"`).
+- **Integer types across signedness**: `//` keeps UBIGINT and goes HUGEINT beside a signed type;
+  `greatest`/`least` fit a literal to their other argument; `INTERSECT`/`EXCEPT` take DuckDB's union
+  type (HUGEINT for mixed signs, DataFusion's resolution beside a DECIMAL). What JSON prints, a
+  number or a string, follows from these.
+- **Function aliases**: only primary names were registered, so `length` (DataFusion's alias of
+  `character_length`) and every other alias was refused. The function audit still passes.
+
+Left stricter, by count: `EXISTS`/`IN` subqueries inside a `SELECT` list (184 of 5,000), which
+DataFusion plans only as filter predicates. A refusal, not an answer. `dialect-parity` 107/107
+with the fuzz finds pinned; one `KNOWN` (an overflow DuckDB's optimiser rewrites away). The nest:
+22/22, 0.653x. Transcript: `docs/bench/fuzz.txt`.
+
+---
+
 ## Subquery column names, and a silent loss of columns — 2026-09-25
 
 The owed "nested-SELECT duplicate unaliased names" turned out to hide a wrong answer.
@@ -2233,5 +2274,6 @@ partitions promoted on demand (0.79x). Promoting unconditionally cost the ten-th
 - The seam, the hot tip, and COR-1 — slice 2, and the highest-risk invariant in the design.
 - A test that fails when nuthatch's seal layout changes. Burrmill has no path dependency on nuthatch
   by design, so a layout change will not break the build; it will break the *reading*, silently.
-- Differential fuzzing (NoREC/TLP). Nineteen hand-written tests are not the corpus §3.7 asks for.
+- ~~Differential fuzzing (NoREC/TLP).~~ `burrmill-bench fuzz`, 2026-09-25: differential against
+  DuckDB, 8,000 generated cases with no differing answer after nine fixes.
 - The DuckDB glob's flat ~620 ms on the real nest directory, understood rather than quoted.
