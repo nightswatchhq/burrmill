@@ -120,6 +120,9 @@ const CORPUS: &[&str] = &[
     "SELECT regexp_extract(value, '[0-9]{2}') AS a, regexp_matches(\"from\", '(?i)0XA') AS b, regexp_replace(value, '0', 'z', 'g') AS c, regexp_replace(value, '(1)', '\\1\\1') AS d, regexp_replace(value, '^1', '\\2') AS e FROM transfer ORDER BY block_number, log_index",
     "SELECT sign(CAST(block_number AS BIGINT) - 3) AS a, sign(-2.5) AS b, NULLIF(block_number, 2) AS c FROM transfer ORDER BY block_number, log_index",
     "SELECT 1 AS a ORDER BY 'x'",
+    "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
+    "SELECT date_trunc('day', CAST(to_timestamp(block_timestamp) AS DATE)) AS a, CAST(to_timestamp(block_timestamp) AS DATE) + INTERVAL 33 HOUR AS b, CAST(to_timestamp(block_timestamp) AS DATE) + 3 AS c FROM transfer ORDER BY 1, 2",
+    "SELECT CASE WHEN log_index = 0 THEN CAST(value AS DECIMAL(20,2)) ELSE 2.5::DOUBLE END AS a, COALESCE(TRY_CAST(value AS HUGEINT), 0.5::DOUBLE) AS b FROM transfer ORDER BY block_number, log_index",
     "SELECT log_index FROM transfer WHERE block_number - 95 > 0",
     "SELECT block_number - 95 AS d FROM transfer",
     "SELECT length('héllo') AS a, char_length('ab') AS b, length(\"from\") AS c FROM transfer ORDER BY block_number, log_index",
@@ -132,7 +135,13 @@ const CORPUS: &[&str] = &[
 ];
 
 /// Differences that stand, and why.
-const KNOWN: &[(&str, &str)] = &[(
+const KNOWN: &[(&str, &str)] = &[
+    (
+        "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
+        "a DuckDB 1.5 bug, not reported upstream yet: with a date part projected, a <> between text and a \
+         cast timestamp drops every row (project the timestamp itself and all rows return). Burrmill keeps them",
+    ),
+    (
     "SELECT log_index FROM transfer WHERE block_number - 95 > 0",
     "DuckDB rewrites x - 95 > 0 to x > 95 before evaluating, so its UBIGINT underflow never happens; \
      Burrmill evaluates what was written and refuses. Which overflows surface is the optimiser's",

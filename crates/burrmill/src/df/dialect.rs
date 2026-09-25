@@ -778,6 +778,7 @@ impl AnalyzerRule for DuckSemantics {
                     let t = t.transform_data(|e| timestamp_as_duckdb(e, &schema))?;
                     let t = t.transform_data(|e| round_before_int_cast(e, &schema, &self.round))?;
                     let t = t.transform_data(|e| timestamp_as_text(e, &schema))?;
+                    let t = t.transform_data(|e| dates_as_duckdb(e, &schema))?;
                     t.transform_data(|e| hugeint_rounding(e, &schema, &self.round))
                 })?;
                 if t.transformed && names_matter && t.data.schema_name().to_string() != name {
@@ -793,6 +794,52 @@ impl AnalyzerRule for DuckSemantics {
             }
         })
         .map(|t| t.data)
+    }
+}
+
+/// DuckDB's date arithmetic types: `date_trunc` of a DATE and `DATE ± INTERVAL` are TIMESTAMP (in
+/// microseconds, where DataFusion gives nanoseconds or keeps the DATE and drops the hours).
+/// A DATE, or one DataFusion's coercion has already cast to a timestamp.
+fn is_date(e: &Expr, schema: &DFSchema) -> bool {
+    let date = |t: DataType| matches!(t, DataType::Date32 | DataType::Date64);
+    match e {
+        Expr::Cast(Cast { expr, .. }) => expr.get_type(schema).is_ok_and(date),
+        e => e.get_type(schema).is_ok_and(date),
+    }
+}
+
+fn dates_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
+    let micros = |e: Expr| Expr::Cast(Cast::new(Box::new(e), DataType::Timestamp(TimeUnit::Microsecond, None)));
+    match e {
+        Expr::ScalarFunction(ref f)
+            if f.func.name() == "date_trunc"
+                && matches!(e.get_type(schema)?, DataType::Timestamp(TimeUnit::Nanosecond, None))
+                && f.args.get(1).is_some_and(|a| is_date(a, schema)) =>
+        {
+            Ok(Transformed::yes(micros(e)))
+        }
+        Expr::BinaryExpr(BinaryExpr { left, op: op @ (Operator::Plus | Operator::Minus), right }) => {
+            let (lt, rt) = (left.get_type(schema)?, right.get_type(schema)?);
+            let date = |t: &DataType| matches!(t, DataType::Date32 | DataType::Date64);
+            // `date + 3` arrives as `CAST(CAST(3 * 86400 AS Duration) AS Interval)`, and is a DATE in
+            // DuckDB too; only a written interval makes a TIMESTAMP.
+            let interval = |t: &DataType, e: &Expr| {
+                let mut inner = e;
+                while let Expr::Cast(Cast { expr, .. }) = inner {
+                    inner = expr;
+                }
+                matches!(t, DataType::Interval(_)) && !inner.get_type(schema).is_ok_and(|t| t.is_integer())
+            };
+            let (lt, rt) = (lt, rt);
+            if date(&lt) && interval(&rt, &right) {
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(Box::new(micros(*left)), op, right))))
+            } else if interval(&lt, &left) && date(&rt) && op == Operator::Plus {
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(left, op, Box::new(micros(*right))))))
+            } else {
+                Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })))
+            }
+        }
+        e => Ok(Transformed::no(e)),
     }
 }
 
@@ -1081,6 +1128,19 @@ fn fit_literal(e: Expr, to: &DataType) -> Expr {
     }
 }
 
+/// A float beside a DECIMAL among values that meet in one result.
+fn floats_win(exprs: &[&Expr], schema: &DFSchema) -> DFResult<bool> {
+    let types = exprs.iter().map(|e| e.get_type(schema)).collect::<DFResult<Vec<_>>>()?;
+    Ok(types.iter().any(|t| t.is_floating()) && types.iter().any(|t| matches!(t, DataType::Decimal128(..) | DataType::Decimal256(..))))
+}
+
+fn as_double(e: Expr, schema: &DFSchema) -> DFResult<Expr> {
+    Ok(match e.get_type(schema)? {
+        t if t.is_numeric() && t != DataType::Float64 => Expr::Cast(Cast::new(Box::new(e), DataType::Float64)),
+        _ => e,
+    })
+}
+
 /// The one integer type among `types` that is not a bare literal, if there is exactly one.
 fn sole_integer(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType>> {
     let mut found: Option<DataType> = None;
@@ -1147,6 +1207,17 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             if let Some(e) = &c.else_expr {
                 branches.push(e);
             }
+            // A DOUBLE among the branches makes the result DOUBLE, as DuckDB has it; DataFusion
+            // would make DECIMAL beside DECIMAL-typed branches.
+            if floats_win(&branches, schema)? {
+                for (_, then) in c.when_then_expr.iter_mut() {
+                    **then = as_double(then.as_ref().clone(), schema)?;
+                }
+                if let Some(e) = c.else_expr.as_mut() {
+                    **e = as_double(e.as_ref().clone(), schema)?;
+                }
+                return Ok(Transformed::yes(Expr::Case(c)));
+            }
             if let Some(t) = sole_integer(&branches, schema)? {
                 for (_, then) in c.when_then_expr.iter_mut() {
                     **then = fit_literal(then.as_ref().clone(), &t);
@@ -1160,6 +1231,10 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
         Expr::ScalarFunction(mut f)
             if matches!(f.func.name(), "coalesce" | "greatest" | "least" | "nullif" | "burrmill_intdiv") =>
         {
+            if f.func.name() != "burrmill_intdiv" && floats_win(&f.args.iter().collect::<Vec<_>>(), schema)? {
+                f.args = f.args.into_iter().map(|a| as_double(a, schema)).collect::<DFResult<_>>()?;
+                return Ok(Transformed::yes(Expr::ScalarFunction(f)));
+            }
             let args: Vec<&Expr> = f.args.iter().collect();
             if let Some(t) = sole_integer(&args, schema)? {
                 f.args = f.args.into_iter().map(|a| fit_literal(a, &t)).collect();
