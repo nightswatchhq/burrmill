@@ -765,6 +765,7 @@ dependencies = [
  "object_store 0.12.5",
  "parquet",
  "rayon",
+ "regex",
  "rustc-hash",
  "serde_json",
  "sqllogictest",
