@@ -202,3 +202,17 @@ fn a_vanished_segment_names_its_path_and_the_os_error() {
     assert!(err.contains("No such file or directory"), "{err}");
     assert!(err.contains(segs.to_str().unwrap()), "{err}");
 }
+
+#[test]
+fn queries_opening_with_a_parenthesis_or_a_comment_are_queries() {
+    let (_tmp, engine) = nest_with_transfer();
+    for sql in [
+        "(SELECT 1 AS a) UNION ALL (SELECT 2)",
+        "-- a note\nSELECT count(*) FROM token__transfer",
+        "/* note */ SELECT 1",
+        "  (\n (SELECT 1))",
+    ] {
+        engine.sql(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    assert!(engine.sql("/* x */ COPY (SELECT 1) TO '/tmp/y'").is_err());
+}

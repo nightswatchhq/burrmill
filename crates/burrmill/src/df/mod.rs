@@ -243,8 +243,24 @@ fn rename(plan: datafusion_expr::LogicalPlan, names: &[Option<String>]) -> Resul
     LogicalPlanBuilder::from(plan).project(exprs).and_then(|b| b.build()).map_err(df_err)
 }
 
+/// The first keyword, past whitespace, opening parentheses and comments: `(SELECT ...) UNION ...`
+/// and a statement opening with `-- note` are queries too.
+fn leading_keyword(sql: &str) -> &str {
+    let mut s = sql;
+    loop {
+        let t = s.trim_start_matches(|c: char| c.is_whitespace() || c == '(');
+        if let Some(rest) = t.strip_prefix("--") {
+            s = rest.split_once('\n').map_or("", |(_, r)| r);
+        } else if let Some(rest) = t.strip_prefix("/*") {
+            s = rest.split_once("*/").map_or("", |(_, r)| r);
+        } else {
+            return t;
+        }
+    }
+}
+
 fn refuse_non_query(sql: &str) -> Result<()> {
-    let trimmed = sql.trim_start();
+    let trimmed = leading_keyword(sql);
     let head = trimmed
         .chars()
         .take_while(|c| c.is_ascii_alphabetic() || *c == '_')

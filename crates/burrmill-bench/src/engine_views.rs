@@ -335,6 +335,11 @@ pub fn sql_files(root: &str, files: &[String]) -> anyhow::Result<()> {
         })
         .join()
         .expect("engine");
+        if std::env::var("PRINT").is_ok() {
+            if let Ok(r) = &rows {
+                r.iter().for_each(|row| println!("  row {row}"));
+            }
+        }
         let digest = |r: &Vec<String>| {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
