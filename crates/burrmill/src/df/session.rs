@@ -97,6 +97,8 @@ impl MiniSession {
             let d = super::dialect::Decode::udf(inner);
             scalar.insert(d.name().to_string(), d);
         }
+        let mark = super::dialect::HugeintMark::udf();
+        scalar.insert(mark.name().to_string(), mark);
         let from_hex = super::dialect::FromHex::udf();
         scalar.insert(from_hex.name().to_string(), from_hex);
         let round = super::dialect::RoundInt::udf();

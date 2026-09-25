@@ -216,3 +216,18 @@ fn queries_opening_with_a_parenthesis_or_a_comment_are_queries() {
     }
     assert!(engine.sql("/* x */ COPY (SELECT 1) TO '/tmp/y'").is_err());
 }
+
+#[test]
+fn doubles_round_to_hugeint_half_to_even_and_to_decimal_half_away() {
+    let (_tmp, engine) = nest_with_transfer();
+    // DuckDB 1.5's answers.
+    let sql = "SELECT CAST(2.5::DOUBLE AS HUGEINT) AS a, CAST(3.5::DOUBLE AS HUGEINT) AS b, \
+               CAST(-2.5::DOUBLE AS HUGEINT) AS c, CAST(2.5::DOUBLE AS DECIMAL(38,0)) AS d, \
+               TRY_CAST(2106471783529098.5::DOUBLE AS HUGEINT) AS e, CAST('7' AS HUGEINT) AS f, \
+               CAST(CAST('47582028310819253533' AS HUGEINT) AS DOUBLE) AS g";
+    let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
+    assert_eq!(
+        serde_json::to_string(&rows).unwrap(),
+        r#"[{"a":"2","b":"4","c":"-2","d":"3","e":"2106471783529098","f":"7","g":4.758202831081926e+19}]"#
+    );
+}

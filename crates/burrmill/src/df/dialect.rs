@@ -278,6 +278,26 @@ struct Rewriter {
     lambda: Vec<String>,
 }
 
+fn call(name: &str, args: Vec<SqlExpr>) -> SqlExpr {
+    SqlExpr::Function(sq::Function {
+        name: sq::ObjectName::from(vec![sq::Ident::new(name)]),
+        uses_odbc_syntax: false,
+        parameters: sq::FunctionArguments::None,
+        args: sq::FunctionArguments::List(sq::FunctionArgumentList {
+            duplicate_treatment: None,
+            args: args
+                .into_iter()
+                .map(|a| sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(a)))
+                .collect(),
+            clauses: vec![],
+        }),
+        filter: None,
+        null_treatment: None,
+        over: None,
+        within_group: vec![],
+    })
+}
+
 fn binop(l: SqlExpr, op: BinaryOperator, r: SqlExpr) -> SqlExpr {
     SqlExpr::BinaryOp {
         left: Box::new(l),
@@ -348,24 +368,7 @@ impl VisitorMut for Rewriter {
                 op: BinaryOperator::DuckIntegerDivide,
                 right,
             } => {
-                let args = [*left.clone(), *right.clone()]
-                    .into_iter()
-                    .map(|a| sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(a)))
-                    .collect();
-                *e = SqlExpr::Function(sq::Function {
-                    name: sq::ObjectName::from(vec![sq::Ident::new("burrmill_intdiv")]),
-                    uses_odbc_syntax: false,
-                    parameters: sq::FunctionArguments::None,
-                    args: sq::FunctionArguments::List(sq::FunctionArgumentList {
-                        duplicate_treatment: None,
-                        args,
-                        clauses: vec![],
-                    }),
-                    filter: None,
-                    null_treatment: None,
-                    over: None,
-                    within_group: vec![],
-                });
+                *e = call("burrmill_intdiv", vec![*left.clone(), *right.clone()]);
             }
             // DataFusion's SQL planner type-checks NOT before any analyzer rule could cast text;
             // `x = false` is the same three-valued answer and reaches `DuckComparisons`.
@@ -381,9 +384,15 @@ impl VisitorMut for Rewriter {
                 );
             }
             SqlExpr::Cast { data_type, .. } => {
+                let hugeint = matches!(data_type, SqlType::HugeInt);
                 if let Some(why) = retype(data_type) {
                     self.refused = Some(why);
                     return ControlFlow::Break(());
+                }
+                // DuckDB rounds a float to HUGEINT half to even, and to DECIMAL(38,0) half away
+                // from zero; both are DECIMAL(38,0) here, so `DuckSemantics` is told which it was.
+                if hugeint {
+                    *e = call("burrmill_hugeint", vec![e.clone()]);
                 }
             }
             SqlExpr::BinaryOp { left, op, right } => {
@@ -545,7 +554,8 @@ impl AnalyzerRule for DuckSemantics {
                 let t = e.transform_up(|e| {
                     let t = divide_as_double(e, &schema)?;
                     let t = t.transform_data(|e| timestamp_as_duckdb(e, &schema))?;
-                    t.transform_data(|e| round_before_int_cast(e, &schema, &self.round))
+                    let t = t.transform_data(|e| round_before_int_cast(e, &schema, &self.round))?;
+                    t.transform_data(|e| hugeint_rounding(e, &schema, &self.round))
                 })?;
                 if t.transformed && names_matter && t.data.schema_name().to_string() != name {
                     Ok(Transformed::yes(t.data.alias(name)))
@@ -971,6 +981,66 @@ fn round_before_int_cast(
     } else {
         Expr::Cast(Cast::new(Box::new(rounded), to))
     }))
+}
+
+/// `burrmill_hugeint(CAST(x AS DECIMAL(38,0)))`, the marker the parse leaves on a HUGEINT cast:
+/// from a float the value is rounded half to even first, as DuckDB's `nearbyint` does, and either
+/// way the marker goes.
+fn hugeint_rounding(e: Expr, schema: &DFSchema, round: &Arc<ScalarUDF>) -> DFResult<Transformed<Expr>> {
+    let Expr::ScalarFunction(f) = &e else {
+        return Ok(Transformed::no(e));
+    };
+    if f.func.name() != "burrmill_hugeint" {
+        return Ok(Transformed::no(e));
+    }
+    let [arg] = f.args.as_slice() else {
+        return plan_err!("burrmill_hugeint takes one argument");
+    };
+    let rounded = |inner: &Expr| {
+        Box::new(Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+            Arc::clone(round),
+            vec![inner.clone()],
+        )))
+    };
+    Ok(Transformed::yes(match arg {
+        Expr::Cast(Cast { expr, field }) if expr.get_type(schema)?.is_floating() => {
+            Expr::Cast(Cast::new(rounded(expr), field.data_type().clone()))
+        }
+        Expr::TryCast(TryCast { expr, field }) if expr.get_type(schema)?.is_floating() => {
+            Expr::TryCast(TryCast::new(rounded(expr), field.data_type().clone()))
+        }
+        other => other.clone(),
+    }))
+}
+
+/// Marks a cast written as HUGEINT until [`hugeint_rounding`] takes it off; returns its argument.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct HugeintMark {
+    sig: Signature,
+}
+
+impl HugeintMark {
+    pub fn udf() -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable) }))
+    }
+}
+
+impl ScalarUDFImpl for HugeintMark {
+    fn name(&self) -> &str {
+        "burrmill_hugeint"
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn coerce_types(&self, args: &[DataType]) -> DFResult<Vec<DataType>> {
+        Ok(args.to_vec())
+    }
+    fn return_type(&self, args: &[DataType]) -> DFResult<DataType> {
+        Ok(args[0].clone())
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        Ok(args.args[0].clone())
+    }
 }
 
 /// DuckDB's `from_hex(text)`: the bytes a hex string spells, an odd length padded with a leading
