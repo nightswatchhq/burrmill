@@ -1,0 +1,27 @@
+# burrmill 0cd916d + uncommitted alloc-stats and hosted_fold example, thinkpad, 32 cores
+# fixture: ROWS=2000000 SEGMENTS=64 ADDRS=1000000 (989,690 groups), streamed CAST fold, one fold per process
+
+== bench binary (DuckDB + umbrella DataFusion linked), peak RSS MB
+bare=212 hosted=252
+bare=228 hosted=252
+bare=225 hosted=260
+bare=220 hosted=247
+
+== bench binary, --features alloc-stats: peak RSS / peak live heap, MB
+bare: rss=211 live=162 | hosted: rss=256 live=163
+bare: rss=220 live=163 | hosted: rss=263 live=163
+bare: rss=223 live=163 | hosted: rss=263 live=164
+
+== bench binary, at the sampled peak (/proc/self/statm every 2 ms), MB
+bare:   rss=236 file=21 anon=214 live=159
+hosted: rss=267 file=55 anon=211 live=160
+bare:   rss=228 file=21 anon=207 live=158
+hosted: rss=254 file=55 anon=199 live=162
+bare:   rss=232 file=21 anon=211 live=161
+hosted: rss=244 file=55 anon=188 live=159
+
+== examples/hosted_fold: burrmill + datafusion feature only (130 MB binary), cold single fold
+HOSTED	groups=989690	ms=238	VmHWM=248916 kB	sampled_rss_mb=244	file_mb=48	anon_mb=195
+HOSTED	groups=989690	ms=235	VmHWM=247384 kB	sampled_rss_mb=244	file_mb=48	anon_mb=195
+HOSTED	groups=989690	ms=242	VmHWM=251092 kB	sampled_rss_mb=247	file_mb=48	anon_mb=198
+HOSTED	groups=989690	ms=229	VmHWM=246848 kB	sampled_rss_mb=243	file_mb=48	anon_mb=195

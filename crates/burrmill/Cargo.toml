@@ -134,3 +134,7 @@ required-features = ["datafusion"]
 name = "df_functions"
 path = "tests/df_functions.rs"
 required-features = ["datafusion"]
+
+[[example]]
+name = "hosted_fold"
+required-features = ["datafusion"]

@@ -78,8 +78,32 @@ fn rss_mb() -> u64 {
     }
 }
 
+#[cfg(feature = "alloc-stats")]
+mod heap;
+#[cfg(feature = "alloc-stats")]
+#[global_allocator]
+static ALLOC: heap::Counting = heap::Counting;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    #[cfg(all(feature = "alloc-stats", target_os = "linux"))]
+    let sampled = heap::sample_peak();
+    let r = run().await;
+    #[cfg(feature = "alloc-stats")]
+    eprintln!("HEAP\tpeak_live_mb={}", heap::peak_mb());
+    #[cfg(all(feature = "alloc-stats", target_os = "linux"))]
+    {
+        let (rss, file, live) = *sampled.lock().unwrap();
+        let mb = |b: usize| b / (1024 * 1024);
+        eprintln!(
+            "ATPEAK\trss_mb={}\tfile_mb={}\tanon_mb={}\tlive_mb={}",
+            mb(rss), mb(file), mb(rss - file), mb(live)
+        );
+    }
+    r
+}
+
+async fn run() -> anyhow::Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("inspect") => inspect(),
         Some("explain") => explain(),

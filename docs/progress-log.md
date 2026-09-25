@@ -4,6 +4,38 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 6.6d — the memory gate: the gap was code, and it passes as nuthatch would run it — 2026-09-25
+
+6.6c left the hosted fold at 249-261 MB against a 256 MB gate, 20-40 MB over the bare operator,
+"the last 5-20 MB owed from inside the engine". Measured today on the same fixture (989,690
+groups, streamed `CAST`, one fold per process) it reads 247-260 in the bench binary. Before
+changing anything, the question was what those megabytes are.
+
+- **Not data.** A counting global allocator (`burrmill-bench --features alloc-stats`) gives the
+  peak of live heap: **163 MB bare and 163-164 hosted**. The hosted fold holds nothing more.
+- **Not the allocator either.** Sampling `/proc/self/statm` every 2 ms and keeping the largest
+  reading splits it: anonymous memory at the peak is **188-211 MB hosted against 207-214 bare**.
+  The difference is **file-backed: 55 MB against 21**, the binary's own code, which the hosted path
+  runs more of.
+
+The bench binary links DuckDB and the umbrella DataFusion as oracles, 216 MB of it, so the code a
+query touches is spread thin across it and each page drags in its neighbours. That is not what
+ships. **`examples/hosted_fold`** is the same query in a binary with Burrmill and its `datafusion`
+feature and nothing else, 130 MB:
+
+| | VmHWM | file-backed | anonymous |
+|---|---:|---:|---:|
+| **hosted fold, lean binary** | **241-245 MB** | 48 | 195-198 |
+| hosted fold, bench binary | 244-267 | 55 | 188-211 |
+| bare fold, bench binary | 211-236 | 21 | 207-214 |
+
+**4/4 under 256 MB, with 11-15 MB spare, no allocator setting.** The latencies printed beside are
+cold single folds and are not comparable with the warm medians above. Of the anonymous 195 MB,
+160 is live; the rest is allocator slack and thread stacks, and is where any further margin would
+come from. Transcript: `docs/bench/memory-gate-thinkpad-2026-09-25.txt`.
+
+---
+
 ## Range joins — `lodestar_epochs` from 1.92x to 0.5x — 2026-09-25
 
 Phase 1b left one view over 1.5x: `lodestar_epochs`, whose four joins of events to epochs by block
