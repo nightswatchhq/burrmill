@@ -248,3 +248,21 @@ fn substring_plans_without_the_umbrella_crate() {
     let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
     assert_eq!(serde_json::to_string(&rows).unwrap(), r#"[{"a":"bcd","b":"bcd"}]"#);
 }
+
+#[test]
+fn a_subquery_repeating_a_name_keeps_both_columns_as_duckdb_names_them() {
+    let (_tmp, engine) = nest_with_transfer();
+    // Unaliased, DataFusion passed both `from` columns through under one name and the encoder
+    // kept one; DuckDB calls the second `from_1`.
+    let sql = "SELECT * FROM (SELECT * FROM token__transfer a JOIN token__transfer b ON a.\"to\" = b.\"to\" \
+               WHERE a._seq = 0)";
+    let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
+    assert_eq!(
+        serde_json::to_string(&rows).unwrap(),
+        r#"[{"from":"0xa","to":"0xb","value":"10","_seq":0,"from_1":"0xa","to_1":"0xb","value_1":"10","_seq_1":0}]"#
+    );
+    let sql = "WITH j AS (SELECT \"from\", \"from\", value || 'x' FROM token__transfer) \
+               SELECT from_1, \"(\"\"value\"\" || 'x')\" FROM j ORDER BY 1, 2";
+    let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
+    assert_eq!(rows.len(), 3);
+}

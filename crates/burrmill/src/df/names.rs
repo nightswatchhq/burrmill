@@ -68,6 +68,11 @@ fn op(o: &BinaryOperator) -> Option<&'static str> {
     })
 }
 
+/// DuckDB's name for an unaliased expression, if the printer knows its shape.
+pub(crate) fn printed(e: &Expr) -> Option<String> {
+    print(e)
+}
+
 fn print(e: &Expr) -> Option<String> {
     Some(match e {
         Expr::Identifier(i) => ident(&i.value),

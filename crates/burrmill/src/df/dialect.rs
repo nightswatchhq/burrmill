@@ -128,9 +128,23 @@ impl sqlparser::dialect::Dialect for Duck {
 pub struct Known {
     exact: std::collections::HashSet<String>,
     folded: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    /// Each table's and view's columns in order, by lowercased name, for expanding `*`.
+    tables: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Known {
+    pub fn add_table(&mut self, name: &str, columns: Vec<String>) {
+        self.add(name);
+        for c in &columns {
+            self.add(c);
+        }
+        self.tables.insert(name.to_lowercase(), columns);
+    }
+
+    pub fn columns(&self, lowercased: &str) -> Option<Vec<String>> {
+        self.tables.get(lowercased).cloned()
+    }
+
     pub fn add(&mut self, name: &str) {
         self.exact.insert(name.to_string());
         self.folded
@@ -332,6 +346,7 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
     let _ = sq::VisitMut::visit(s.as_mut(), &mut CaseFix(&known));
     if let sq::Statement::Query(q) = s.as_mut() {
         dedupe_output_names(q, names);
+        super::subqueries::name(q, &known);
     }
     let mut rw = Rewriter { refused: None, lambda: vec![] };
     let _ = sq::VisitMut::visit(s.as_mut(), &mut rw);

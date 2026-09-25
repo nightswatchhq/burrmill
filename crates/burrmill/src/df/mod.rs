@@ -31,6 +31,7 @@ mod lists;
 mod rule;
 mod session;
 mod sharing;
+mod subqueries;
 mod topn;
 mod wide;
 

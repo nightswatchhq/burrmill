@@ -280,10 +280,7 @@ impl MiniSession {
     pub fn known_names(&self) -> super::dialect::Known {
         let mut k = super::dialect::Known::default();
         for (name, t) in &self.tables {
-            k.add(name);
-            for f in t.schema().fields() {
-                k.add(f.name());
-            }
+            k.add_table(name, t.schema().fields().iter().map(|f| f.name().clone()).collect());
         }
         k
     }
