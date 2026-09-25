@@ -110,6 +110,7 @@ impl MiniSession {
         let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
             Arc::new(CoreFunctionPlanner::default()),
             Arc::new(datafusion_functions::datetime::planner::DatetimeFunctionPlanner),
+            Arc::new(datafusion_functions::unicode::planner::UnicodeFunctionPlanner),
             Arc::new(datafusion_functions_aggregate::planner::AggregateFunctionPlanner),
             Arc::new(datafusion_functions_window::planner::WindowFunctionPlanner),
         ];
