@@ -4,6 +4,30 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Dialect: booleans beside numbers, decimal literals, `round` — 2026-09-25
+
+`dialect-parity` gained 29 cases (73 now, all identical to DuckDB), covering today's fixes and the
+literal typing they exposed:
+
+- **A boolean compared with a number is the number**, `true` as 1: `2 = true` is false, `2 > false`
+  true, `true IN (1, 2)` true, all measured on DuckDB. Done in an `ExprPlanner`
+  (`plan_binary_op`), because DataFusion types a `SELECT` list while converting the SQL and refused
+  `Int64 = Boolean` before any analyzer rule could act; `IN` lists stay in `DuckComparisons`.
+- **Decimal literals.** DuckDB types `1.5` as DECIMAL(2,1) and nuthatch prints it `"1.5"`;
+  Burrmill had it a DOUBLE, `1.5`. No corpus case returned a bare decimal literal, which is how it
+  survived. DuckDB counts digits as written (`0.5` is DECIMAL(2,1), `.5` (1,1), `00.50` (4,2)),
+  exponents are DOUBLE, and past 38 digits DOUBLE; DataFusion drops the leading zero and gives
+  `1e3` a negative scale. The dialect now writes each literal as an exact cast of its own text.
+  The encoder also no longer panics on a negative scale, which it did.
+- **`round` on a DECIMAL** is whitelisted: DataFusion's checks the rounded value against the
+  precision and refuses, and its types agree with DuckDB's on the cases tried (`round(9.995, 2)`,
+  no digits, more digits than the scale, negative digits).
+
+`error-parity` 14/14, `encode-parity` 17/17, `reach-parity` unchanged. On the thinkpad nest: 22/22
+identical, 0.65x time-weighted, all within 1.5x, as before.
+
+---
+
 ## 6.0b — the footprint, re-measured on Burrmill itself — 2026-09-25
 
 6.0 measured a stand-in: component crates and a ported planner in a nuthatch-shaped consumer. Gate
