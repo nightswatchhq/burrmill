@@ -79,6 +79,8 @@ impl MiniSession {
             .with_target_partitions(threads.max(1))
             .with_collect_statistics(false);
         config.options_mut().sql_parser.enable_ident_normalization = false;
+        // DuckDB types `1.5` as DECIMAL(2,1), and nuthatch prints a DECIMAL as a string.
+        config.options_mut().sql_parser.parse_float_as_decimal = true;
         let runtime = RuntimeEnvBuilder::new()
             .with_cache_manager(
                 CacheManagerConfig::default().with_metadata_cache_limit(1024 * 1024 * 1024),
@@ -141,6 +143,7 @@ impl MiniSession {
             window.insert(f.name().to_string(), f);
         }
         let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![
+            Arc::new(super::dialect::DuckPlanner),
             Arc::new(CoreFunctionPlanner::default()),
             Arc::new(datafusion_functions::datetime::planner::DatetimeFunctionPlanner),
             Arc::new(datafusion_functions::unicode::planner::UnicodeFunctionPlanner),

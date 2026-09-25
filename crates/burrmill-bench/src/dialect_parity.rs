@@ -69,6 +69,23 @@ const CORPUS: &[&str] = &[
     "SELECT t.\"to\", l.name FROM transfer t LEFT JOIN label l ON l.addr = t.\"to\" ORDER BY 1, 2",
     "SELECT count(DISTINCT \"from\") AS n FROM transfer",
     "SELECT \"from\" || ':' || CAST(block_number AS VARCHAR) AS k FROM transfer ORDER BY 1",
+    "SELECT 1 = true AS a, 2 = true AS b, 0 = false AS c, 1 < true AS d, 2 > false AS e, 1.5 = true AS f",
+    "SELECT block_number FROM transfer WHERE (block_number = 1) = true OR log_index = true ORDER BY 1",
+    "SELECT true IN (1, 2) AS a, 1 IN (true, false) AS b, 2 IN (true) AS c",
+    "SELECT 1 IS DISTINCT FROM 2 AND 3 IS DISTINCT FROM 3 OR 4 IS NOT DISTINCT FROM 4 AS v",
+    "SELECT block_number FROM transfer WHERE \"from\" IS DISTINCT FROM '0xa' AND log_index = 0 OR \"to\" IS NOT DISTINCT FROM '0xe' ORDER BY 1",
+    "SELECT CAST(2.5::DOUBLE AS HUGEINT) AS a, CAST(-3.5::DOUBLE AS HUGEINT) AS b, CAST(2.5::DOUBLE AS DECIMAL(38,0)) AS c",
+    "SELECT CAST(CAST('47582028310819253533' AS HUGEINT) AS DOUBLE) AS a, CAST(CAST('9791626625542365.709860864' AS DECIMAL(38,9)) AS DOUBLE) AS b",
+    "SELECT CAST(value AS HUGEINT)::DOUBLE / 3 AS d FROM transfer ORDER BY 1",
+    "SELECT 1.5 AS a, 1.5 + 1 AS b, 1.5 * 2.25 AS c, 0.5 AS d, -2.50 AS e, 100.0 / 3 AS f, 1e3 AS g, 1.5e2 AS h, 0.001 AS i",
+    "SELECT 1.5 - 0.25 AS a, 10.5 % 3 AS b, block_number * 1.5 AS c, block_number + 0.25 AS d FROM transfer ORDER BY 1, 3",
+    "SELECT round(2.345, 2) AS a, CAST(1.25 AS DOUBLE) AS b, 1.10 = 1.1 AS c, 12345678901234567890.5 AS d",
+    "SELECT round(9.995, 2) AS a, round(-2.345, 2) AS b, round(2.345) AS c, round(2.345, 5) AS d, round(1234.5, -2) AS e, round(2.5) AS f, round(-2.5) AS g",
+    "SELECT round(CAST(value AS HUGEINT) / 7, 3) AS r FROM transfer ORDER BY 1",
+    "SELECT block_number FROM transfer WHERE block_number > 1.5 AND block_number < 150.0 ORDER BY 1",
+    "SELECT sum(block_number * 0.5) AS s, avg(block_number) + 0.5 AS a FROM transfer",
+    "SELECT list_reduce([1, 2, 3], lambda a, x: a * 10 + x) AS a, list_reduce([1.5, 2.25], lambda a, x: a + x) AS b",
+    "SELECT \"from\", list_reduce(list(block_number ORDER BY block_number, log_index), lambda a, x: a * 1000 + x) AS r FROM transfer GROUP BY 1 ORDER BY 1",
 ];
 
 /// Differences that stand, and why.

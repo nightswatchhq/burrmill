@@ -416,6 +416,32 @@ impl VisitorMut for Rewriter {
     fn pre_visit_expr(&mut self, e: &mut SqlExpr) -> ControlFlow<()> {
         match e {
             SqlExpr::Lambda(l) => self.lambda.extend(l.params.iter().map(|p| p.name.value.clone())),
+            // DuckDB types a literal by its spelling: `1e3` is DOUBLE, `0.5` DECIMAL(2,1) and `.5`
+            // DECIMAL(1,1), digits as written, and past 38 digits DOUBLE. DataFusion drops the
+            // leading zero, so the type is written out here, as a cast of the literal's own text
+            // (text, so the walk that descends into the cast finds no number to wrap again).
+            SqlExpr::Value(v)
+                if matches!(&v.value, sq::Value::Number(n, _) if n.contains(['e', 'E', '.'])) =>
+            {
+                let sq::Value::Number(n, _) = &v.value else { unreachable!() };
+                let data_type = match n.split_once('.') {
+                    Some((int, frac)) if !n.contains(['e', 'E']) && int.len() + frac.len() <= 38 => {
+                        SqlType::Decimal(ExactNumberInfo::PrecisionAndScale(
+                            (int.len() + frac.len()) as u64,
+                            frac.len() as i64,
+                        ))
+                    }
+                    _ => SqlType::Double(ExactNumberInfo::None),
+                };
+                let text = SqlExpr::Value(sq::Value::SingleQuotedString(n.clone()).into());
+                *e = SqlExpr::Cast {
+                    kind: sq::CastKind::Cast,
+                    expr: Box::new(text),
+                    data_type,
+                    array: false,
+                    format: None,
+                };
+            }
             // DataFusion looks lambda parameters up by bare name only; `acc.rate` would be read as
             // column `rate` of a table `acc`. As a field access on `acc`, it reaches the parameter.
             SqlExpr::CompoundIdentifier(parts)
@@ -930,10 +956,65 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             }
             Ok(Transformed::no(Expr::Between(b)))
         }
+        Expr::InList(mut l) => {
+            let t = l.expr.get_type(schema)?;
+            let types = l.list.iter().map(|x| x.get_type(schema)).collect::<DFResult<Vec<_>>>()?;
+            if t == DataType::Boolean {
+                if let Some(n) = types.iter().find(|x| numeric(x)) {
+                    l.expr = Box::new(Expr::Cast(Cast::new(l.expr, n.clone())));
+                    return Ok(Transformed::yes(Expr::InList(l)));
+                }
+            } else if numeric(&t) && types.contains(&DataType::Boolean) {
+                l.list = l
+                    .list
+                    .into_iter()
+                    .zip(types)
+                    .map(|(x, xt)| {
+                        if xt == DataType::Boolean { Expr::Cast(Cast::new(Box::new(x), t.clone())) } else { x }
+                    })
+                    .collect();
+                return Ok(Transformed::yes(Expr::InList(l)));
+            }
+            Ok(Transformed::no(Expr::InList(l)))
+        }
         Expr::Not(x) if is_text(&x.get_type(schema)?) => {
             Ok(Transformed::yes(Expr::Not(Box::new(as_bool(*x)))))
         }
         e => Ok(Transformed::no(e)),
+    }
+}
+
+/// A boolean compared with a number is read as the number, `true` as 1, so `2 = true` is false
+/// and `2 > false` true. Done while the SQL is planned, because DataFusion types a `SELECT` list
+/// there and refuses `Int64 = Boolean` before any analyzer rule could cast it.
+#[derive(Debug)]
+pub struct DuckPlanner;
+
+impl datafusion_expr::planner::ExprPlanner for DuckPlanner {
+    fn plan_binary_op(
+        &self,
+        mut e: datafusion_expr::planner::RawBinaryExpr,
+        schema: &DFSchema,
+    ) -> DFResult<datafusion_expr::planner::PlannerResult<datafusion_expr::planner::RawBinaryExpr>> {
+        use datafusion_expr::planner::PlannerResult;
+        use sqlparser::ast::BinaryOperator as B;
+        if !matches!(e.op, B::Eq | B::NotEq | B::Lt | B::Gt | B::LtEq | B::GtEq) {
+            return Ok(PlannerResult::Original(e));
+        }
+        let (Ok(lt), Ok(rt)) = (e.left.get_type(schema), e.right.get_type(schema)) else {
+            return Ok(PlannerResult::Original(e));
+        };
+        // Through BIGINT: arrow casts a boolean to integers and floats but not to DECIMAL.
+        let as_number = |b: Expr, t: DataType| {
+            let i = Expr::Cast(Cast::new(Box::new(b), DataType::Int64));
+            if t == DataType::Int64 { i } else { Expr::Cast(Cast::new(Box::new(i), t)) }
+        };
+        if lt == DataType::Boolean && numeric(&rt) {
+            e.left = as_number(e.left, rt);
+        } else if rt == DataType::Boolean && numeric(&lt) {
+            e.right = as_number(e.right, lt);
+        }
+        Ok(PlannerResult::Original(e))
     }
 }
 

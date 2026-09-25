@@ -29,6 +29,8 @@ use super::checked::{CheckedAgg, CheckedBinary, ExactWide, Mode, is_exact, is_te
 /// new DataFusion function that wraps cannot slip in unexamined.
 const SAFE_SCALARS: &[&str] = &[
     "abs",
+    // On a DECIMAL it checks the rounded value against the precision and refuses.
+    "round",
     "coalesce",
     "nullif",
     "nvl",
