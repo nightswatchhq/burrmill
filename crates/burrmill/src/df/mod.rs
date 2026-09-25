@@ -26,6 +26,7 @@ mod doubles;
 mod fastcast;
 mod fold;
 mod names;
+mod rangejoin;
 mod lists;
 mod rule;
 mod session;

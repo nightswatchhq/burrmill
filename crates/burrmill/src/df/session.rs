@@ -186,7 +186,12 @@ impl MiniSession {
                 Arc::new(super::doubles::DuckDoubles::default()),
             ]),
             optimizer: Optimizer::new(),
-            physical_optimizers: PhysicalOptimizer::new().rules,
+            // Last, so it sees the join filter after projection pushdown has made its operands columns.
+            physical_optimizers: PhysicalOptimizer::new()
+                .rules
+                .into_iter()
+                .chain([Arc::new(super::rangejoin::RangeJoin) as Arc<dyn PhysicalOptimizerRule + Send + Sync>])
+                .collect(),
             execution_props: ExecutionProps::new(),
             table_options: TableOptions::new(),
             extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
