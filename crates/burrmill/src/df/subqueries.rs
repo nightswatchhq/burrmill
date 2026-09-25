@@ -258,9 +258,8 @@ pub fn predicates_as_counts(q: &mut Query) -> Result<(), String> {
         return Ok(());
     };
     hoist_from_aggregates(s);
-    let outer = single_qualifier(s);
     for clause in [s.selection.as_mut(), s.having.as_mut()].into_iter().flatten() {
-        filter_predicates(clause, outer.as_ref(), true)?;
+        filter_predicates(clause, true)?;
     }
     let outer = single_qualifier(s);
     for item in s.projection.iter_mut() {
@@ -280,29 +279,29 @@ pub fn predicates_as_counts(q: &mut Query) -> Result<(), String> {
 /// In a `WHERE` or `HAVING`, an `IN (subquery)` that is a condition of its own is planned by
 /// DataFusion as a (null-aware) semi or anti join, correctly. Inside `OR`, `NOT` or `CASE` it
 /// goes through a mark join that loses its NULL: `x = 3 OR x NOT IN (1, NULL)` kept `x = 2`,
-/// where the answer is NULL. There it becomes counts, or, if its operand cannot be moved safely,
-/// the statement is refused rather than answered wrongly.
-fn filter_predicates(e: &mut Expr, outer: Option<&Ident>, top: bool) -> Result<(), String> {
+/// where the answer is NULL. There the NULL cases are supplied ([`with_nulls`]), or, for a
+/// subquery that is not a plain SELECT, the statement is refused rather than answered wrongly.
+fn filter_predicates(e: &mut Expr, top: bool) -> Result<(), String> {
     match e {
         Expr::BinaryOp { left, op: sq::BinaryOperator::And, right } if top => {
-            filter_predicates(left, outer, true)?;
-            filter_predicates(right, outer, true)
+            filter_predicates(left, true)?;
+            filter_predicates(right, true)
         }
-        Expr::Nested(inner) if top => filter_predicates(inner, outer, true),
+        Expr::Nested(inner) if top => filter_predicates(inner, true),
         Expr::InSubquery { .. } | Expr::Exists { .. } if top => Ok(()),
         _ => {
             let mut refused = false;
             at_this_level(e, &mut |x| {
                 if matches!(x, Expr::InSubquery { .. }) {
-                    match as_counts(x, outer) {
+                    match with_nulls(x) {
                         Some(n) => *x = n,
                         None => refused = true,
                     }
                 }
             });
             if refused {
-                return Err("IN (subquery) inside OR, NOT or CASE is refused here where its operand cannot be \
-                            qualified to one relation: planned directly it would lose SQL's NULL"
+                return Err("IN (subquery) inside OR, NOT or CASE is refused here unless the subquery is a \
+                            plain SELECT: planned directly it would lose SQL's NULL"
                     .into());
             }
             Ok(())
@@ -554,6 +553,38 @@ fn and(a: Expr, b: Expr) -> Expr {
 
 fn cmp(a: Expr, op: sq::BinaryOperator, n: i64) -> Expr {
     Expr::BinaryOp { left: Box::new(a), op, right: Box::new(Expr::Value(sq::Value::Number(n.to_string(), false).into())) }
+}
+
+/// `x [NOT] IN (S)` in a filter, with DataFusion's membership test kept (its mark join gets that
+/// right, and fast) and SQL's NULL cases supplied by counts over `S` alone, so `x` stays where it is:
+/// no rows is false, a NULL `x` is NULL, a match true, a NULL in `S` NULL, else false.
+fn with_nulls(e: &Expr) -> Option<Expr> {
+    use sq::BinaryOperator::{Eq, Gt};
+    let Expr::InSubquery { expr, subquery, negated } = e else {
+        return None;
+    };
+    let s = plain(subquery)?;
+    let [SelectItem::UnnamedExpr(y) | SelectItem::ExprWithAlias { expr: y, .. }] = s.projection.as_slice() else {
+        return None;
+    };
+    let lit = |b: Option<bool>| Expr::Value(match b {
+        Some(b) => sq::Value::Boolean(b),
+        None => sq::Value::Null,
+    }.into());
+    let member = Expr::InSubquery { expr: expr.clone(), subquery: subquery.clone(), negated: false };
+    let case = Expr::Case {
+        case_token: sq::helpers::attached_token::AttachedToken::empty(),
+        end_token: sq::helpers::attached_token::AttachedToken::empty(),
+        operand: None,
+        conditions: vec![
+            sq::CaseWhen { condition: cmp(count(subquery, None), Eq, 0), result: lit(Some(false)) },
+            sq::CaseWhen { condition: Expr::IsNull(Box::new(nested(expr.as_ref().clone()))), result: lit(None) },
+            sq::CaseWhen { condition: member, result: lit(Some(true)) },
+            sq::CaseWhen { condition: cmp(count(subquery, Some(Expr::IsNull(Box::new(nested(y.clone()))))), Gt, 0), result: lit(None) },
+        ],
+        else_result: Some(Box::new(lit(Some(false)))),
+    };
+    Some(if *negated { Expr::UnaryOp { op: sq::UnaryOperator::Not, expr: Box::new(nested(case)) } } else { nested(case) })
 }
 
 fn as_counts(x: &Expr, outer: Option<&Ident>) -> Option<Expr> {
