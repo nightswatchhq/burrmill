@@ -253,11 +253,15 @@ fn select(s: &mut Select, known: &Known, ctes: &mut Ctes, rename: bool) -> Optio
 /// false against no rows, NULL for a NULL operand, true on a match, NULL where only a NULL could
 /// have matched, false otherwise. Only a plain subquery is rewritten (one SELECT, no grouping,
 /// `DISTINCT`, `LIMIT` or aggregate); anything else is left for DataFusion to refuse.
-pub fn predicates_as_counts(q: &mut Query) {
+pub fn predicates_as_counts(q: &mut Query) -> Result<(), String> {
     let SetExpr::Select(s) = q.body.as_mut() else {
-        return;
+        return Ok(());
     };
     hoist_from_aggregates(s);
+    let outer = single_qualifier(s);
+    for clause in [s.selection.as_mut(), s.having.as_mut()].into_iter().flatten() {
+        filter_predicates(clause, outer.as_ref(), true)?;
+    }
     let outer = single_qualifier(s);
     for item in s.projection.iter_mut() {
         let e = match item {
@@ -269,6 +273,40 @@ pub fn predicates_as_counts(q: &mut Query) {
                 *x = n;
             }
         });
+    }
+    Ok(())
+}
+
+/// In a `WHERE` or `HAVING`, an `IN (subquery)` that is a condition of its own is planned by
+/// DataFusion as a (null-aware) semi or anti join, correctly. Inside `OR`, `NOT` or `CASE` it
+/// goes through a mark join that loses its NULL: `x = 3 OR x NOT IN (1, NULL)` kept `x = 2`,
+/// where the answer is NULL. There it becomes counts, or, if its operand cannot be moved safely,
+/// the statement is refused rather than answered wrongly.
+fn filter_predicates(e: &mut Expr, outer: Option<&Ident>, top: bool) -> Result<(), String> {
+    match e {
+        Expr::BinaryOp { left, op: sq::BinaryOperator::And, right } if top => {
+            filter_predicates(left, outer, true)?;
+            filter_predicates(right, outer, true)
+        }
+        Expr::Nested(inner) if top => filter_predicates(inner, outer, true),
+        Expr::InSubquery { .. } | Expr::Exists { .. } if top => Ok(()),
+        _ => {
+            let mut refused = false;
+            at_this_level(e, &mut |x| {
+                if matches!(x, Expr::InSubquery { .. }) {
+                    match as_counts(x, outer) {
+                        Some(n) => *x = n,
+                        None => refused = true,
+                    }
+                }
+            });
+            if refused {
+                return Err("IN (subquery) inside OR, NOT or CASE is refused here where its operand cannot be \
+                            qualified to one relation: planned directly it would lose SQL's NULL"
+                    .into());
+            }
+            Ok(())
+        }
     }
 }
 

@@ -246,6 +246,18 @@ impl Gen<'_> {
             8 => format!("({} AND {})", self.pred(sc, d - 1), self.pred(sc, d - 1)),
             9 => format!("({} OR {})", self.pred(sc, d - 1), self.pred(sc, d - 1)),
             10 => format!("{} IS {}DISTINCT FROM {}", self.text(sc, d), self.one(&["", "NOT "]), self.text(sc, d)),
+            11 if self.chance(3) => format!(
+                "{}\"to\" {}IN (SELECT \"to\" FROM ev WHERE kind = '{}' AND log_index > {})",
+                self.one(&["", "e."]),
+                self.one(&["", "NOT "]),
+                self.one(&["in", "out"]),
+                self.r.below(3)
+            ),
+            11 if self.chance(2) => format!(
+                "(SELECT count(*) FROM ev x WHERE x.\"from\" NOT IN (SELECT addr FROM lbl WHERE weight > {})) > {}",
+                self.r.below(5) as i64 - 2,
+                self.r.below(60)
+            ),
             11 => format!("e.\"to\" IN (SELECT addr FROM lbl WHERE weight > {})", self.r.below(5) as i64 - 2),
             12 if self.chance(2) => format!("regexp_matches({}, '{}')", self.text(sc, d), self.one(&["^0x", "[0-9]{2}", "(?i)grt", "^$", "a|b"])),
             12 if self.chance(2) => format!("{}({}, '{}')", self.one(&["starts_with", "contains", "ends_with"]), self.text(sc, d), self.one(&["0x", "a", "GRT", ""])),
@@ -546,7 +558,22 @@ pub fn run() -> anyhow::Result<()> {
                     Err(e) => format!("ERROR {e}").chars().take(400).collect(),
                 }
             };
-            if tag != "SAME" {
+            if let ("DIFF", Ok(w), Ok(g)) = (tag, &want, &got) {
+                // The rows each side has that the other lacks, as multisets.
+                let mut left: Vec<&String> = w.iter().collect();
+                let mut right: Vec<&String> = Vec::new();
+                for r in g {
+                    match left.iter().position(|x| *x == r) {
+                        Some(i) => {
+                            left.swap_remove(i);
+                        }
+                        None => right.push(r),
+                    }
+                }
+                let show = |v: &[&String]| v.iter().take(4).map(|s| s.as_str()).collect::<Vec<_>>().join(",");
+                println!("    duckdb only   ({}) {}", left.len(), show(&left).chars().take(400).collect::<String>());
+                println!("    burrmill only ({}) {}", right.len(), show(&right).chars().take(400).collect::<String>());
+            } else if tag != "SAME" {
                 println!("    duckdb   {}", clip(&want));
                 println!("    burrmill {}", clip(&got));
             }
