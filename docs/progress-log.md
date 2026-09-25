@@ -4,6 +4,38 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The fixed cost of a query — 2026-09-25
+
+Timed on the thinkpad nest with temporary hooks (not committed), last of six runs:
+
+| | `SELECT 1` | `count(*)`, small table | `lodestar_disputes` |
+|---|---:|---:|---:|
+| identifier names rebuilt | 0.43 ms | 0.50 | 0.49 |
+| parse and rewrites | 0.22 | 0.23 | 0.22 |
+| SQL to plan | 0.04 | 0.15 | 0.18 |
+| analyzer and optimiser | 0.08 | 0.47 | 2.54 |
+| physical planning | 0.05 | 0.16 | 0.90 |
+| execution | 0.08 | 0.91 | 3.14 |
+
+**The identifier names are now built once** and rebuilt only when a table or view is registered;
+a statement's own aliases go in an overlay instead of a copy of thousands of names. That was half
+of a trivial query's time, and half a millisecond off every one.
+
+**The rest of a small query is DataFusion fanning out.** `lodestar_disputes` runs 18 operators,
+four of them repartitions to 8 partitions, for 8 rows. Measured over the whole nest:
+
+| | time-weighted | `disputes` | `epochs` | `port_queue` |
+|---|---:|---:|---:|---:|
+| as it is | 0.635x | 16 ms | 664 | 52 |
+| round-robin repartition off | 0.648x | 8 | 784 | 71 |
+| statistics collected | 0.643x | 15 | 723 | 53 |
+
+Neither is a setting to ship: the small view halves and mid-sized ones pay more. Owed: keeping one
+partition where the input is small, judged from the cached footers' row counts, which is what
+DuckDB does per pipeline.
+
+---
+
 ## Fuzzing, widened: time, regex, strings — and a DuckDB bug — 2026-09-25
 
 The grammar now draws what agents write against nests and had never been generated: timestamps

@@ -55,6 +55,7 @@ pub struct MiniSession {
     window: HashMap<String, Arc<WindowUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     tables: HashMap<String, Arc<dyn TableSource>>,
+    known: std::sync::Mutex<Option<super::dialect::Known>>,
     information_schema: HashMap<String, Arc<dyn TableSource>>,
     analyzer: Analyzer,
     optimizer: Optimizer,
@@ -186,6 +187,7 @@ impl MiniSession {
             expr_planners,
             tables: HashMap::new(),
             information_schema: HashMap::new(),
+            known: std::sync::Mutex::new(None),
             // Checked sums change their output type, so coercion runs again after the rule.
             analyzer: Analyzer::with_rules(vec![
                 Arc::new(ResolveGroupingFunction::new()),
@@ -289,15 +291,20 @@ impl MiniSession {
     pub fn register_table(&mut self, name: &str, table: Arc<dyn TableProvider>) {
         self.tables
             .insert(name.to_string(), provider_as_source(table));
+        *self.known.get_mut().expect("known names") = None;
     }
 
-    /// Every table and column name, for resolving identifiers as DuckDB does.
+    /// Every table and column name, for resolving identifiers as DuckDB does: built once, again
+    /// only after a table or view is registered, and cheap to clone.
     pub fn known_names(&self) -> super::dialect::Known {
-        let mut k = super::dialect::Known::default();
-        for (name, t) in &self.tables {
-            k.add_table(name, t.schema().fields().iter().map(|f| f.name().clone()).collect());
-        }
-        k
+        let mut cached = self.known.lock().expect("known names");
+        cached
+            .get_or_insert_with(|| {
+                super::dialect::Known::of_tables(self.tables.iter().map(|(name, t)| {
+                    (name.as_str(), t.schema().fields().iter().map(|f| f.name().clone()).collect())
+                }))
+            })
+            .clone()
     }
 
     pub fn function_names(&self) -> Vec<String> {

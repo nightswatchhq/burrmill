@@ -124,44 +124,68 @@ impl sqlparser::dialect::Dialect for Duck {
 /// Names a statement may refer to: the nest's tables and columns, and the statement's own aliases.
 /// DuckDB resolves identifiers without regard to case, quoted or not; DataFusion, as configured
 /// here, resolves them exactly.
+///
+/// The nest's names are built once and shared; a statement's aliases go in a small overlay, so a
+/// query neither rebuilds nor copies thousands of names (half a millisecond of every query did).
 #[derive(Clone, Default)]
 pub struct Known {
+    base: Arc<Names>,
+    extra: Names,
+}
+
+#[derive(Default)]
+struct Names {
     exact: std::collections::HashSet<String>,
     folded: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
     /// Each table's and view's columns in order, by lowercased name, for expanding `*`.
     tables: std::collections::HashMap<String, Vec<String>>,
 }
 
+impl Clone for Names {
+    fn clone(&self) -> Self {
+        Names { exact: self.exact.clone(), folded: self.folded.clone(), tables: self.tables.clone() }
+    }
+}
+
+impl Names {
+    fn add(&mut self, name: &str) {
+        self.exact.insert(name.to_string());
+        self.folded.entry(name.to_lowercase()).or_default().insert(name.to_string());
+    }
+}
+
 impl Known {
-    pub fn add_table(&mut self, name: &str, columns: Vec<String>) {
-        self.add(name);
-        for c in &columns {
-            self.add(c);
+    /// The nest's names, from its tables and views and their columns.
+    pub fn of_tables<'a>(tables: impl IntoIterator<Item = (&'a str, Vec<String>)>) -> Self {
+        let mut n = Names::default();
+        for (name, columns) in tables {
+            n.add(name);
+            for c in &columns {
+                n.add(c);
+            }
+            n.tables.insert(name.to_lowercase(), columns);
         }
-        self.tables.insert(name.to_lowercase(), columns);
+        Known { base: Arc::new(n), extra: Names::default() }
     }
 
     pub fn columns(&self, lowercased: &str) -> Option<Vec<String>> {
-        self.tables.get(lowercased).cloned()
+        self.base.tables.get(lowercased).cloned()
     }
 
     pub fn add(&mut self, name: &str) {
-        self.exact.insert(name.to_string());
-        self.folded
-            .entry(name.to_lowercase())
-            .or_default()
-            .insert(name.to_string());
+        self.extra.add(name);
     }
 
     /// An identifier written in another case than the one name it can mean, as that name.
     fn resolve(&self, written: &str) -> Option<&str> {
-        if self.exact.contains(written) {
+        if self.base.exact.contains(written) || self.extra.exact.contains(written) {
             return None;
         }
-        match self.folded.get(&written.to_lowercase()) {
-            Some(set) if set.len() == 1 => set.iter().next().map(String::as_str),
-            _ => None,
-        }
+        let lower = written.to_lowercase();
+        let (a, b) = (self.base.folded.get(&lower), self.extra.folded.get(&lower));
+        let mut names = a.into_iter().flatten().chain(b.into_iter().flatten());
+        let first = names.next()?;
+        if names.all(|n| n == first) { Some(first.as_str()) } else { None }
     }
 }
 
