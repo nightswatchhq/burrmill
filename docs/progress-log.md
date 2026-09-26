@@ -74,9 +74,18 @@ four of them repartitions to 8 partitions, for 8 rows. Measured over the whole n
 | round-robin repartition off | 0.648x | 8 | 784 | 71 |
 | statistics collected | 0.643x | 15 | 723 | 53 |
 
-Neither is a setting to ship: the small view halves and mid-sized ones pay more. Owed: keeping one
-partition where the input is small, judged from the cached footers' row counts, which is what
-DuckDB does per pipeline.
+Neither is a setting to ship: the small view halves and mid-sized ones pay more.
+
+**Then, the adaptive version (`df/smallinputs.rs`).** Statistics could not help: Burrmill's scans
+set no per-file statistics, which is why turning them on changed nothing. But the catalogue knows
+every segment's size, so a round-robin repartition is removed where the scans beneath it read less
+than 4 MiB. It only spreads work over threads, so no answer can change; DataFusion's own sanity
+check is rerun and the rule backs off if it fails. Over the nest, 1 to 64 MiB were all within noise
+(0.622-0.652x) of off (0.646x), except for small statements: `lodestar_disputes` 19 ms to 7-11,
+now **0.80x DuckDB**. The fuzz fixture is small enough that the rule applied to nearly all of
+10,000 queries, with no answer changed. Serving all 22 views, Burrmill alone, 1/4/16 clients:
+2.2/4.4/3.4 qps off and 2.3/4.9/3.3 on, the same. It exposed a fault in `RangeJoinExec`, which kept
+the nested loop's partition count when its children changed; it now takes it from its right child.
 
 ---
 
