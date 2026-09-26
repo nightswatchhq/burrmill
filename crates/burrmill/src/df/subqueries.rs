@@ -549,7 +549,7 @@ fn empty_select() -> sq::Select {
 const AGGREGATES: &[&str] = &[
     "count", "sum", "min", "max", "avg", "mean", "any_value", "first", "last", "string_agg", "list",
     "array_agg", "bool_and", "bool_or", "stddev", "variance", "median", "arg_max", "arg_min",
-    "approx_count_distinct", "count_star", "group_concat", "listagg",
+    "approx_count_distinct", "count_star", "group_concat", "listagg", "arg_extreme", "max_by", "min_by",
 ];
 
 fn plain(q: &Query) -> Option<&Select> {
@@ -689,5 +689,57 @@ fn as_counts(x: &Expr, outer: &Outer) -> Option<Expr> {
             Some(if *negated { Expr::UnaryOp { op: sq::UnaryOperator::Not, expr: Box::new(nested(case)) } } else { nested(case) })
         }
         _ => None,
+    }
+}
+
+/// DataFusion names an expression without its casts, so `max(CAST(x AS INT))` and `max(x)` in one
+/// SELECT share a name and the planner refuses the aggregate, aliases or not. Each such aggregate
+/// after the first gets `FILTER (WHERE n = n)`, which changes its name and nothing else.
+pub fn distinct_aggregate_names(q: &mut Query) {
+    let SetExpr::Select(s) = q.body.as_mut() else {
+        return;
+    };
+    let mut exprs: Vec<&mut Expr> = s
+        .projection
+        .iter_mut()
+        .filter_map(|i| match i {
+            SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => Some(e),
+            _ => None,
+        })
+        .collect();
+    exprs.extend(s.having.as_mut());
+    exprs.extend(s.qualify.as_mut());
+    if let Some(sq::OrderByKind::Expressions(v)) = q.order_by.as_mut().map(|o| &mut o.kind) {
+        exprs.extend(v.iter_mut().map(|o| &mut o.expr));
+    }
+    let mut seen: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for e in exprs {
+        at_this_level(e, &mut |x| {
+            let Expr::Function(f) = x else { return };
+            if f.over.is_some() || !AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str()) {
+                return;
+            }
+            let full = f.to_string();
+            let mut stripped = Expr::Function(f.clone());
+            let _ = sq::visit_expressions_mut(&mut stripped, |c| {
+                if let Expr::Cast { expr, .. } = c {
+                    *c = std::mem::replace(expr.as_mut(), Expr::Value(sq::Value::Null.into()));
+                }
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+            let names = seen.entry(stripped.to_string()).or_default();
+            let n = names.iter().position(|x| *x == full).unwrap_or_else(|| {
+                names.push(full);
+                names.len() - 1
+            });
+            if n > 0 {
+                let lit = || Expr::Value(sq::Value::Number(n.to_string(), false).into());
+                let tag = Expr::BinaryOp { left: Box::new(lit()), op: sq::BinaryOperator::Eq, right: Box::new(lit()) };
+                f.filter = Some(Box::new(match f.filter.take() {
+                    Some(w) => and(nested(*w), tag),
+                    None => tag,
+                }));
+            }
+        });
     }
 }

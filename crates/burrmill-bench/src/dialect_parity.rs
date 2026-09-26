@@ -123,6 +123,8 @@ const CORPUS: &[&str] = &[
     "SELECT CAST(3 AS BIGINT) - CAST(5 AS UBIGINT) AS d, CAST(3 AS UBIGINT) * CAST(-5 AS BIGINT) AS m, CAST(3 AS INTEGER) + CAST(5 AS UINTEGER) AS e",
     "SELECT CAST(log_index AS BIGINT) - block_number AS d FROM transfer ORDER BY block_number, log_index",
     "SELECT avg(CAST(x AS UBIGINT) * 2982776736) AS a, sum(CAST(x AS UBIGINT) * 2982776736) AS s FROM range(1000000000, 1000000063) t(x)",
+    "SELECT max(CAST(x AS UBIGINT)), max(CAST(x AS BIGINT)), max(x), max(x) + 1 AS d FROM range(1, 6) t(x)",
+    "SELECT x % 2 AS k, sum(CAST(x AS UBIGINT)) AS a FROM range(1, 6) t(x) GROUP BY 1 HAVING sum(CAST(x AS BIGINT)) > 4 ORDER BY sum(x) DESC",
     "SELECT avg(CAST(x AS UBIGINT) * 2982776736) AS a, avg(CAST(x AS BIGINT) * 2982776736) AS b FROM range(1000000000, 1000000063) t(x)",
     "SELECT epoch(to_timestamp(ts)) = COALESCE(ts, w) AS eq, 1.5::DOUBLE < CAST(2 AS HUGEINT) AS lt FROM (VALUES (CAST(1700000000 AS UBIGINT), CAST(3 AS BIGINT))) t(ts, w)",
     "SELECT extract(minute FROM to_timestamp(ts)) AS x FROM (VALUES (CAST(1700000040 AS UBIGINT)), (CAST(1700000100 AS UBIGINT)), (CAST(1700000160 AS UBIGINT))) t(ts) EXCEPT ALL SELECT abs(a) FROM (VALUES (CAST(1 AS BIGINT)), (CAST(-2 AS BIGINT))) u(a) ORDER BY 1",
@@ -187,11 +189,6 @@ const CORPUS: &[&str] = &[
 
 /// Differences that stand, and why.
 const KNOWN: &[(&str, &str)] = &[
-    (
-        "SELECT avg(CAST(x AS UBIGINT) * 2982776736) AS a, avg(CAST(x AS BIGINT) * 2982776736) AS b FROM range(1000000000, 1000000063) t(x)",
-        "a refusal: DataFusion names an expression without its casts, so two aggregates differing only \
-         in a cast share a name and the plan is refused, aliases or not",
-    ),
     (
         "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
         "a DuckDB 1.5 bug, not reported upstream yet: a comparison between text and a timestamp cast to \

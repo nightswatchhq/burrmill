@@ -579,6 +579,11 @@ impl VisitorMut for Rewriter {
         ControlFlow::Continue(())
     }
 
+    fn post_visit_query(&mut self, q: &mut sq::Query) -> ControlFlow<()> {
+        super::subqueries::distinct_aggregate_names(q);
+        ControlFlow::Continue(())
+    }
+
     fn pre_visit_query(&mut self, q: &mut sq::Query) -> ControlFlow<()> {
         if let Err(why) = super::subqueries::predicates_as_counts(q, &self.known, &self.ctes) {
             self.refused = Some(why);
