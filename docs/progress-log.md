@@ -4,6 +4,37 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## JSON, `arg_max`, `range`, `TRY`, and an inexact `avg` — 2026-09-26
+
+The functions nest views and ad-hoc queries reach for that DataFusion lacks or spells differently,
+each measured against DuckDB with `duck-eval` (`df/duckfns.rs`):
+
+- **JSON**: `json_extract`, `json_extract_string`, `json_type`, `->` and `->>`, over DuckDB's path
+  forms (`$.a`, `."k"`, `[n]`, `[#-n]`, a bare key, an integer index). `json_type` of a
+  non-negative integer is `UBIGINT`, as DuckDB has it. `from_json` with a structure literal builds
+  the struct or list, and struct fields keep their DuckDB names in results (`s['a']` is `a`).
+- **`arg_max`/`arg_min`/`max_by`/`min_by`**, `range` and `generate_series` as table functions
+  (literal arguments, capped at 10M rows), `len`, and the unsigned type names (`UINTEGER`,
+  `UBIGINT`, `UTINYINT` and the rest).
+- **`TRY(expr)`** evaluates the batch, and on an error goes row by row with NULL for the rows that
+  fail. `Engine::register_scalar_udf` lets a host add its own functions, `TRY` included.
+
+**An inexact `avg`.** DataFusion coerces an integer `avg` argument to DOUBLE and sums in floats, so
+`avg(CAST(x AS UBIGINT) * 2982776736)` over 63 values near 1e9 was off in the last digit. An integer
+argument is now cast to `DECIMAL(38,0)` before coercion, and the checked rule makes the exact `avg`
+with DuckDB's DOUBLE result. Arithmetic between a DOUBLE and an exact number, which that newly
+produces (`avg(n) + 0.5`), is DOUBLE arithmetic as in DuckDB, not a refusal; a float compared with a
+decimal compares as DOUBLE; and a `CASE` mixing signed and unsigned integers with a scale-0 decimal
+unions to `HUGEINT`.
+
+The DuckDB text/timestamp bug is wider than first written: any comparison of text with a timestamp
+cast to text drops rows, with or without a date part projected (`KNOWN`; not reported upstream).
+
+`dialect-parity` 165/165. Fuzz, 10,000 cases on five seeds: four differences, all that DuckDB bug,
+nothing looser. The nest: 22/22, 0.604x, the slowest view 1.34x.
+
+---
+
 ## Subqueries as predicates — and a DataFusion wrong answer — 2026-09-26
 
 The fuzzer's largest stricter class was `EXISTS`/`IN (subquery)` outside a `WHERE`: DataFusion
