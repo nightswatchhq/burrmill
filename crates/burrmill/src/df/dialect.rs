@@ -681,6 +681,14 @@ impl VisitorMut for Rewriter {
                     *e = call("burrmill_hugeint", vec![e.clone()]);
                 }
             }
+            // `f(x).field`: DataFusion takes a field name after a dot only as a string.
+            SqlExpr::CompoundFieldAccess { access_chain, .. } => {
+                for a in access_chain.iter_mut() {
+                    if let sq::AccessExpr::Dot(SqlExpr::Identifier(i)) = a {
+                        *a = sq::AccessExpr::Dot(SqlExpr::Value(sq::Value::SingleQuotedString(i.value.clone()).into()));
+                    }
+                }
+            }
             // DuckDB's JSON operators: `->` is json_extract, `->>` json_extract_string.
             SqlExpr::BinaryOp { left, op: op @ (BinaryOperator::Arrow | BinaryOperator::LongArrow), right } => {
                 let f = if matches!(op, BinaryOperator::Arrow) { "json_extract" } else { "json_extract_string" };

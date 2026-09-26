@@ -54,6 +54,8 @@ const SAFE_SCALARS: &[&str] = &[
     // A count of boundaries, checked where it could leave 64 bits; -1, 0 or 1.
     "date_diff",
     "burrmill_nullable",
+    // A count of elements or characters.
+    "len",
     "sign",
     "burrmill_round_int",
     "burrmill_text_to_int",

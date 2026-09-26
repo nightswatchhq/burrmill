@@ -222,14 +222,23 @@ fn rename(plan: datafusion_expr::LogicalPlan, names: &[Option<String>]) -> Resul
     let schema = plan.schema().clone();
     let n = schema.fields().len();
     let by_position = names.len() == n;
-    let suffixed = schema.fields().iter().any(|f| f.name().contains(dialect::DUP));
+    let suffixed = schema.fields().iter().any(|f| f.name().contains(dialect::DUP) || f.name().ends_with(']'));
     if !suffixed && (!by_position || names.iter().all(Option::is_none)) {
         return Ok(plan);
     }
+    // DataFusion names a struct field `s[a]` (`s[n][k]` nested); DuckDB names it `a` (`k`).
+    let field_access = |name: &str| {
+        name.strip_suffix(']')
+            .and_then(|n| n.rfind('[').map(|i| n[i + 1..].to_string()))
+            .filter(|k| !k.is_empty())
+    };
     let wanted: Vec<String> = (0..n)
         .map(|i| match names.get(i).filter(|_| by_position) {
             Some(Some(name)) => name.clone(),
-            _ => schema.field(i).name().clone(),
+            _ => {
+                let own = schema.field(i).name();
+                field_access(own).unwrap_or_else(|| own.clone())
+            }
         })
         .collect();
     let base = |s: &str| s.split_once(dialect::DUP).map_or(s, |(b, _)| b).to_string();

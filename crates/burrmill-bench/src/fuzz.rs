@@ -41,7 +41,16 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
     let pick = |r: &mut Rng, xs: &[Option<&'static str>]| xs[r.below(xs.len())];
     let (mut bn, mut li, mut from, mut to, mut value, mut amount, mut flag, mut kind) =
         (vec![], vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
-    let (mut ts, mut memo) = (vec![], vec![]);
+    let (mut ts, mut memo, mut doc) = (vec![], vec![], vec![]);
+    let docs = [
+        Some(r#"{"a": 1, "b": "x", "c": [1, 2, {"d": "deep"}]}"#),
+        Some(r#"{"a": "7", "b": null}"#),
+        Some(r#"[10, "twenty", 30.5]"#),
+        Some(r#"{"b": {"a": true}, "n": 12345678901234567890}"#),
+        Some("not json"),
+        Some("{}"),
+        None,
+    ];
     let memos = [
         Some("swap 12 GRT"), Some("Swap 7 grt"), Some("stake:alice"), Some("stake:Bob"), Some(""),
         Some("a,b,,c"), Some("  padded  "), Some("0xDEADbeef"), Some("naïve café"), None,
@@ -61,6 +70,7 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
             _ => 1_700_000_000 + (r.below(63_000_000) as u64),
         });
         memo.push(pick(&mut r, &memos));
+        doc.push(pick(&mut r, &docs));
     }
     let s = |v: Vec<Option<&str>>| Arc::new(StringArray::from(v)) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
@@ -74,6 +84,7 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
         Field::new("kind", DataType::Utf8, true),
         Field::new("ts", DataType::UInt64, false),
         Field::new("memo", DataType::Utf8, true),
+        Field::new("doc", DataType::Utf8, true),
     ]));
     write(
         dir,
@@ -90,6 +101,7 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
             s(kind),
             Arc::new(UInt64Array::from(ts)),
             s(memo),
+            s(doc),
         ],
     )?;
     let schema = Arc::new(Schema::new(vec![
@@ -194,7 +206,7 @@ impl Gen<'_> {
                 _ => self.one(&cols).to_string(),
             };
         }
-        match self.r.below(19) {
+        match self.r.below(22) {
             0 => format!("lower({})", self.text(sc, d - 1)),
             1 => format!("upper({})", self.text(sc, d - 1)),
             2 => format!("({} || {})", self.text(sc, d - 1), self.text(sc, d - 1)),
@@ -218,6 +230,12 @@ impl Gen<'_> {
             15 => format!("CAST({} AS VARCHAR)", self.time(sc, d - 1)),
             16 => format!("concat_ws('-', {}, {})", self.text(sc, d - 1), self.text(sc, d - 1)),
             17 => format!("repeat({}, {})", self.text(sc, d - 1), self.r.below(3)),
+            18 => format!(
+                "TRY(json_extract_string(e.doc, '{}'))",
+                self.one(&["$.a", "$.b", "$.c[2].d", "$[1]", "$.b.a", "$.n", "a", "$[#-1]"])
+            ),
+            19 => format!("TRY(e.doc ->> '{}')", self.one(&["a", "$.c[0]", "$.b"])),
+            20 => format!("TRY(json_type(e.doc, '{}'))", self.one(&["$.a", "$.c", "$.n", "$"])),
             _ => format!("NULLIF({}, '')", self.text(sc, d - 1)),
         }
     }
@@ -318,7 +336,12 @@ impl Gen<'_> {
                     1 => self.int(&sc, 1),
                     _ => self.time(&sc, 2),
                 };
+                // arg_max over a key unique per row, and not over a join, which repeats rows:
+                // among ties either engine may pick any.
+                let tie_free = !sc.joined;
                 let aggs = [
+                    if tie_free { format!("arg_max({}, e.block_number * 10 + e.log_index)", self.text(&sc, 1)) } else { "count(*)".into() },
+                    if tie_free { format!("arg_min({}, e.block_number * 10 + e.log_index)", self.int(&sc, 1)) } else { "count(*)".into() },
                     {
                         // The value itself breaks ties a join's repeated rows leave.
                         let t = self.text(&sc, 1);
@@ -399,6 +422,15 @@ impl Gen<'_> {
                 let p = self.pred(&sc, 1);
                 (format!("SELECT {a} AS x FROM {from}{filter} {op} SELECT {b} FROM {from} WHERE {p}"), false)
             }
+            // A series joined to the events.
+            7 if self.chance(2) => (
+                format!(
+                    "SELECT r.x, count(e.block_number) AS n FROM range({}, {}) r(x) LEFT JOIN ev e ON e.block_number = r.x GROUP BY 1",
+                    self.r.below(10),
+                    10 + self.r.below(40)
+                ),
+                false,
+            ),
             // Scalar subquery and whole-table aggregates.
             _ => (
                 format!(

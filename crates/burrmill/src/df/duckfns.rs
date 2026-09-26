@@ -25,6 +25,8 @@ pub fn all() -> Vec<Arc<ScalarUDF>> {
         udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::ExtractString }),
         udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::Type }),
         udf(TryMark(Signature::user_defined(Volatility::Immutable))),
+        udf(FromJson(Signature::user_defined(Volatility::Immutable))),
+        udf(Len(Signature::user_defined(Volatility::Immutable))),
     ]
 }
 
@@ -185,8 +187,9 @@ fn json_type_name(v: &serde_json::Value) -> &'static str {
     match v {
         serde_json::Value::Null => "NULL",
         serde_json::Value::Bool(_) => "BOOLEAN",
-        serde_json::Value::Number(n) if n.is_i64() => "BIGINT",
+        // DuckDB reads a non-negative integer as UBIGINT, a negative one as BIGINT.
         serde_json::Value::Number(n) if n.is_u64() => "UBIGINT",
+        serde_json::Value::Number(n) if n.is_i64() => "BIGINT",
         serde_json::Value::Number(_) => "DOUBLE",
         serde_json::Value::String(_) => "VARCHAR",
         serde_json::Value::Array(_) => "ARRAY",
@@ -274,6 +277,245 @@ impl ScalarUDFImpl for Json {
                 (_, Some(v)) => b.append_value(serde_json::to_string(v).map_err(|e| {
                     datafusion_common::DataFusionError::Execution(e.to_string())
                 })?),
+            }
+        }
+        scalar_out(scalar, Arc::new(b.finish()))
+    }
+}
+
+/// The type a DuckDB JSON structure names: a type name, `[T]` for a list, `{"k": T}` for a struct.
+fn structure_type(v: &serde_json::Value) -> Result<DataType> {
+    use arrow::datatypes::Field;
+    Ok(match v {
+        serde_json::Value::String(t) => match t.to_ascii_uppercase().as_str() {
+            "VARCHAR" | "TEXT" | "STRING" | "JSON" => DataType::Utf8,
+            "BOOLEAN" | "BOOL" => DataType::Boolean,
+            "TINYINT" => DataType::Int8,
+            "SMALLINT" => DataType::Int16,
+            "INTEGER" | "INT" => DataType::Int32,
+            "BIGINT" => DataType::Int64,
+            "UTINYINT" => DataType::UInt8,
+            "USMALLINT" => DataType::UInt16,
+            "UINTEGER" => DataType::UInt32,
+            "UBIGINT" => DataType::UInt64,
+            "HUGEINT" => DataType::Decimal128(38, 0),
+            "DOUBLE" => DataType::Float64,
+            "FLOAT" | "REAL" => DataType::Float32,
+            other => return plan_err!("from_json: type {other} is not supported here"),
+        },
+        serde_json::Value::Array(a) if a.len() == 1 => DataType::List(Arc::new(Field::new("l", structure_type(&a[0])?, true))),
+        serde_json::Value::Object(m) => DataType::Struct(
+            m.iter().map(|(k, t)| Ok(Field::new(k, structure_type(t)?, true))).collect::<Result<Vec<_>>>()?.into(),
+        ),
+        other => return plan_err!("from_json: structure {other} is not one DuckDB reads"),
+    })
+}
+
+/// A JSON value as `t`, as DuckDB's `from_json` converts it: text to a number where it parses, a
+/// scalar to text, NULL where it does not convert.
+fn json_array(t: &DataType, values: &[Option<&serde_json::Value>]) -> Result<ArrayRef> {
+    use arrow::array::*;
+    use serde_json::Value as V;
+    let text = |v: &V| match v {
+        V::String(s) => Some(s.clone()),
+        V::Null => None,
+        other => serde_json::to_string(other).ok(),
+    };
+    let int = |v: &V| -> Option<i128> {
+        match v {
+            V::Number(n) => n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from)),
+            V::String(s) => s.trim().parse::<i128>().ok(),
+            V::Bool(b) => Some(*b as i128),
+            _ => None,
+        }
+    };
+    let float = |v: &V| -> Option<f64> {
+        match v {
+            V::Number(n) => n.as_f64(),
+            V::String(s) => s.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+    };
+    macro_rules! ints {
+        ($b:ty, $t:ty) => {{
+            let mut b = <$b>::with_capacity(values.len());
+            for v in values {
+                b.append_option(v.and_then(|v| int(v)).and_then(|n| <$t>::try_from(n).ok()));
+            }
+            Arc::new(b.finish()) as ArrayRef
+        }};
+    }
+    Ok(match t {
+        DataType::Utf8 => Arc::new(values.iter().map(|v| v.and_then(text)).collect::<StringArray>()),
+        DataType::Boolean => Arc::new(
+            values
+                .iter()
+                .map(|v| match v {
+                    Some(V::Bool(b)) => Some(*b),
+                    Some(V::String(s)) if s.eq_ignore_ascii_case("true") => Some(true),
+                    Some(V::String(s)) if s.eq_ignore_ascii_case("false") => Some(false),
+                    Some(V::Number(n)) => n.as_f64().map(|f| f != 0.0),
+                    _ => None,
+                })
+                .collect::<BooleanArray>(),
+        ),
+        DataType::Int8 => ints!(Int8Builder, i8),
+        DataType::Int16 => ints!(Int16Builder, i16),
+        DataType::Int32 => ints!(Int32Builder, i32),
+        DataType::Int64 => ints!(Int64Builder, i64),
+        DataType::UInt8 => ints!(UInt8Builder, u8),
+        DataType::UInt16 => ints!(UInt16Builder, u16),
+        DataType::UInt32 => ints!(UInt32Builder, u32),
+        DataType::UInt64 => ints!(UInt64Builder, u64),
+        DataType::Decimal128(p, sc) => {
+            let mut b = Decimal128Builder::with_capacity(values.len());
+            for v in values {
+                b.append_option(v.and_then(|v| int(v)));
+            }
+            Arc::new(b.finish().with_precision_and_scale(*p, *sc)?)
+        }
+        DataType::Float64 => Arc::new(values.iter().map(|v| v.and_then(float)).collect::<Float64Array>()),
+        DataType::Float32 => Arc::new(values.iter().map(|v| v.and_then(float).map(|f| f as f32)).collect::<Float32Array>()),
+        DataType::List(f) => {
+            let mut offsets = vec![0i32];
+            let mut items: Vec<Option<&V>> = Vec::new();
+            let mut valid = Vec::with_capacity(values.len());
+            for v in values {
+                match v {
+                    Some(V::Array(a)) => {
+                        items.extend(a.iter().map(Some));
+                        valid.push(true);
+                    }
+                    _ => valid.push(false),
+                }
+                offsets.push(items.len() as i32);
+            }
+            let child = json_array(f.data_type(), &items)?;
+            Arc::new(ListArray::try_new(
+                Arc::clone(f),
+                arrow::buffer::OffsetBuffer::new(offsets.into()),
+                child,
+                Some(arrow::buffer::NullBuffer::from(valid)),
+            )?)
+        }
+        DataType::Struct(fields) => {
+            let valid: Vec<bool> = values.iter().map(|v| matches!(v, Some(V::Object(_)))).collect();
+            let children = fields
+                .iter()
+                .map(|f| {
+                    let vs: Vec<Option<&V>> = values
+                        .iter()
+                        .map(|v| match v {
+                            Some(V::Object(m)) => m.get(f.name()),
+                            _ => None,
+                        })
+                        .collect();
+                    json_array(f.data_type(), &vs)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Arc::new(StructArray::try_new(fields.clone(), children, Some(arrow::buffer::NullBuffer::from(valid)))?)
+        }
+        other => return exec_err!("from_json: {other} is not supported here"),
+    })
+}
+
+/// `from_json(json, structure)`: the document as the typed value its (literal) structure names.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct FromJson(Signature);
+
+impl ScalarUDFImpl for FromJson {
+    fn name(&self) -> &str {
+        "from_json"
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        match args {
+            [j, s] => Ok(vec![coerce_text(j), coerce_text(s)]),
+            _ => plan_err!("from_json takes JSON text and a structure"),
+        }
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        plan_err!("from_json's type comes from its structure")
+    }
+    fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<arrow::datatypes::FieldRef> {
+        let Some(Some(structure)) = args.scalar_arguments.get(1) else {
+            return plan_err!("from_json needs its structure as a literal");
+        };
+        let Some(text) = structure.try_as_str().flatten() else {
+            return plan_err!("from_json needs its structure as text");
+        };
+        let v: serde_json::Value = serde_json::from_str(text)
+            .map_err(|e| datafusion_common::DataFusionError::Plan(format!("from_json structure: {e}")))?;
+        Ok(Arc::new(arrow::datatypes::Field::new(self.name(), structure_type(&v)?, true)))
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+        let doc = cast(&arrays[0], &DataType::Utf8)?;
+        let doc = doc.as_string::<i32>();
+        let parsed = (0..doc.len())
+            .map(|i| {
+                if doc.is_null(i) {
+                    return Ok(None);
+                }
+                serde_json::from_str::<serde_json::Value>(doc.value(i)).map(Some).map_err(|e| {
+                    datafusion_common::DataFusionError::Execution(format!("Invalid Input Error: Malformed JSON: {e}"))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let refs: Vec<Option<&serde_json::Value>> = parsed.iter().map(|v| v.as_ref()).collect();
+        let out = json_array(args.return_field.data_type(), &refs)?;
+        scalar_out(scalar, out)
+    }
+}
+
+/// DuckDB's `len`: a list's element count or a string's character count, as BIGINT.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Len(Signature);
+
+impl ScalarUDFImpl for Len {
+    fn name(&self) -> &str {
+        "len"
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        match args {
+            [t @ (DataType::List(_) | DataType::LargeList(_))] => Ok(vec![t.clone()]),
+            [t] if t.is_null() => Ok(vec![DataType::Utf8]),
+            [t] => Ok(vec![coerce_text(t)]),
+            _ => plan_err!("len takes a list or a string"),
+        }
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
+        let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let mut b = Int64Builder::with_capacity(a.len());
+        match a.data_type() {
+            DataType::List(_) => {
+                let l = a.as_list::<i32>();
+                for i in 0..l.len() {
+                    b.append_option(l.is_valid(i).then(|| l.value_length(i) as i64));
+                }
+            }
+            DataType::LargeList(_) => {
+                let l = a.as_list::<i64>();
+                for i in 0..l.len() {
+                    b.append_option(l.is_valid(i).then(|| l.value_length(i)));
+                }
+            }
+            _ => {
+                let t = cast(&a, &DataType::Utf8)?;
+                let t = t.as_string::<i32>();
+                for i in 0..t.len() {
+                    b.append_option(t.is_valid(i).then(|| t.value(i).chars().count() as i64));
+                }
             }
         }
         scalar_out(scalar, Arc::new(b.finish()))
