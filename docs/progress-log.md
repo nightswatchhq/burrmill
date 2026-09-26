@@ -4,6 +4,28 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Aggregate subqueries correlated through a non-equality — 2026-09-26
+
+`(SELECT count(*) FROM lbl x WHERE x.weight > e.amount)`: DataFusion 55 decorrelates a correlated
+aggregate only through `inner column = <outer>`, and has no general decorrelation behind an option.
+After the widened fuzzer, this was nearly all of what remained stricter (21 to 29 a seed).
+
+`NonEquiCorrelation` (`df/correlate.rs`) does the textbook rewrite, only where DataFusion would
+refuse: the outer rows numbered with `row_number()`, the subquery's relation (its other conjuncts
+applied first) LEFT JOINed on the correlated conjuncts, grouped by the row number and the outer
+columns, and the subquery's own projection evaluated over each group. `count(*)` counts a marker
+only matched rows carry, so no match is 0 and `count(*) + 1` is 1. Only aggregates whose answer
+over no rows is their answer over one NULL-extended row qualify (`count`, `sum`, `min`, `max`,
+`avg`, `bool_and`, `bool_or`, `string_agg`, and the checked sums and average); `array_agg` would
+collect the NULL, so it stays refused, as does a subquery whose relation shares a name with the
+outer query's.
+
+`dialect-parity` 189/189. Fuzz, 10,000 cases on five seeds: stricter **127 to 4**, the four being
+`TIMESTAMP <> 16` over no rows (DataFusion refuses at plan time what DuckDB fails only on a row);
+no differences, nothing looser. The nest: 22/22, 0.615x, the slowest view 1.30x.
+
+---
+
 ## The fuzzer widened, and what it found — 2026-09-26
 
 The grammar now draws what recent faults had in common: casts to other integer widths and inside
