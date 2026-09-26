@@ -4,6 +4,36 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The fuzzer widened again: the shapes views use — 2026-09-26
+
+Six new query shapes: grouping over a derived table (with `GROUP BY ALL` and `ORDER BY ALL`), a
+window over grouped output (`rank() OVER (ORDER BY sum(x))`), a CTE joined to itself, `QUALIFY` and
+`DISTINCT ON`, lists and JSON inside aggregates, and the anti-join written as `LEFT JOIN ... WHERE
+l.addr IS NULL` beside `IN` over an ordered, limited subquery. A list itself has no nuthatch JSON
+encoding, so lists appear only inside expressions.
+
+What it found:
+
+- **`ORDER BY ALL`** was refused over anything but bare columns. It is now `ORDER BY 1, ..., n` with
+  its direction and NULLS order on each, wherever the select list has no wildcard.
+- **List accessors refused by the checked rule** (36 to 56 a seed): `array_element`,
+  `array_length`, `cardinality`, `array_max`, `array_min` and `array_position` return an exact type
+  but do no arithmetic, and are on its list now.
+- **A wrong answer: `round(x / 7, 1) - CAST(1 AS HUGEINT)`** gave `-2` where DuckDB gives `-1.7`. At
+  coercion `x / 7` was still integer division, so the subtraction was typed as decimal arithmetic and
+  the round cast to DECIMAL(20,0); `/` became DOUBLE only after, and the fraction was cast away. `/`
+  is now DOUBLE before coercion as well.
+- **DataFusion refused its own plan** in `eliminate_group_by_constant`: a `TRY_CAST(k AS BIGINT)`
+  key beside `k` (a cast is named after its operand in DataFusion) was recomputed in a projection
+  where the two names collided. The rule, which only drops a key that is a function of another,
+  is left out of Burrmill's optimizer.
+
+`dialect-parity` 194/194. Fuzz, 10,000 cases on five seeds: no differences, nothing looser, one
+stricter (`TIMESTAMP <> 16` over no rows). The nest: 22/22, 0.623x; the slowest view,
+`deployment_signal`, at 1.12 to 1.36x across three runs.
+
+---
+
 ## Aggregate subqueries correlated through a non-equality — 2026-09-26
 
 `(SELECT count(*) FROM lbl x WHERE x.weight > e.amount)`: DataFusion 55 decorrelates a correlated
