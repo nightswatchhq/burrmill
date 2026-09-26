@@ -529,6 +529,18 @@ fn retype(t: &mut SqlType) -> Option<String> {
     *t = match t {
         SqlType::HugeInt => SqlType::Decimal(ExactNumberInfo::PrecisionAndScale(38, 0)),
         SqlType::UBigInt => SqlType::BigIntUnsigned(None),
+        SqlType::UTinyInt => SqlType::TinyIntUnsigned(None),
+        SqlType::USmallInt => SqlType::SmallIntUnsigned(None),
+        // `UINTEGER` and DuckDB's other unsigned spellings reach here as custom type names.
+        SqlType::Custom(name, args) if args.is_empty() => {
+            match name.to_string().to_ascii_uppercase().as_str() {
+                "UINTEGER" | "UINT" | "UINT32" => SqlType::IntUnsigned(None),
+                "UINT8" => SqlType::TinyIntUnsigned(None),
+                "UINT16" => SqlType::SmallIntUnsigned(None),
+                "UINT64" => SqlType::BigIntUnsigned(None),
+                _ => return None,
+            }
+        }
         SqlType::UHugeInt => {
             return Some(
                 "UHUGEINT has no exact home here: DECIMAL(38,0) stops short of 2^128".into(),
@@ -1310,10 +1322,20 @@ fn integer_union(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType
         if t.is_null() {
             continue;
         }
+        // A scale-0 DECIMAL is HUGEINT here: beside an integer, DuckDB's result is HUGEINT.
+        if matches!(t, DataType::Decimal128(_, 0)) {
+            types.push(t);
+            continue;
+        }
         if !t.is_integer() {
             return Ok(None);
         }
         types.push(t);
+    }
+    let huge = types.iter().any(|t| matches!(t, DataType::Decimal128(_, 0)));
+    if huge {
+        return Ok((types.iter().any(|t| t.is_integer()) || types.iter().any(|t| *t != types[0]))
+            .then_some(DataType::Decimal128(38, 0)));
     }
     let mixed = types.iter().any(|t| t.is_unsigned_integer()) && types.iter().any(|t| t.is_signed_integer());
     if !mixed {
@@ -1362,7 +1384,33 @@ fn compare_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> 
 }
 
 fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
+    // `avg` of integers: DataFusion's coercion casts the argument to DOUBLE and sums in floats,
+    // inexact past 2^53, where DuckDB sums exactly. As DECIMAL(38,0), which holds any 64-bit
+    // integer, it reaches the checked rule's exact average instead.
+    let exact_avg = |args: &mut Vec<Expr>| -> DFResult<bool> {
+        match args.as_mut_slice() {
+            [a] if a.get_type(schema)?.is_integer() => {
+                *a = Expr::Cast(Cast::new(Box::new(a.clone()), DataType::Decimal128(38, 0)));
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    };
     let e = match e {
+        Expr::AggregateFunction(mut f) if f.func.name() == "avg" => {
+            if exact_avg(&mut f.params.args)? {
+                return Ok(Transformed::yes(Expr::AggregateFunction(f)));
+            }
+            Expr::AggregateFunction(f)
+        }
+        Expr::WindowFunction(mut w)
+            if matches!(&w.fun, datafusion_expr::expr::WindowFunctionDefinition::AggregateUDF(f) if f.name() == "avg") =>
+        {
+            if exact_avg(&mut w.params.args)? {
+                return Ok(Transformed::yes(Expr::WindowFunction(w)));
+            }
+            Expr::WindowFunction(w)
+        }
         Expr::BinaryExpr(BinaryExpr { left, op, right })
             if matches!(
                 op,
@@ -1465,6 +1513,14 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             ) =>
         {
             let (lt, rt) = (left.get_type(schema)?, right.get_type(schema)?);
+            // A float beside a DECIMAL compares as DOUBLE in DuckDB; DataFusion goes to DECIMAL.
+            let decimal = |t: &DataType| matches!(t, DataType::Decimal128(..) | DataType::Decimal256(..));
+            let comparison = matches!(op, Operator::Eq | Operator::NotEq | Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq);
+            if comparison && (lt.is_floating() && decimal(&rt) || decimal(&lt) && rt.is_floating()) {
+                let l = if decimal(&lt) { Expr::Cast(Cast::new(left, DataType::Float64)) } else { *left };
+                let r = if decimal(&rt) { Expr::Cast(Cast::new(right, DataType::Float64)) } else { *right };
+                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(Box::new(l), op, Box::new(r)))));
+            }
             let ordering = matches!(
                 op,
                 Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq

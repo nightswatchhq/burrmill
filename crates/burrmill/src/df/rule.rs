@@ -213,6 +213,13 @@ impl CheckedArithmetic {
                     Ok(Transformed::yes(Expr::ScalarFunction(
                         ScalarFunction::new_udf(Arc::clone(f), vec![*left, *right]),
                     )))
+                } else if lt.is_floating() || rt.is_floating() {
+                    // A DOUBLE beside an exact number is DOUBLE arithmetic, in DuckDB as here;
+                    // nothing exact is being computed, so nothing is checked.
+                    let double = |e: Box<Expr>, t: &DataType| {
+                        if t.is_floating() { e } else { Box::new(Expr::Cast(datafusion_expr::Cast::new(e, DataType::Float64))) }
+                    };
+                    Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr { left: double(left, &lt), op, right: double(right, &rt) })))
                 } else if is_exact(&lt) || is_exact(&rt) {
                     plan_err!("refusing plan: {lt} {op} {rt} has no checked form")
                 } else {

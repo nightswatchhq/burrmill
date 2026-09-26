@@ -120,6 +120,13 @@ const CORPUS: &[&str] = &[
     "SELECT regexp_extract(value, '[0-9]{2}') AS a, regexp_matches(\"from\", '(?i)0XA') AS b, regexp_replace(value, '0', 'z', 'g') AS c, regexp_replace(value, '(1)', '\\1\\1') AS d, regexp_replace(value, '^1', '\\2') AS e FROM transfer ORDER BY block_number, log_index",
     "SELECT sign(CAST(block_number AS BIGINT) - 3) AS a, sign(-2.5) AS b, NULLIF(block_number, 2) AS c FROM transfer ORDER BY block_number, log_index",
     "SELECT 1 AS a ORDER BY 'x'",
+    "SELECT CAST(3 AS BIGINT) - CAST(5 AS UBIGINT) AS d, CAST(3 AS UBIGINT) * CAST(-5 AS BIGINT) AS m, CAST(3 AS INTEGER) + CAST(5 AS UINTEGER) AS e",
+    "SELECT CAST(log_index AS BIGINT) - block_number AS d FROM transfer ORDER BY block_number, log_index",
+    "SELECT avg(CAST(x AS UBIGINT) * 2982776736) AS a, sum(CAST(x AS UBIGINT) * 2982776736) AS s FROM range(1000000000, 1000000063) t(x)",
+    "SELECT avg(CAST(x AS UBIGINT) * 2982776736) AS a, avg(CAST(x AS BIGINT) * 2982776736) AS b FROM range(1000000000, 1000000063) t(x)",
+    "SELECT epoch(to_timestamp(ts)) = COALESCE(ts, w) AS eq, 1.5::DOUBLE < CAST(2 AS HUGEINT) AS lt FROM (VALUES (CAST(1700000000 AS UBIGINT), CAST(3 AS BIGINT))) t(ts, w)",
+    "SELECT extract(minute FROM to_timestamp(ts)) AS x FROM (VALUES (CAST(1700000040 AS UBIGINT)), (CAST(1700000100 AS UBIGINT)), (CAST(1700000160 AS UBIGINT))) t(ts) EXCEPT ALL SELECT abs(a) FROM (VALUES (CAST(1 AS BIGINT)), (CAST(-2 AS BIGINT))) u(a) ORDER BY 1",
+    "SELECT CASE WHEN true THEN extract(minute FROM to_timestamp(ts)) ELSE (w - ts) END AS x FROM (VALUES (CAST(1700000040 AS UBIGINT), CAST(3 AS BIGINT))) t(ts, w) EXCEPT ALL SELECT abs(a) FROM (VALUES (CAST(1 AS BIGINT))) u(a) ORDER BY 1",
     "SELECT \"from\", arg_max(block_number, block_timestamp * 10 + log_index) AS a, arg_min(\"to\", block_timestamp * 10 + log_index) AS b, max_by(value, block_timestamp * 10 + log_index) AS c, min_by(value, block_timestamp * 10 + log_index) FILTER (WHERE value <> '4') AS d FROM transfer GROUP BY 1 ORDER BY 1",
     "SELECT arg_max(x, y) AS a, arg_min(x, y) AS b FROM (VALUES (1, 5), (NULL, 9), (3, NULL), (4, 6)) t(x, y)",
     "SELECT json_extract_string('{\"a\": {\"b\": 7}, \"c\": [1, 2]}', '$.a.b') AS a, json_extract('{\"a\": {\"b\": 7}}', '$.a') AS b, json_extract_string('{\"c\": [1, 2]}', '$.c[1]') AS c, json_extract_string('{\"a\": 1}', '$.zz') AS d",
@@ -176,14 +183,20 @@ const CORPUS: &[&str] = &[
 /// Differences that stand, and why.
 const KNOWN: &[(&str, &str)] = &[
     (
+        "SELECT avg(CAST(x AS UBIGINT) * 2982776736) AS a, avg(CAST(x AS BIGINT) * 2982776736) AS b FROM range(1000000000, 1000000063) t(x)",
+        "a refusal: DataFusion names an expression without its casts, so two aggregates differing only \
+         in a cast share a name and the plan is refused, aliases or not",
+    ),
+    (
         "SELECT CASE WHEN EXISTS (SELECT 1 FROM label l WHERE lower(l.addr) = lower(t.\"from\")) THEN 'known' ELSE 'unknown' END AS k FROM transfer t ORDER BY block_number, log_index",
         "a refusal, not an answer: DataFusion 55 cannot decorrelate a subquery correlated through an \
          expression of the outer row (lower(t.x)), in any position; correlated through a column it can",
     ),
     (
         "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
-        "a DuckDB 1.5 bug, not reported upstream yet: with a date part projected, a <> between text and a \
-         cast timestamp drops every row, for <>, >= and the rest (project the timestamp itself and all rows return). Burrmill keeps them",
+        "a DuckDB 1.5 bug, not reported upstream yet: a comparison between text and a timestamp cast to \
+         text drops rows, for <>, >= and the rest, with or without a date part projected (fuzz seeds 61, \
+         9101288). Burrmill keeps them",
     ),
     (
     "SELECT log_index FROM transfer WHERE block_number - 95 > 0",
