@@ -202,6 +202,12 @@ const CORPUS: &[&str] = &[
     "SELECT CAST(to_timestamp(block_timestamp) AS DATE) + 1 AS d FROM transfer ORDER BY 1",
     // A subquery inside an aggregate in HAVING.
     "SELECT \"from\", count(*) AS n FROM transfer t GROUP BY 1 HAVING count(*) FILTER (WHERE t.\"to\" IN (SELECT addr FROM label)) > 0 ORDER BY 1",
+    // Aggregate subqueries correlated through a non-equality.
+    "SELECT block_number, log_index, (SELECT count(*) FROM label x WHERE x.addr = t.\"to\" AND length(x.name) > t.log_index) AS s, (SELECT max(length(x.name)) + 1 FROM label x WHERE length(x.name) > t.log_index + 2) AS m FROM transfer t ORDER BY 1, 2",
+    "SELECT block_number, log_index, (SELECT count(*) FROM label x WHERE length(x.name) < t.block_number) + 1 AS c FROM transfer t ORDER BY 1, 2",
+    "SELECT count(*) AS n FROM transfer t WHERE (SELECT count(*) FROM label x WHERE length(x.name) > t.log_index + 3) = 0",
+    "SELECT t.block_number, (SELECT sum(length(x.name)) FROM label x WHERE x.addr <> t.\"from\") AS s FROM transfer t JOIN transfer u ON u.block_number = t.block_number AND u.log_index = t.log_index ORDER BY 1, 2",
+    "SELECT t.block_number, t.log_index, (SELECT avg(length(x.name)) FROM label x WHERE x.addr > t.\"from\") AS a, (SELECT string_agg(x.name, ',' ORDER BY x.name) FROM label x WHERE x.addr < t.\"to\") AS g, (SELECT bool_or(x.name > 'b') FROM label x WHERE x.addr < t.\"to\") AS b FROM transfer t ORDER BY 1, 2",
 ];
 
 /// Differences that stand, and why.
