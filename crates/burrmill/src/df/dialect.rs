@@ -1464,6 +1464,17 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             };
             Expr::BinaryExpr(BinaryExpr::new(Box::new(l), op, Box::new(r)))
         }
+        // DuckDB fits integer literal bounds to the operand; DataFusion widens all three, which
+        // for UBIGINT against a literal is DECIMAL(20,0).
+        Expr::Between(mut b)
+            if !matches!(*b.expr, Expr::Literal(..))
+                && (matches!(*b.low, Expr::Literal(..)) || matches!(*b.high, Expr::Literal(..))) =>
+        {
+            let t = b.expr.get_type(schema)?;
+            b.low = Box::new(fit_literal(*b.low, &t));
+            b.high = Box::new(fit_literal(*b.high, &t));
+            Expr::Between(b)
+        }
         Expr::Case(mut c) => {
             let mut branches: Vec<&Expr> =
                 c.when_then_expr.iter().map(|(_, t)| t.as_ref()).collect();

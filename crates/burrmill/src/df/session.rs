@@ -205,6 +205,7 @@ impl MiniSession {
                 Arc::new(super::dialect::DuckSemantics::default()),
                 // Before the checked rewrite, which would hide the shape it matches.
                 Arc::new(FoldSubstitution(fold)),
+                Arc::new(super::constants::MoveConstants),
                 Arc::new(CheckedArithmetic::default()),
                 Arc::new(super::topn::TopPerGroup),
                 Arc::new(super::distinct::DistinctSplit),

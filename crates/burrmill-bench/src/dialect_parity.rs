@@ -185,6 +185,10 @@ const CORPUS: &[&str] = &[
     "SELECT sum(block_number * 0.5) AS s, avg(block_number) + 0.5 AS a FROM transfer",
     "SELECT list_reduce([1, 2, 3], lambda a, x: a * 10 + x) AS a, list_reduce([1.5, 2.25], lambda a, x: a + x) AS b",
     "SELECT \"from\", list_reduce(list(block_number ORDER BY block_number, log_index), lambda a, x: a * 1000 + x) AS r FROM transfer GROUP BY 1 ORDER BY 1",
+    // DuckDB moves constants across a comparison before evaluating, so these do not overflow.
+    "SELECT block_number, block_number - 95 > 0 AS a, 200 - block_number < 100 AS b, block_number * 2 = 300 AS c, block_number * 2 = 301 AS d, block_number * 2 <> 301 AS e, block_number + 5 = 3 AS f, block_number * -2 < -4 AS g FROM transfer ORDER BY 1, 2",
+    "SELECT block_number, log_index, (log_index - 87) BETWEEN 10 AND 49 AS a, (block_number - 2) NOT BETWEEN 0 AND 100 AS b, (200 - block_number) BETWEEN 50 AND 199 AS c, block_number BETWEEN 2 AND 3 AS d, log_index BETWEEN -1 AND 1 AS e FROM transfer WHERE (log_index - 1) NOT BETWEEN 5 AND 9 ORDER BY 1, 2",
+    "SELECT count(*) FILTER (WHERE block_number + 1 - 2 > 0) AS a, count(*) FILTER (WHERE 0 < block_number - 2) AS b, count(*) FILTER (WHERE block_number - NULL > 0) AS c, count(*) FILTER (WHERE 3 - block_number >= 1) AS d FROM transfer",
 ];
 
 /// Differences that stand, and why.
@@ -195,11 +199,7 @@ const KNOWN: &[(&str, &str)] = &[
          text drops rows, for <>, >= and the rest, with or without a date part projected (fuzz seeds 61, \
          9101288). Burrmill keeps them",
     ),
-    (
-    "SELECT log_index FROM transfer WHERE block_number - 95 > 0",
-    "DuckDB rewrites x - 95 > 0 to x > 95 before evaluating, so its UBIGINT underflow never happens; \
-     Burrmill evaluates what was written and refuses. Which overflows surface is the optimiser's",
-)];
+];
 
 fn fixture(root: &std::path::Path) -> anyhow::Result<()> {
     let segs = root.join("segments");
