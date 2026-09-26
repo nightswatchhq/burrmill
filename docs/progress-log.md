@@ -4,6 +4,39 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The fuzzer's refusals audited, and a DuckDB bug traced to its line — 2026-09-26
+
+**Both-refuse was mostly the generator.** 36 to 76 cases a seed failed in both engines, mainly on
+DuckDB binder errors the generator had written: HAVING comparing a text or timestamp aggregate
+with a number, `DISTINCT ON` over `ev` reading `l`, a literal as a `string_agg` tie-break, and
+unsigned casts of negative numbers. Fixed, it is 4 to 29 a seed, nearly all UBIGINT subtraction
+overflowing in both. About 150 more cases a seed now test something.
+
+**Then 25,000 cases on five fresh seeds** (`CASES=5000`), which found:
+
+- **`UINTEGER // BIGINT` is BIGINT in DuckDB**, where Burrmill gave HUGEINT to every mixed-sign
+  `//`. It is now their union: HUGEINT only past 64 bits (UBIGINT beside a signed type).
+- **The DuckDB text/timestamp bug, root cause.** `ComparisonSimplificationRule` moves the cast in
+  `CAST(ts AS VARCHAR) < 'x'` onto the constant; the cast of `'x'` to TIMESTAMPTZ yields NULL, the
+  guard that would stop it skips NULL, and the comparison becomes `ts < NULL`: every row dropped,
+  or under `IS NOT DISTINCT FROM`, the NULL timestamps kept. It happens once the session's zone has
+  been consulted (`year()`, `date_trunc`, `current_setting`, `SET TimeZone`), and the switch is sticky
+  for the connection, which nuthatch caches per nest. Written up in
+  `docs/upstream/duckdb-cast-comparison-null-constant.md`, not filed.
+- **The harnesses had been switching it on.** They ran `SET TimeZone = 'UTC'`, where nuthatch sets
+  no zone. The bench now sets `TZ=UTC` in the process before any thread, as a UTC host would. With
+  that, DuckDB also refuses `TIMESTAMPTZ + INTERVAL` again (no ICU), as nuthatch does; the fuzzer
+  counts Burrmill computing it as designed.
+- Out-of-range casts to DECIMAL join optimiser order (Burrmill refuses them too when evaluated).
+
+The fuzzer also takes `SQL=<query>` now, to run one query on its fixture.
+
+`dialect-parity` 194/194. Fuzz, 16,000 cases on eight seeds: nothing stricter, nothing looser, one
+difference (the DuckDB bug, sticky from an earlier query in the run). The nest: 22/22, 0.655x;
+`deployment_signal` 1.05 to 1.18x over five runs.
+
+---
+
 ## The fuzzer widened again: the shapes views use — 2026-09-26
 
 Six new query shapes: grouping over a derived table (with `GROUP BY ALL` and `ORDER BY ALL`), a
