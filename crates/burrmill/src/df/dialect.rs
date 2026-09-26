@@ -19,7 +19,7 @@ use arrow::array::{Array, ArrayRef, AsArray, Decimal128Builder, Int64Builder};
 use arrow::datatypes::{DataType, Decimal128Type, Int64Type, TimeUnit, UInt64Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DFSchema, Result as DFResult, exec_err, plan_err};
+use datafusion_common::{DFSchema, Result as DFResult, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     BinaryExpr, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator,
     ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TryCast, Volatility,
@@ -1130,6 +1130,9 @@ impl AnalyzerRule for DuckComparisons {
             if let Some(n) = set_op_types(&p)? {
                 return Ok(Transformed::yes(n));
             }
+            if let Some(n) = union_floats(&p)? {
+                return Ok(Transformed::yes(n));
+            }
             let mut schema = DFSchema::empty();
             for i in p.inputs() {
                 schema.merge(i.schema());
@@ -1172,6 +1175,47 @@ impl AnalyzerRule for DuckComparisons {
 }
 
 const DUP_ROW: &str = "__burrmill_dup";
+
+/// A `UNION` column where a float meets any other number: DOUBLE in DuckDB, where DataFusion's
+/// coercion makes a DECIMAL and casts the floats into it, binary error and all.
+fn union_floats(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
+    use datafusion_expr::LogicalPlanBuilder;
+    let LogicalPlan::Union(u) = p else {
+        return Ok(None);
+    };
+    let width = u.schema.fields().len();
+    let doubles: Vec<bool> = (0..width)
+        .map(|i| {
+            let types: Vec<&DataType> = u.inputs.iter().map(|x| x.schema().field(i).data_type()).collect();
+            types.iter().all(|t| numeric(t) || t.is_null())
+                && types.iter().any(|t| t.is_floating())
+                && types.iter().any(|t| numeric(t) && **t != DataType::Float64)
+        })
+        .collect();
+    if !doubles.contains(&true) {
+        return Ok(None);
+    }
+    let inputs = u
+        .inputs
+        .iter()
+        .map(|x| {
+            let s = x.schema();
+            let exprs: Vec<Expr> = (0..width)
+                .map(|i| {
+                    let (q, f) = s.qualified_field(i);
+                    let c = Expr::Column(datafusion_common::Column::from((q, f)));
+                    if doubles[i] && *f.data_type() != DataType::Float64 {
+                        Expr::Cast(Cast::new(Box::new(c), DataType::Float64)).alias_qualified(q.cloned(), f.name())
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            Ok(Arc::new(LogicalPlanBuilder::from(x.as_ref().clone()).project(exprs)?.build()?))
+        })
+        .collect::<DFResult<Vec<_>>>()?;
+    Ok(Some(LogicalPlan::Union(datafusion_expr::logical_plan::Union::try_new_with_loose_types(inputs)?)))
+}
 
 /// DuckDB's type for two integer columns meeting in a set operation, where literals do not adapt:
 /// the wider of one signedness, and for mixed signs a signed type twice the unsigned width, which
@@ -1232,8 +1276,12 @@ fn set_op_types(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
         .zip(rs.fields())
         .map(|(l, r)| {
             let (l, r) = (l.data_type(), r.data_type());
-            // Beside a DECIMAL (HUGEINT here) or a float, DataFusion's union type is DuckDB's too.
-            duck_union(l, r)
+            // A float beside any other number is DOUBLE, as DuckDB has it; DataFusion makes DECIMAL.
+            // Beside a DECIMAL (HUGEINT here), DataFusion's union type is DuckDB's too.
+            let floats = numeric(l) && numeric(r) && (l.is_floating() || r.is_floating());
+            floats
+                .then_some(DataType::Float64)
+                .or_else(|| duck_union(l, r))
                 .or_else(|| {
                     (numeric(l) && numeric(r))
                         .then(|| datafusion_expr::type_coercion::binary::type_union_resolution(&[l.clone(), r.clone()]))
@@ -1311,6 +1359,31 @@ fn as_bool(e: Expr) -> Expr {
 
 /// DuckDB types an integer literal to fit the integer beside it (`UBIGINT - 1` stays UBIGINT);
 /// DataFusion widens such a pair to DECIMAL(20,0), which nuthatch prints as a string.
+/// An integer column, literal or cast, or `+ - * %` and negation of those: an expression whose
+/// integer type coercion will not change.
+fn plainly_integer(e: &Expr, schema: &DFSchema) -> DFResult<bool> {
+    Ok(match e {
+        Expr::Column(_) | Expr::Literal(..) => e.get_type(schema)?.is_integer(),
+        Expr::Cast(c) => c.field.data_type().is_integer(),
+        Expr::TryCast(c) => c.field.data_type().is_integer(),
+        Expr::Negative(x) => plainly_integer(x, schema)?,
+        Expr::BinaryExpr(BinaryExpr { left, op: Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Modulo, right }) => {
+            plainly_integer(left, schema)? && plainly_integer(right, schema)?
+        }
+        _ => false,
+    })
+}
+
+/// DuckDB's binder refuses an integer literal beside a DATE or TIMESTAMP in an ordering comparison,
+/// `BETWEEN`, `greatest`, `least` and `coalesce`; DataFusion makes the integer a date and answers.
+/// (`=`, `<>` and `nullif` DuckDB binds as a cast that fails only on a row, so they are left.)
+fn temporal_beside_integer(t: &DataType, v: &ScalarValue) -> DFResult<()> {
+    if t.is_temporal() && v.data_type().is_integer() {
+        return plan_err!("Cannot compare values of type {t} and type INTEGER_LITERAL - an explicit cast is required");
+    }
+    Ok(())
+}
+
 fn fit_literal(e: Expr, to: &DataType) -> Expr {
     match &e {
         Expr::Literal(v, meta)
@@ -1337,8 +1410,10 @@ fn floats_win(exprs: &[&Expr], schema: &DFSchema) -> DFResult<bool> {
 /// DataFusion would pick another (a literal having been fitted already): `None` where it agrees.
 fn integer_union(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType>> {
     let mut types = Vec::new();
+    let mut literal = false;
     for e in exprs {
-        if matches!(e, Expr::Literal(..)) {
+        if let Expr::Literal(v, _) = e {
+            literal |= v.data_type().is_integer();
             continue;
         }
         let t = e.get_type(schema)?;
@@ -1357,7 +1432,7 @@ fn integer_union(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType
     }
     let huge = types.iter().any(|t| matches!(t, DataType::Decimal128(_, 0)));
     if huge {
-        return Ok((types.iter().any(|t| t.is_integer()) || types.iter().any(|t| *t != types[0]))
+        return Ok((literal || types.iter().any(|t| t.is_integer()) || types.iter().any(|t| *t != types[0]))
             .then_some(DataType::Decimal128(38, 0)));
     }
     let mixed = types.iter().any(|t| t.is_unsigned_integer()) && types.iter().any(|t| t.is_signed_integer());
@@ -1409,10 +1484,12 @@ fn compare_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> 
 fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
     // `avg` of integers: DataFusion's coercion casts the argument to DOUBLE and sums in floats,
     // inexact past 2^53, where DuckDB sums exactly. As DECIMAL(38,0), which holds any 64-bit
-    // integer, it reaches the checked rule's exact average instead.
+    // integer, it reaches the checked rule's exact average instead. Only for an argument that is
+    // an integer on its face: before coercion a `CASE` or `round` can report an integer type it
+    // will not keep, and the cast would round its fractions away.
     let exact_avg = |args: &mut Vec<Expr>| -> DFResult<bool> {
         match args.as_mut_slice() {
-            [a] if a.get_type(schema)?.is_integer() => {
+            [a] if plainly_integer(a, schema)? => {
                 *a = Expr::Cast(Cast::new(Box::new(a.clone()), DataType::Decimal128(38, 0)));
                 Ok(true)
             }
@@ -1452,12 +1529,18 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             // Types only where a literal is fitted: asking re-types the whole subtree, and at every
             // node of a long chain that made planning quadratic.
             let (l, r) = match (left.as_ref(), right.as_ref()) {
-                (Expr::Literal(..), r) if !matches!(r, Expr::Literal(..)) => {
+                (Expr::Literal(v, _), r) if !matches!(r, Expr::Literal(..)) => {
                     let rt = right.get_type(schema)?;
+                    if matches!(op, Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq) {
+                        temporal_beside_integer(&rt, v)?;
+                    }
                     (fit_literal(*left, &rt), *right)
                 }
-                (l, Expr::Literal(..)) if !matches!(l, Expr::Literal(..)) => {
+                (l, Expr::Literal(v, _)) if !matches!(l, Expr::Literal(..)) => {
                     let lt = left.get_type(schema)?;
+                    if matches!(op, Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq) {
+                        temporal_beside_integer(&lt, v)?;
+                    }
                     (*left, fit_literal(*right, &lt))
                 }
                 _ => (*left, *right),
@@ -1471,6 +1554,11 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
                 && (matches!(*b.low, Expr::Literal(..)) || matches!(*b.high, Expr::Literal(..))) =>
         {
             let t = b.expr.get_type(schema)?;
+            for bound in [b.low.as_ref(), b.high.as_ref()] {
+                if let Expr::Literal(v, _) = bound {
+                    temporal_beside_integer(&t, v)?;
+                }
+            }
             b.low = Box::new(fit_literal(*b.low, &t));
             b.high = Box::new(fit_literal(*b.high, &t));
             Expr::Between(b)
@@ -1514,6 +1602,18 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
         Expr::ScalarFunction(mut f)
             if matches!(f.func.name(), "coalesce" | "greatest" | "least" | "nullif" | "burrmill_intdiv") =>
         {
+            if matches!(f.func.name(), "greatest" | "least" | "coalesce")
+                && f.args.iter().any(|a| matches!(a, Expr::Literal(v, _) if v.data_type().is_integer()))
+            {
+                for a in &f.args {
+                    if !matches!(a, Expr::Literal(..)) {
+                        let t = a.get_type(schema)?;
+                        for v in f.args.iter().filter_map(|x| if let Expr::Literal(v, _) = x { Some(v) } else { None }) {
+                            temporal_beside_integer(&t, v)?;
+                        }
+                    }
+                }
+            }
             if f.func.name() != "burrmill_intdiv" && floats_win(&f.args.iter().collect::<Vec<_>>(), schema)? {
                 f.args = f.args.into_iter().map(|a| as_double(a, schema)).collect::<DFResult<_>>()?;
                 return Ok(Transformed::yes(Expr::ScalarFunction(f)));

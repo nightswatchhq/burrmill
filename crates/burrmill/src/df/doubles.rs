@@ -71,6 +71,12 @@ impl ScalarUDFImpl for DecimalToDouble {
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
+    // NULL exactly where the DECIMAL is, as the cast it replaces: a union's schema derived before
+    // this rule ran would otherwise disagree with the physical plan.
+    fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<arrow::datatypes::FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(arrow::datatypes::Field::new(self.name(), DataType::Float64, nullable)))
+    }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [a] = args.args.as_slice() else {
             return plan_err!("burrmill_decimal_to_double takes one argument");

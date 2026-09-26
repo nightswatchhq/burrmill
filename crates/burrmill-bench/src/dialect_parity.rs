@@ -189,6 +189,19 @@ const CORPUS: &[&str] = &[
     "SELECT block_number, block_number - 95 > 0 AS a, 200 - block_number < 100 AS b, block_number * 2 = 300 AS c, block_number * 2 = 301 AS d, block_number * 2 <> 301 AS e, block_number + 5 = 3 AS f, block_number * -2 < -4 AS g FROM transfer ORDER BY 1, 2",
     "SELECT block_number, log_index, (log_index - 87) BETWEEN 10 AND 49 AS a, (block_number - 2) NOT BETWEEN 0 AND 100 AS b, (200 - block_number) BETWEEN 50 AND 199 AS c, block_number BETWEEN 2 AND 3 AS d, log_index BETWEEN -1 AND 1 AS e FROM transfer WHERE (log_index - 1) NOT BETWEEN 5 AND 9 ORDER BY 1, 2",
     "SELECT count(*) FILTER (WHERE block_number + 1 - 2 > 0) AS a, count(*) FILTER (WHERE 0 < block_number - 2) AS b, count(*) FILTER (WHERE block_number - NULL > 0) AS c, count(*) FILTER (WHERE 3 - block_number >= 1) AS d FROM transfer",
+    // An avg argument an integer only before coercion keeps its fractions.
+    "SELECT \"from\", avg(CASE WHEN log_index > 0 THEN -8 ELSE 2.5 END) AS a, avg(round(block_number / 7, 1) - 28) AS b FROM transfer GROUP BY 1 ORDER BY 1",
+    // Set operations and CASE: a float beside any number is DOUBLE; a literal beside HUGEINT is HUGEINT.
+    "SELECT epoch(date_trunc('month', to_timestamp(block_timestamp))) AS x FROM transfer UNION ALL SELECT CAST(block_number AS HUGEINT) FROM transfer ORDER BY 1",
+    "SELECT CAST(log_index AS DOUBLE) AS x FROM transfer UNION SELECT CAST(block_number AS DECIMAL(10,2)) FROM transfer ORDER BY 1",
+    "SELECT epoch(to_timestamp(block_timestamp)) AS x FROM transfer EXCEPT SELECT CAST(block_number AS HUGEINT) * 2 FROM transfer ORDER BY 1",
+    "SELECT greatest(log_index, 1) AS x FROM transfer EXCEPT SELECT CASE WHEN log_index = 1 THEN 18 ELSE CASE WHEN block_number > 2 THEN block_number ELSE -CAST(log_index AS BIGINT) END END FROM transfer ORDER BY 1",
+    // Refused by DuckDB's binder, whatever the rows.
+    "SELECT count(*) AS n FROM transfer WHERE CAST(to_timestamp(block_timestamp) AS DATE) > 48",
+    "SELECT greatest(CAST(to_timestamp(block_timestamp) AS DATE), 3) AS n FROM transfer",
+    "SELECT CAST(to_timestamp(block_timestamp) AS DATE) + 1 AS d FROM transfer ORDER BY 1",
+    // A subquery inside an aggregate in HAVING.
+    "SELECT \"from\", count(*) AS n FROM transfer t GROUP BY 1 HAVING count(*) FILTER (WHERE t.\"to\" IN (SELECT addr FROM label)) > 0 ORDER BY 1",
 ];
 
 /// Differences that stand, and why.

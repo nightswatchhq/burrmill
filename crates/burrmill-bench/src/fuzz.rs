@@ -151,7 +151,8 @@ impl Gen<'_> {
                 _ => self.one(&cols).to_string(),
             };
         }
-        match self.r.below(20) {
+        match self.r.below(21) {
+            20 => format!("CAST({} AS {})", self.int(sc, d - 1), self.one(&["INTEGER", "SMALLINT", "UBIGINT", "HUGEINT", "UINTEGER"])),
             0 => format!("({} + {})", self.int(sc, d - 1), self.int(sc, d - 1)),
             1 => format!("({} - {})", self.int(sc, d - 1), self.int(sc, d - 1)),
             2 => format!("({} * {})", self.int(sc, d - 1), self.int(sc, d - 1)),
@@ -250,8 +251,32 @@ impl Gen<'_> {
         }
     }
 
+    /// A number of mixed type: an integer beside a decimal literal, a DOUBLE, or both.
+    fn num(&mut self, sc: &Scope, d: usize) -> String {
+        let d = d.max(1);
+        match self.r.below(10) {
+            0 => format!("({} {} {})", self.int(sc, d - 1), self.one(&["+", "-", "*"]), self.one(&["1.5", "0.1", "2.25", "-0.5"])),
+            1 => format!("({} / {})", self.int(sc, d - 1), self.one(&["3", "7", "2.5", "0.3"])),
+            2 => format!("CAST({} AS DOUBLE)", self.int(sc, d - 1)),
+            3 => format!("round({} / 7, {})", self.int(sc, d - 1), self.r.below(3)),
+            4 => format!("CASE WHEN {} THEN {} ELSE {} END", self.pred(sc, d - 1), self.int(sc, d - 1), self.one(&["2.5", "0.125", "CAST(1 AS DOUBLE)"])),
+            5 => format!("COALESCE({}, {})", self.int(sc, d - 1), self.one(&["0.5", "1e2"])),
+            6 => format!("greatest({}, {})", self.int(sc, d - 1), self.one(&["1.5", "20.75"])),
+            7 => format!("({} + {})", self.dec(sc, d - 1), self.int(sc, d - 1)),
+            8 => format!("CAST({} AS DECIMAL({}, {}))", self.int(sc, d - 1), 10 + self.r.below(9), self.r.below(4)),
+            _ => format!("({} - {})", self.num(sc, d - 1), self.int(sc, d - 1)),
+        }
+    }
+
     fn pred(&mut self, sc: &Scope, d: usize) -> String {
         let d = d.min(3);
+        if d > 0 && self.chance(8) {
+            return match self.r.below(3) {
+                0 => format!("{} {} {}", self.num(sc, d), self.one(&["=", "<>", "<", ">", "<=", ">="]), self.num(sc, d)),
+                1 => format!("{} {}IN ({}, NULL, {})", self.int(sc, d), self.one(&["", "NOT "]), self.r.below(10), self.r.below(60)),
+                _ => format!("{} {} {}", self.int(sc, d), self.one(&["<", ">=", "="]), self.one(&["2.5", "10.0", "-0.5", "1e1"])),
+            };
+        }
         match self.r.below(if d == 0 { 7 } else { 14 }) {
             0 => format!("{} {} {}", self.int(sc, d), self.one(&["=", "<>", "<", ">", "<=", ">="]), self.int(sc, d)),
             1 => format!("{} {} {}", self.text(sc, d), self.one(&["=", "<>", "<", ">="]), self.text(sc, d)),
@@ -290,7 +315,9 @@ impl Gen<'_> {
 
     fn any(&mut self, sc: &Scope, d: usize) -> String {
         match self.r.below(5) {
-            0 | 1 => self.int(sc, d),
+            0 => self.int(sc, d),
+            1 if self.chance(2) => self.num(sc, d),
+            1 => self.int(sc, d),
             2 => self.text(sc, d),
             3 => self.dec(sc, d),
             _ => self.pred(sc, d),
@@ -360,11 +387,28 @@ impl Gen<'_> {
                     format!("max({})", self.int(&sc, 2)),
                     format!("count(DISTINCT {})", self.text(&sc, 1)),
                     format!("avg({})", self.int(&sc, 1)),
+                    format!("sum(CAST({} AS {}))", self.int(&sc, 1), self.one(&["INTEGER", "UBIGINT", "HUGEINT", "DOUBLE", "DECIMAL(12,2)"])),
+                    format!("max(CAST({} AS VARCHAR))", self.int(&sc, 1)),
+                    format!("avg({})", self.num(&sc, 1)),
+                    format!("min({})", self.num(&sc, 2)),
+                    format!("sum({}) FILTER (WHERE {})", self.int(&sc, 1), self.pred(&sc, 1)),
+                    format!("count(*) FILTER (WHERE {})", self.pred(&sc, 1)),
+                    format!("(sum({}) - min({}))", self.int(&sc, 1), self.int(&sc, 1)),
+                    format!("(max({}) {} count(*))", self.int(&sc, 1), self.one(&["+", "*", "/", "//"])),
                 ];
                 let a = aggs[self.r.below(aggs.len())].clone();
                 let b = aggs[self.r.below(aggs.len())].clone();
-                let having = if self.chance(3) { format!(" HAVING count(*) > {}", self.r.below(4)) } else { String::new() };
-                (format!("SELECT {key} AS k, {a} AS a, {b} AS b FROM {from}{filter} GROUP BY 1{having}"), false)
+                let having = match self.r.below(5) {
+                    0 => format!(" HAVING count(*) > {}", self.r.below(4)),
+                    1 => format!(" HAVING {} {} {}", aggs[self.r.below(aggs.len())], self.one(&[">", "<", "<>"]), self.r.below(50)),
+                    _ => String::new(),
+                };
+                if self.chance(4) {
+                    let key2 = self.one(&["e.kind", "e.flag", "e.block_number % 3", "e.amount IS NULL"]);
+                    (format!("SELECT {key} AS k, {key2} AS k2, {a} AS a, {b} AS b FROM {from}{filter} GROUP BY 1, 2{having}"), false)
+                } else {
+                    (format!("SELECT {key} AS k, {a} AS a, {b} AS b FROM {from}{filter} GROUP BY 1{having}"), false)
+                }
             }
             // Derived table or CTE over a grouped or projected inner query.
             4 => {
@@ -381,7 +425,8 @@ impl Gen<'_> {
             }
             // Windows, ordered by the unique key.
             5 => {
-                let part = self.one(&["e.\"from\"", "e.kind", "e.flag", "e.block_number % 4"]);
+                let part = self.one(&["e.\"from\"", "e.kind", "e.flag", "e.block_number % 4", ""]);
+                let sum_expr = format!("sum({})", self.int(&sc, 1));
                 let f = self.one(&[
                     "row_number()",
                     "sum(e.amount)",
@@ -393,23 +438,26 @@ impl Gen<'_> {
                     "max(e.amount)",
                     "avg(e.amount)",
                     "ntile(3)",
+                    sum_expr.as_str(),
                 ]);
+                let f = f.to_string();
                 let frame = self.one(&[
                     "",
                     " ROWS BETWEEN 1 PRECEDING AND CURRENT ROW",
                     " ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING",
                     " ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING",
                 ]);
-                let frame = if matches!(f, "row_number()" | "lag(e.amount)" | "lead(e.memo, 2)" | "ntile(3)") { "" } else { frame };
+                let frame = if matches!(f.as_str(), "row_number()" | "lag(e.amount)" | "lead(e.memo, 2)" | "ntile(3)") { "" } else { frame };
                 // rank and dense_rank over a key with ties, which is where they differ.
                 let (f, order) = if self.chance(4) {
-                    (self.one(&["rank()", "dense_rank()", "percent_rank()"]), "e.kind, e.block_number % 5".to_string())
+                    (self.one(&["rank()", "dense_rank()", "percent_rank()"]).to_string(), "e.kind, e.block_number % 5".to_string())
                 } else {
                     (f, "e.block_number, e.log_index".to_string())
                 };
                 (
                     format!(
-                        "SELECT e.block_number, e.log_index, {f} OVER (PARTITION BY {part} ORDER BY {order}{frame}) AS w FROM {from}{filter}"
+                        "SELECT e.block_number, e.log_index, {f} OVER ({}ORDER BY {order}{frame}) AS w FROM {from}{filter}",
+                        if part.is_empty() { String::new() } else { format!("PARTITION BY {part} ") }
                     ),
                     false,
                 )
@@ -431,6 +479,19 @@ impl Gen<'_> {
                 ),
                 false,
             ),
+            // Correlated scalar subqueries in the select list.
+            7 if self.chance(2) => {
+                let corr = self.one(&[
+                    "x.addr = e.\"to\"",
+                    "lower(x.addr) = lower(e.\"from\")",
+                    "x.weight = e.amount",
+                    "x.weight > e.amount",
+                    "x.addr = e.\"to\" AND x.weight > e.log_index",
+                ]);
+                let agg = self.one(&["count(*)", "max(x.name)", "sum(x.weight)", "min(x.weight)", "count(DISTINCT x.name)"]);
+                let key = self.int(&sc, 1);
+                (format!("SELECT e.block_number, e.log_index, {key} AS k, (SELECT {agg} FROM lbl x WHERE {corr}) AS s FROM {from}{filter}"), false)
+            }
             // Scalar subquery and whole-table aggregates.
             _ => (
                 format!(
@@ -480,6 +541,42 @@ fn widened(sql: &str) -> Option<String> {
     changed.then_some(out)
 }
 
+/// The same rows but for floats within a few units in the last place: a sum of DOUBLEs taken in
+/// another order, which each engine's partitioning decides and neither answer gets wrong.
+fn float_close(w: &[String], g: &[String], ordered: bool) -> bool {
+    fn close(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Number(x), Value::Number(y)) if x.is_f64() || y.is_f64() => {
+                let (x, y) = (x.as_f64().unwrap_or(f64::NAN), y.as_f64().unwrap_or(f64::NAN));
+                x == y || (x - y).abs() <= 1e-12 * x.abs().max(y.abs())
+            }
+            (Value::Object(x), Value::Object(y)) => {
+                x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|u| close(v, u)))
+            }
+            (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(a, b)| close(a, b)),
+            (a, b) => a == b,
+        }
+    }
+    let parse = |v: &[String]| v.iter().map(|r| serde_json::from_str::<Value>(r)).collect::<Result<Vec<_>, _>>();
+    let (Ok(w), Ok(g)) = (parse(w), parse(g)) else {
+        return false;
+    };
+    if w.len() != g.len() {
+        return false;
+    }
+    if ordered {
+        return w.iter().zip(&g).all(|(a, b)| close(a, b));
+    }
+    let mut left: Vec<&Value> = w.iter().collect();
+    g.iter().all(|r| match left.iter().position(|x| close(x, r)) {
+        Some(i) => {
+            left.swap_remove(i);
+            true
+        }
+        None => false,
+    })
+}
+
 fn duck_rows(conn: &duckdb::Connection, sql: &str) -> Result<Vec<String>, String> {
     match crate::encode_parity::nuthatch_rows(conn, sql) {
         Ok(Value::Array(rows)) => Ok(rows.iter().map(|r| r.to_string()).collect()),
@@ -519,6 +616,7 @@ pub fn run() -> anyhow::Result<()> {
     let engine = Arc::new(engine);
 
     let (mut same, mut both, mut stricter, mut looser, mut differ, mut designed, mut overflow_order, mut designed_exact) = (0, 0, 0, 0, 0, 0, 0, 0);
+    let mut float_order = 0;
     let mut stricter_why: std::collections::BTreeMap<String, usize> = Default::default();
     for i in 0..cases {
         let case_seed = seed + i as u64;
@@ -550,6 +648,9 @@ pub fn run() -> anyhow::Result<()> {
                 } else if exact() {
                     designed_exact += 1;
                     "DESIGNED-EXACT"
+                } else if float_close(&w, &g, ordered) {
+                    float_order += 1;
+                    "FLOAT-ORDER"
                 } else {
                     differ += 1;
                     "DIFF"
@@ -559,9 +660,13 @@ pub fn run() -> anyhow::Result<()> {
                 both += 1;
                 "BOTH-REFUSE"
             }
-            // One engine overflowed where the other, having rewritten or skipped the arithmetic,
-            // did not: which overflows surface is each optimiser's, and neither answer is wrong.
-            (Ok(_), Err(e)) | (Err(e), Ok(_)) if e.contains("verflow") && !e.contains("refusing plan") => {
+            // One engine overflowed, or failed an out-of-range cast, where the other, having
+            // rewritten or skipped the arithmetic (DataFusion unwraps `CAST(x AS UBIGINT) > 20` to
+            // `x > 20`), did not: which errors surface is each optimiser's, and neither is wrong.
+            (Ok(_), Err(e)) | (Err(e), Ok(_))
+                if (e.contains("verflow") || e.contains("out of range for the destination type") || e.contains("Can't cast value"))
+                    && !e.contains("refusing plan") =>
+            {
                 overflow_order += 1;
                 "OVERFLOW-ORDER"
             }
@@ -618,7 +723,7 @@ pub fn run() -> anyhow::Result<()> {
         println!("  {n:>5}  {k}");
     }
     println!(
-        "FUZZ\tseed={seed}\tcases={cases}\tsame={same}\tboth_refuse={both}\tdesigned_refusal={designed}\tdesigned_exact={designed_exact}\toverflow_order={overflow_order}\tstricter={stricter}\tlooser={looser}\tdiffer={differ}"
+        "FUZZ\tseed={seed}\tcases={cases}\tsame={same}\tboth_refuse={both}\tdesigned_refusal={designed}\tdesigned_exact={designed_exact}\toverflow_order={overflow_order}\tfloat_order={float_order}\tstricter={stricter}\tlooser={looser}\tdiffer={differ}"
     );
     std::thread::spawn(move || drop(engine)).join().expect("drop engine");
     Ok(())

@@ -256,10 +256,27 @@ fn select(s: &mut Select, known: &Known, ctes: &mut Ctes, rename: bool) -> Optio
 pub fn predicates_as_counts(q: &mut Query, known: &Known, ctes: &std::collections::HashSet<String>) -> Result<(), String> {
     each_select(q.body.as_mut(), &mut |s| {
         hoist_from_aggregates(s);
+        let outer = Outer::of(s, known, ctes);
+        // Inside an aggregate in HAVING a predicate is evaluated per row, as in the select list,
+        // where DataFusion's membership test cannot be planned: counts, as there.
+        if let Some(h) = s.having.as_mut() {
+            at_this_level(h, &mut |x| {
+                let Expr::Function(f) = x else { return };
+                if f.over.is_some() || !AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str()) {
+                    return;
+                }
+                let mut inner = Expr::Function(f.clone());
+                at_this_level(&mut inner, &mut |y| {
+                    if let Some(n) = as_counts(y, &outer) {
+                        *y = n;
+                    }
+                });
+                *x = inner;
+            });
+        }
         for clause in [s.selection.as_mut(), s.having.as_mut()].into_iter().flatten() {
             filter_predicates(clause, true)?;
         }
-        let outer = Outer::of(s, known, ctes);
         for item in s.projection.iter_mut() {
             let e = match item {
                 SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => e,
