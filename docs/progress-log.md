@@ -4,6 +4,37 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Correlated subqueries: the last stricter class — 2026-09-26
+
+After the counts rewrite the fuzzer's stricter cases were all subqueries DataFusion 55 would not
+decorrelate. Three causes, three fixes:
+
+- **Correlated through an expression of the subquery's rows.** DataFusion pulls a correlated `=`
+  over an aggregate only when the subquery's side is a column (`can_pullup_over_aggregation`), so
+  `(SELECT count(*) FROM label l WHERE lower(l.addr) = lower(t.x))` stayed correlated and the
+  physical planner refused it. `KeyedCorrelation` (`df/correlate.rs`) computes the subquery's side
+  as a column beneath the filter, the shape DataFusion already handles. This was a `KNOWN` refusal
+  in `dialect-parity`; it is now a case that passes.
+- **Inside an aggregate, over a join.** DataFusion decorrelates a scalar subquery in a projection or
+  a filter, never in an aggregate's arguments. The AST wrapper covered one relation only.
+  `SubqueriesBelowAggregates` lifts each into a projection beneath the aggregate, where qualifiers
+  survive however many relations there are, and the outputs keep their names.
+- **My own rewrite's reach.** It visited only a query body that is a plain SELECT, so an `EXISTS`
+  in a `UNION` or `EXCEPT ALL` branch was left for DataFusion to refuse; every branch is now
+  visited. And a bare outer name over a join could not be qualified, so `"to" IN (SELECT "to" FROM
+  ev ...)` over `ev e JOIN lbl l` was left alone. It is now qualified by the one relation whose
+  catalog columns include it; a name two relations have, a derived table, or a table a CTE may
+  shadow leaves it bare, and the rewrite declines rather than guesses.
+
+`dialect-parity` 170/170. Fuzz, 10,000 cases on five seeds: stricter **30 to 0**; the four
+differences are the DuckDB text/timestamp bug; nothing looser. The nest: 22/22, 0.643x, the
+slowest view 1.26x.
+
+`dialect-parity` also takes `SQL=<query>` now, to run one query against its fixture and print both
+answers.
+
+---
+
 ## JSON, `arg_max`, `range`, `TRY`, and an inexact `avg` — 2026-09-26
 
 The functions nest views and ad-hoc queries reach for that DataFusion lacks or spells differently,
