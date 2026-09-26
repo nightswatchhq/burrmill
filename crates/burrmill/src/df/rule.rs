@@ -51,6 +51,13 @@ const SAFE_SCALARS: &[&str] = &[
     "regexp_count",
     "regexp_instr",
     "burrmill_intdiv",
+    // An element picked from a list, or a count or position within one: no arithmetic.
+    "array_element",
+    "array_length",
+    "cardinality",
+    "array_max",
+    "array_min",
+    "array_position",
     // A count of boundaries, checked where it could leave 64 bits; -1, 0 or 1.
     "date_diff",
     "burrmill_nullable",

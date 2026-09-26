@@ -217,7 +217,12 @@ impl MiniSession {
                 Arc::new(super::correlate::SubqueriesBelowAggregates),
                 Arc::new(super::correlate::NonEquiCorrelation),
             ]),
-            optimizer: Optimizer::new(),
+            // Without `eliminate_group_by_constant`: it recomputes a key that is a function of
+            // another key in a projection, where a rewritten `TRY_CAST(k AS BIGINT)`, which DataFusion
+            // names `k`, collides with `k` itself and the query was refused.
+            optimizer: Optimizer::with_rules(
+                Optimizer::new().rules.into_iter().filter(|r| r.name() != "eliminate_group_by_constant").collect(),
+            ),
             // Last, so it sees the join filter after projection pushdown has made its operands columns.
             physical_optimizers: PhysicalOptimizer::new()
                 .rules

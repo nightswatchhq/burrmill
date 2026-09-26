@@ -404,6 +404,19 @@ impl sq::Visitor for CteNames<'_> {
     }
 }
 
+/// How many columns a query body outputs, where no wildcard leaves it to the catalog.
+fn output_width(b: &sq::SetExpr) -> Option<usize> {
+    match b {
+        sq::SetExpr::Select(s) => {
+            let wild = s.projection.iter().any(|i| matches!(i, sq::SelectItem::Wildcard(_) | sq::SelectItem::QualifiedWildcard(..)));
+            (!wild).then_some(s.projection.len())
+        }
+        sq::SetExpr::SetOperation { left, .. } => output_width(left),
+        sq::SetExpr::Query(q) => output_width(&q.body),
+        _ => None,
+    }
+}
+
 /// DuckDB sorts NULLs last in both directions unless told otherwise; DataFusion, as Postgres,
 /// puts them first under `DESC`. An ordering that does not say is told.
 fn nulls_last(v: &mut [sq::OrderByExpr]) {
@@ -588,6 +601,23 @@ impl VisitorMut for Rewriter {
         if let Err(why) = super::subqueries::predicates_as_counts(q, &self.known, &self.ctes) {
             self.refused = Some(why);
             return ControlFlow::Break(());
+        }
+        // DataFusion takes `ORDER BY ALL` only over bare columns; DuckDB orders by every output
+        // column left to right, which is `ORDER BY 1, ..., n`.
+        let width = output_width(&q.body);
+        if let (Some(o), Some(n)) = (q.order_by.as_mut(), width)
+            && let sq::OrderByKind::All(options) = &o.kind
+        {
+            let options = options.clone();
+            o.kind = sq::OrderByKind::Expressions(
+                (1..=n)
+                    .map(|i| sq::OrderByExpr {
+                        expr: SqlExpr::Value(sq::Value::Number(i.to_string(), false).into()),
+                        options: options.clone(),
+                        with_fill: None,
+                    })
+                    .collect(),
+            );
         }
         match q.order_by.as_mut().map(|o| &mut o.kind) {
             Some(sq::OrderByKind::Expressions(v)) => {
@@ -1474,7 +1504,9 @@ fn sole_integer(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType>
 
 fn compare_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
     let before = e.clone();
-    let t = compare_inner(e, schema)?;
+    // `/` is DOUBLE before coercion too: typed as integer division there, `round(x / 7, 1) - h`
+    // beside a HUGEINT was cast to DECIMAL(20,0), and the fraction lost once `/` became DOUBLE.
+    let t = divide_as_double(e, schema)?.transform_data(|e| compare_inner(e, schema))?;
     if !t.transformed && t.data != before {
         return Ok(Transformed::yes(t.data));
     }

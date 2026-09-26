@@ -339,7 +339,92 @@ impl Gen<'_> {
         let sc = Scope { joined: self.chance(3) };
         let from = self.from(&sc);
         let filter = if self.chance(2) { format!(" WHERE {}", self.pred(&sc, 2)) } else { String::new() };
-        match self.r.below(8) {
+        match self.r.below(14) {
+            // Grouped over a derived table, keys and values computed inside.
+            8 => {
+                let key = if self.chance(2) { self.text(&sc, 1) } else { self.int(&sc, 1) };
+                let v = self.int(&sc, 2);
+                let having = if self.chance(2) { format!(" HAVING sum(v) {} {}", self.one(&[">", "<"]), self.r.below(200)) } else { String::new() };
+                let order = if self.chance(2) { " ORDER BY ALL" } else { "" };
+                (
+                    format!("SELECT k, count(*) AS n, sum(v) AS s, max(v) - min(v) AS r FROM (SELECT {key} AS k, {v} AS v FROM {from}{filter}) d GROUP BY ALL{having}{order}"),
+                    !order.is_empty(),
+                )
+            }
+            // A window over grouped output, ordered by an aggregate and the unique key.
+            9 => {
+                let key = self.one(&["e.\"from\"", "e.kind", "e.block_number % 7", "lower(e.\"to\")"]);
+                let agg = format!("sum({})", self.int(&sc, 1));
+                let w = self.one(&["rank()", "dense_rank()", "row_number()", "sum(count(*))", "lag(count(*))"]);
+                let dir = self.one(&["", " DESC"]);
+                (
+                    format!("SELECT {key} AS k, {agg} AS s, count(*) AS n, {w} OVER (ORDER BY {agg}{dir}, {key}) AS w FROM {from}{filter} GROUP BY 1"),
+                    false,
+                )
+            }
+            // A CTE joined to itself.
+            10 => {
+                let v = self.int(&sc, 1);
+                (
+                    format!(
+                        "WITH s AS (SELECT e.\"from\" AS f, count(*) AS n, max({v}) AS m FROM {from}{filter} GROUP BY 1) SELECT a.f, a.n, b.f AS g, b.m FROM s a {} s b ON a.n {} b.n AND a.f IS DISTINCT FROM b.f",
+                        self.one(&["JOIN", "LEFT JOIN"]),
+                        self.one(&["=", "<", ">="])
+                    ),
+                    false,
+                )
+            }
+            // QUALIFY and DISTINCT ON, keyed so that ties cannot choose.
+            11 => {
+                let part = self.one(&["e.kind", "e.\"from\"", "e.flag", "e.block_number % 3"]);
+                if self.chance(2) {
+                    let dir = self.one(&["", " DESC"]);
+                    (
+                        format!("SELECT e.block_number, e.log_index, {part} AS p FROM {from}{filter} QUALIFY row_number() OVER (PARTITION BY {part} ORDER BY e.block_number{dir}, e.log_index{dir}{}) <= {}",
+                            if sc.joined { ", l.addr, l.name" } else { "" }, 1 + self.r.below(3)),
+                        false,
+                    )
+                } else {
+                    let v = self.int(&sc, 1);
+                    (
+                        format!("SELECT DISTINCT ON ({part}) {part} AS p, {v} AS v FROM ev e{filter} ORDER BY {part}, e.block_number DESC, e.log_index DESC",
+                            filter = if sc.joined { String::new() } else { filter.clone() }),
+                        true,
+                    )
+                }
+            }
+            // Lists and JSON inside aggregates, over one relation so an ORDER BY inside cannot tie.
+            12 if !sc.joined => {
+                let key = self.text(&sc, 1);
+                let a = self.one(&[
+                    "array_length(list(e.amount ORDER BY e.block_number, e.log_index))",
+                    "list(e.amount ORDER BY e.block_number, e.log_index)[1]",
+                    "list_sort(list(e.log_index))[-1]",
+                    "max(TRY(json_extract_string(e.doc, '$.a')))",
+                    "count(DISTINCT TRY(e.doc ->> 'b'))",
+                    "string_agg(DISTINCT e.kind, ',' ORDER BY e.kind)",
+                    "min(len(e.memo))",
+                ]);
+                (format!("SELECT {key} AS k, {a} AS a, count(*) AS n FROM ev e{filter} GROUP BY 1"), false)
+            }
+            // The anti-join written as a LEFT JOIN, and IN over an ordered, limited subquery.
+            12 | 13 => {
+                if self.chance(2) {
+                    let on = self.one(&["l.addr = e.\"to\"", "l.addr = e.\"from\"", "lower(l.addr) = lower(e.\"to\")"]);
+                    (format!("SELECT e.block_number, e.log_index, {} AS v FROM ev e LEFT JOIN lbl l ON {on} WHERE l.addr IS NULL", self.int(&Scope { joined: false }, 1)), false)
+                } else {
+                    (
+                        format!(
+                            "SELECT e.block_number, e.log_index FROM ev e WHERE e.\"{}\" {}IN (SELECT addr FROM lbl ORDER BY weight {} NULLS LAST, addr LIMIT {})",
+                            self.one(&["to", "from"]),
+                            self.one(&["", "NOT "]),
+                            self.one(&["ASC", "DESC"]),
+                            1 + self.r.below(4)
+                        ),
+                        false,
+                    )
+                }
+            }
             // Projection.
             0 | 1 => {
                 let n = 1 + self.r.below(3);

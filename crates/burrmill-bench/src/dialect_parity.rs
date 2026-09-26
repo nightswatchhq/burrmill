@@ -208,6 +208,15 @@ const CORPUS: &[&str] = &[
     "SELECT count(*) AS n FROM transfer t WHERE (SELECT count(*) FROM label x WHERE length(x.name) > t.log_index + 3) = 0",
     "SELECT t.block_number, (SELECT sum(length(x.name)) FROM label x WHERE x.addr <> t.\"from\") AS s FROM transfer t JOIN transfer u ON u.block_number = t.block_number AND u.log_index = t.log_index ORDER BY 1, 2",
     "SELECT t.block_number, t.log_index, (SELECT avg(length(x.name)) FROM label x WHERE x.addr > t.\"from\") AS a, (SELECT string_agg(x.name, ',' ORDER BY x.name) FROM label x WHERE x.addr < t.\"to\") AS g, (SELECT bool_or(x.name > 'b') FROM label x WHERE x.addr < t.\"to\") AS b FROM transfer t ORDER BY 1, 2",
+    // ORDER BY ALL over expressions and a union.
+    "SELECT lower(\"from\") AS f, count(*) AS n FROM transfer GROUP BY ALL ORDER BY ALL",
+    "SELECT lower(\"to\") AS f, log_index FROM transfer UNION SELECT \"from\", 7 FROM transfer ORDER BY ALL DESC NULLS FIRST",
+    // Elements and lengths of lists inside aggregates.
+    "SELECT \"from\", array_length(list(block_number ORDER BY block_number, log_index)) AS n, list(log_index ORDER BY block_number, log_index)[1] AS f, list_sort(list(block_number))[-1] AS l FROM transfer GROUP BY 1 ORDER BY 1",
+    // `/` is DOUBLE before coercion, beside a HUGEINT too.
+    "SELECT x, round(x / 7, 1) - CAST(1 AS HUGEINT) AS a, (x / 7) - CAST(1 AS HUGEINT) AS d FROM range(-5, 5) t(x) ORDER BY x",
+    // A TRY_CAST key beside the column it casts.
+    "SELECT TRY_CAST(\"value\" AS BIGINT) AS k, \"value\" AS v, count(*) AS n FROM transfer GROUP BY 1, 2 ORDER BY 2",
 ];
 
 /// Differences that stand, and why.
