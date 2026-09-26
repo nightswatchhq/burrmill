@@ -4,6 +4,22 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Aggregates that differ only by a cast — 2026-09-26
+
+DataFusion names an expression without its casts (deliberately, so `CAST(a AS INT)` is still `a`),
+so `max(CAST(x AS UBIGINT))` beside `max(CAST(x AS BIGINT))` or `max(x)` in one SELECT gave the
+Aggregate two fields of one name, and the SQL planner refused it before any rule ran, aliases or
+not. It was a `KNOWN` refusal for `avg`; it held for every aggregate.
+
+After the rewriter has finished with a query, each aggregate whose cast-stripped text repeats another's
+gets `FILTER (WHERE n = n)`, a distinct `n` per variant: its name changes, its answer does not, and
+identical aggregates keep one tag. Output names are DuckDB's, printed from the query as written.
+
+`dialect-parity` 172/172; fuzz unchanged (stricter 0, four DuckDB-bug differences); the nest 22/22,
+0.642x, the slowest view 1.25x.
+
+---
+
 ## Correlated subqueries: the last stricter class — 2026-09-26
 
 After the counts rewrite the fuzzer's stricter cases were all subqueries DataFusion 55 would not
