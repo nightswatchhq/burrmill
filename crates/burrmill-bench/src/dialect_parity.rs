@@ -165,6 +165,11 @@ const CORPUS: &[&str] = &[
     "SELECT block_number, \"to\" IN (SELECT addr FROM label) AS labelled, EXISTS (SELECT 1 FROM label l WHERE l.addr = t.\"from\") AS known, NOT EXISTS (SELECT 1 FROM label l WHERE l.addr = t.\"to\" AND l.name = 'carol') AS not_carol FROM transfer t ORDER BY block_number, log_index",
     "SELECT \"from\", count(*) FILTER (WHERE true) AS n, bool_or(\"to\" IN (SELECT addr FROM label WHERE name <> 'alice')) AS any_label FROM transfer GROUP BY 1 ORDER BY 1",
     "SELECT CASE WHEN EXISTS (SELECT 1 FROM label l WHERE lower(l.addr) = lower(t.\"from\")) THEN 'known' ELSE 'unknown' END AS k FROM transfer t ORDER BY block_number, log_index",
+    "SELECT block_number, log_index, (SELECT sum(length(name)) FROM label l WHERE lower(l.addr) = lower(t.\"from\") AND l.name <> 'x') AS n, (SELECT max(l.name) FROM label l WHERE upper(l.addr) = upper(t.\"to\")) AS m FROM transfer t ORDER BY 1, 2",
+    "SELECT \"from\" FROM transfer t WHERE (SELECT count(*) FROM label l WHERE lower(l.addr) = lower(t.\"from\")) = 0 ORDER BY 1",
+    "SELECT t.\"from\", bool_or(EXISTS (SELECT 1 FROM label x WHERE x.addr = t.\"to\")) AS a, sum(CASE WHEN t.\"to\" IN (SELECT addr FROM label) THEN 1 ELSE 0 END) AS s, count(*) AS n FROM transfer t JOIN label l ON lower(l.addr) = lower(t.\"from\") GROUP BY 1 ORDER BY 1",
+    "SELECT t.block_number, t.log_index, \"to\" IN (SELECT \"to\" FROM transfer x WHERE x.log_index > 0) AS a, \"to\" NOT IN (SELECT \"to\" FROM transfer x WHERE x.block_number > 2) AS b FROM transfer t LEFT JOIN label l ON l.addr = t.\"from\" ORDER BY 1, 2",
+    "SELECT block_number AS x FROM transfer t WHERE EXISTS (SELECT 1 FROM label l WHERE l.addr = t.\"from\") UNION ALL SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM label l WHERE l.addr = t.\"to\") THEN 1 ELSE 0 END FROM transfer t ORDER BY 1",
     "SELECT \"from\", sum(CASE WHEN \"to\" IN (SELECT addr FROM label) THEN 1 ELSE 0 END) AS to_labelled, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM label l WHERE l.addr = transfer.\"from\")) AS from_labelled FROM transfer GROUP BY 1 HAVING bool_or(\"to\" NOT IN (SELECT addr FROM label)) IS NOT NULL ORDER BY 1",
     "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
     "SELECT date_trunc('day', CAST(to_timestamp(block_timestamp) AS DATE)) AS a, CAST(to_timestamp(block_timestamp) AS DATE) + INTERVAL 33 HOUR AS b, CAST(to_timestamp(block_timestamp) AS DATE) + 3 AS c FROM transfer ORDER BY 1, 2",
@@ -186,11 +191,6 @@ const KNOWN: &[(&str, &str)] = &[
         "SELECT avg(CAST(x AS UBIGINT) * 2982776736) AS a, avg(CAST(x AS BIGINT) * 2982776736) AS b FROM range(1000000000, 1000000063) t(x)",
         "a refusal: DataFusion names an expression without its casts, so two aggregates differing only \
          in a cast share a name and the plan is refused, aliases or not",
-    ),
-    (
-        "SELECT CASE WHEN EXISTS (SELECT 1 FROM label l WHERE lower(l.addr) = lower(t.\"from\")) THEN 'known' ELSE 'unknown' END AS k FROM transfer t ORDER BY block_number, log_index",
-        "a refusal, not an answer: DataFusion 55 cannot decorrelate a subquery correlated through an \
-         expression of the outer row (lower(t.x)), in any position; correlated through a column it can",
     ),
     (
         "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
@@ -273,7 +273,13 @@ pub fn run() -> anyhow::Result<()> {
     let engine = std::thread::spawn(move || burrmill::Engine::open_nest(&root)).join().expect("open")?;
     let engine = Arc::new(engine);
     let mut failed = 0;
-    for sql in CORPUS {
+    // `SQL=<query>` runs that one query against the fixture instead of the corpus.
+    let adhoc = std::env::var("SQL").ok();
+    let corpus: Vec<&str> = match &adhoc {
+        Some(q) => vec![q.as_str()],
+        None => CORPUS.to_vec(),
+    };
+    for sql in corpus {
         let want = match crate::encode_parity::nuthatch_rows(&duck, sql) {
             Ok(v) => serde_json::to_string(&v)?,
             Err(e) => format!("ERROR {}", e.to_string().lines().next().unwrap_or("")),
@@ -297,7 +303,7 @@ pub fn run() -> anyhow::Result<()> {
         })
         .join()
         .expect("engine thread");
-        let known = KNOWN.iter().find(|(k, _)| k == sql).map(|(_, why)| *why);
+        let known = KNOWN.iter().find(|(k, _)| *k == sql).map(|(_, why)| *why);
         let both_refuse = want.starts_with("ERROR") && got.starts_with("ERROR");
         let tag = match (want == got || both_refuse, known) {
             (true, _) if both_refuse => "BOTH-REFUSE".to_string(),
@@ -309,15 +315,20 @@ pub fn run() -> anyhow::Result<()> {
             }
         };
         println!("{tag}  {sql}");
-        if want != got && !both_refuse {
-            println!("    duckdb   {}", want.chars().take(300).collect::<String>());
-            println!("    burrmill {}", got.chars().take(300).collect::<String>());
+        if (want != got && !both_refuse) || adhoc.is_some() {
+            let cap = if adhoc.is_some() { usize::MAX } else { 300 };
+            println!("    duckdb   {}", want.chars().take(cap).collect::<String>());
+            println!("    burrmill {}", got.chars().take(cap).collect::<String>());
         }
     }
-    println!("DIALECT\tcases={}\tdiffering={failed}", CORPUS.len());
+    println!("DIALECT\tcases={}\tdiffering={failed}", corpus_len(&adhoc));
     std::thread::spawn(move || drop(engine)).join().expect("drop engine");
     anyhow::ensure!(failed == 0, "{failed} dialect differences");
     Ok(())
+}
+
+fn corpus_len(adhoc: &Option<String>) -> usize {
+    if adhoc.is_some() { 1 } else { CORPUS.len() }
 }
 
 /// `duck-names <sql>`: DuckDB's own column names for a statement over an empty `t`, one per line.

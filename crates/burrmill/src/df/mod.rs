@@ -20,6 +20,7 @@ mod catalog;
 pub mod encode;
 mod errors;
 mod checked;
+mod correlate;
 mod dialect;
 mod distinct;
 mod doubles;

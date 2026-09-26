@@ -372,7 +372,9 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
         dedupe_output_names(q, names);
         super::subqueries::name(q, &known);
     }
-    let mut rw = Rewriter { refused: None, lambda: vec![] };
+    let mut ctes = std::collections::HashSet::new();
+    let _ = sq::Visit::visit(s.as_ref(), &mut CteNames(&mut ctes));
+    let mut rw = Rewriter { refused: None, lambda: vec![], known, ctes };
     let _ = sq::VisitMut::visit(s.as_mut(), &mut rw);
     match rw.refused {
         Some(why) => Err(BurrmillError::NotAllowed(why)),
@@ -384,6 +386,22 @@ struct Rewriter {
     refused: Option<String>,
     /// Parameters of the lambdas the walk is inside.
     lambda: Vec<String>,
+    known: Known,
+    /// Every CTE name in the statement, lowercased: a table of that name may be the CTE.
+    ctes: std::collections::HashSet<String>,
+}
+
+struct CteNames<'a>(&'a mut std::collections::HashSet<String>);
+
+impl sq::Visitor for CteNames<'_> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, q: &sq::Query) -> ControlFlow<()> {
+        for c in q.with.iter().flat_map(|w| &w.cte_tables) {
+            self.0.insert(c.alias.name.value.to_lowercase());
+        }
+        ControlFlow::Continue(())
+    }
 }
 
 /// DuckDB sorts NULLs last in both directions unless told otherwise; DataFusion, as Postgres,
@@ -562,7 +580,7 @@ impl VisitorMut for Rewriter {
     }
 
     fn pre_visit_query(&mut self, q: &mut sq::Query) -> ControlFlow<()> {
-        if let Err(why) = super::subqueries::predicates_as_counts(q) {
+        if let Err(why) = super::subqueries::predicates_as_counts(q, &self.known, &self.ctes) {
             self.refused = Some(why);
             return ControlFlow::Break(());
         }

@@ -253,27 +253,39 @@ fn select(s: &mut Select, known: &Known, ctes: &mut Ctes, rename: bool) -> Optio
 /// false against no rows, NULL for a NULL operand, true on a match, NULL where only a NULL could
 /// have matched, false otherwise. Only a plain subquery is rewritten (one SELECT, no grouping,
 /// `DISTINCT`, `LIMIT` or aggregate); anything else is left for DataFusion to refuse.
-pub fn predicates_as_counts(q: &mut Query) -> Result<(), String> {
-    let SetExpr::Select(s) = q.body.as_mut() else {
-        return Ok(());
-    };
-    hoist_from_aggregates(s);
-    for clause in [s.selection.as_mut(), s.having.as_mut()].into_iter().flatten() {
-        filter_predicates(clause, true)?;
+pub fn predicates_as_counts(q: &mut Query, known: &Known, ctes: &std::collections::HashSet<String>) -> Result<(), String> {
+    each_select(q.body.as_mut(), &mut |s| {
+        hoist_from_aggregates(s);
+        for clause in [s.selection.as_mut(), s.having.as_mut()].into_iter().flatten() {
+            filter_predicates(clause, true)?;
+        }
+        let outer = Outer::of(s, known, ctes);
+        for item in s.projection.iter_mut() {
+            let e = match item {
+                SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => e,
+                _ => continue,
+            };
+            at_this_level(e, &mut |x| {
+                if let Some(n) = as_counts(x, &outer) {
+                    *x = n;
+                }
+            });
+        }
+        Ok(())
+    })
+}
+
+/// The SELECTs of a query body, each branch of a set operation included; a parenthesised query is
+/// a query of its own and visited as one.
+fn each_select(b: &mut SetExpr, f: &mut dyn FnMut(&mut Select) -> Result<(), String>) -> Result<(), String> {
+    match b {
+        SetExpr::Select(s) => f(s),
+        SetExpr::SetOperation { left, right, .. } => {
+            each_select(left, f)?;
+            each_select(right, f)
+        }
+        _ => Ok(()),
     }
-    let outer = single_qualifier(s);
-    for item in s.projection.iter_mut() {
-        let e = match item {
-            SelectItem::UnnamedExpr(e) | SelectItem::ExprWithAlias { expr: e, .. } => e,
-            _ => continue,
-        };
-        at_this_level(e, &mut |x| {
-            if let Some(n) = as_counts(x, outer.as_ref()) {
-                *x = n;
-            }
-        });
-    }
-    Ok(())
 }
 
 /// In a `WHERE` or `HAVING`, an `IN (subquery)` that is a condition of its own is planned by
@@ -309,30 +321,79 @@ fn filter_predicates(e: &mut Expr, top: bool) -> Result<(), String> {
     }
 }
 
-/// The one relation a SELECT reads, by the name its columns are qualified with.
-fn single_qualifier(s: &Select) -> Option<Ident> {
-    let [TableWithJoins { relation, joins }] = s.from.as_slice() else {
-        return None;
-    };
-    if !joins.is_empty() {
-        return None;
+/// The relations a SELECT reads, by the names their columns are qualified with, and their
+/// columns where the catalog knows them.
+struct Outer(Vec<(Ident, Option<Vec<String>>)>);
+
+impl Outer {
+    fn of(s: &Select, known: &Known, ctes: &std::collections::HashSet<String>) -> Self {
+        let mut out = Vec::new();
+        for t in &s.from {
+            let plain = t.joins.iter().all(|j| match &j.join_operator {
+                JoinOperator::Join(c)
+                | JoinOperator::Inner(c)
+                | JoinOperator::Left(c)
+                | JoinOperator::LeftOuter(c)
+                | JoinOperator::Right(c)
+                | JoinOperator::RightOuter(c)
+                | JoinOperator::FullOuter(c)
+                | JoinOperator::CrossJoin(c) => matches!(c, JoinConstraint::On(_) | JoinConstraint::None),
+                _ => false,
+            });
+            if !plain {
+                return Outer(Vec::new());
+            }
+            for f in std::iter::once(&t.relation).chain(t.joins.iter().map(|j| &j.relation)) {
+                let (name, columns) = match f {
+                    TableFactor::Table { name, alias, args: None, .. } => {
+                        let Some(sq::ObjectNamePart::Identifier(table)) = name.0.last() else {
+                            return Outer(Vec::new());
+                        };
+                        let lower = table.value.to_lowercase();
+                        let columns = match alias {
+                            Some(a) if !a.columns.is_empty() => None,
+                            _ if name.0.len() == 1 && ctes.contains(&lower) => None,
+                            _ => known.columns(&lower),
+                        };
+                        (alias.as_ref().map_or_else(|| table.clone(), |a| a.name.clone()), columns)
+                    }
+                    TableFactor::Derived { alias: Some(a), .. } => (a.name.clone(), None),
+                    _ => return Outer(Vec::new()),
+                };
+                out.push((name, columns));
+            }
+        }
+        Outer(out)
     }
-    match relation {
-        TableFactor::Table { alias: Some(a), .. } | TableFactor::Derived { alias: Some(a), .. } => Some(a.name.clone()),
-        TableFactor::Table { name, alias: None, args: None, .. } => match name.0.last()? {
-            sq::ObjectNamePart::Identifier(i) => Some(i.clone()),
-            _ => None,
-        },
-        _ => None,
+
+    /// The qualifier of a bare column: the one relation read, or the one of several whose known
+    /// columns include it.
+    fn qualifier(&self, column: &Ident) -> Option<Ident> {
+        if let [(q, _)] = self.0.as_slice() {
+            return Some(q.clone());
+        }
+        let mut having = self.0.iter().map(|(q, c)| c.as_ref().map(|c| (q, c.iter().any(|n| n.eq_ignore_ascii_case(&column.value)))));
+        let mut found = None;
+        for r in &mut having {
+            match r? {
+                (q, true) if found.is_none() => found = Some(q.clone()),
+                (_, true) => return None,
+                _ => {}
+            }
+        }
+        found
     }
 }
 
-/// `x` with each bare column qualified by the outer query's one relation.
-fn qualified(x: &Expr, outer: &Ident) -> Expr {
+/// `x` with each bare column qualified by the outer relation it names, where that is certain;
+/// one that is not stays bare, and [`movable`] then declines to move it.
+fn qualified(x: &Expr, outer: &Outer) -> Expr {
     let mut x = x.clone();
     at_this_level(&mut x, &mut |e| {
-        if let Expr::Identifier(i) = e {
-            *e = Expr::CompoundIdentifier(vec![outer.clone(), i.clone()]);
+        if let Expr::Identifier(i) = e
+            && let Some(q) = outer.qualifier(i)
+        {
+            *e = Expr::CompoundIdentifier(vec![q, i.clone()]);
         }
     });
     x
@@ -587,7 +648,7 @@ fn with_nulls(e: &Expr) -> Option<Expr> {
     Some(if *negated { Expr::UnaryOp { op: sq::UnaryOperator::Not, expr: Box::new(nested(case)) } } else { nested(case) })
 }
 
-fn as_counts(x: &Expr, outer: Option<&Ident>) -> Option<Expr> {
+fn as_counts(x: &Expr, outer: &Outer) -> Option<Expr> {
     use sq::BinaryOperator::{Eq, Gt};
     match x {
         Expr::Exists { subquery, negated } => {
@@ -599,10 +660,7 @@ fn as_counts(x: &Expr, outer: Option<&Ident>) -> Option<Expr> {
             let [SelectItem::UnnamedExpr(y) | SelectItem::ExprWithAlias { expr: y, .. }] = s.projection.as_slice() else {
                 return None;
             };
-            let expr = match outer {
-                Some(o) => qualified(expr, o),
-                None => expr.as_ref().clone(),
-            };
+            let expr = qualified(expr, outer);
             if !movable(&expr, s) {
                 return None;
             }

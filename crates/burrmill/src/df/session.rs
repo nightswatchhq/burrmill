@@ -212,6 +212,8 @@ impl MiniSession {
                 Arc::new(super::sharing::ShareRepeats),
                 Arc::new(TypeCoercion::new()),
                 Arc::new(super::doubles::DuckDoubles::default()),
+                Arc::new(super::correlate::KeyedCorrelation),
+                Arc::new(super::correlate::SubqueriesBelowAggregates),
             ]),
             optimizer: Optimizer::new(),
             // Last, so it sees the join filter after projection pushdown has made its operands columns.
