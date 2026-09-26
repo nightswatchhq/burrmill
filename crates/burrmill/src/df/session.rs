@@ -218,7 +218,10 @@ impl MiniSession {
             physical_optimizers: PhysicalOptimizer::new()
                 .rules
                 .into_iter()
-                .chain([Arc::new(super::rangejoin::RangeJoin) as Arc<dyn PhysicalOptimizerRule + Send + Sync>])
+                .chain([
+                    Arc::new(super::rangejoin::RangeJoin) as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+                    Arc::new(super::smallinputs::SmallInputs),
+                ])
                 .collect(),
             execution_props: ExecutionProps::new(),
             table_options: TableOptions::new(),

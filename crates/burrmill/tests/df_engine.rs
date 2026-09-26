@@ -266,3 +266,18 @@ fn a_subquery_repeating_a_name_keeps_both_columns_as_duckdb_names_them() {
     let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
     assert_eq!(rows.len(), 3);
 }
+
+#[test]
+fn a_small_table_is_not_fanned_out() {
+    let (_tmp, engine) = nest_with_transfer();
+    let sql = "SELECT \"from\", count(*) AS n FROM token__transfer GROUP BY 1 ORDER BY 1";
+    let plan: String = engine
+        .sql(&format!("EXPLAIN {sql}"))
+        .unwrap()
+        .iter()
+        .map(|b| arrow::util::pretty::pretty_format_batches(std::slice::from_ref(b)).unwrap().to_string())
+        .collect();
+    assert!(!plan.contains("RoundRobinBatch"), "{plan}");
+    let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
+    assert_eq!(serde_json::to_string(&rows).unwrap(), r#"[{"from":"0xa","n":2},{"from":"0xb","n":1}]"#);
+}

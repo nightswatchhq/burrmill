@@ -329,6 +329,7 @@ impl ExecutionPlan for RangeJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let right = children.pop().expect("two children");
         let left = children.pop().expect("two children");
+        let right_partitioning = right.properties().output_partitioning().clone();
         Ok(Arc::new(Self::new(
             left,
             right,
@@ -337,7 +338,8 @@ impl ExecutionPlan for RangeJoinExec {
             self.projection.clone(),
             Arc::clone(&self.schema),
             self.filter_text.clone(),
-            Arc::clone(&self.properties),
+            // The right side's partitions are this operator's; a rule below may have changed them.
+            Arc::new(self.properties.as_ref().clone().with_partitioning(right_partitioning)),
         )))
     }
     fn execute(&self, partition: usize, ctx: Arc<TaskContext>) -> Result<SendableRecordBatchStream> {

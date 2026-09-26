@@ -32,6 +32,7 @@ mod lists;
 mod rule;
 mod session;
 mod sharing;
+mod smallinputs;
 mod subqueries;
 mod topn;
 mod wide;
