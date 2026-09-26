@@ -21,6 +21,9 @@ pub fn all() -> Vec<Arc<ScalarUDF>> {
         udf(RegexpExtract(Signature::user_defined(Volatility::Immutable))),
         udf(Sign(Signature::user_defined(Volatility::Immutable))),
         udf(RegexpReplace(Signature::user_defined(Volatility::Immutable))),
+        udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::Extract }),
+        udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::ExtractString }),
+        udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::Type }),
     ]
 }
 
@@ -120,6 +123,159 @@ impl ScalarUDFImpl for Nullable {
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         Ok(args.args[0].clone())
+    }
+}
+
+/// One step of a DuckDB JSON path.
+#[derive(Debug, PartialEq)]
+enum Step {
+    Key(String),
+    Index(i64),
+}
+
+/// A DuckDB JSON path: `$` then `.key`, `."quoted key"`, `[n]` or `[#-n]` (from the end); a string
+/// without `$` is one key. `None` for a path it does not read, which is refused.
+fn json_path(p: &str) -> Option<Vec<Step>> {
+    let Some(mut rest) = p.strip_prefix('$') else {
+        return Some(vec![Step::Key(p.to_string())]);
+    };
+    let mut steps = Vec::new();
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix(".\"") {
+            let end = r.find('"')?;
+            steps.push(Step::Key(r[..end].to_string()));
+            rest = &r[end + 1..];
+        } else if let Some(r) = rest.strip_prefix('.') {
+            let end = r.find(['.', '[']).unwrap_or(r.len());
+            steps.push(Step::Key(r[..end].to_string()));
+            rest = &r[end..];
+        } else if let Some(r) = rest.strip_prefix('[') {
+            let end = r.find(']')?;
+            let inner = &r[..end];
+            let i = match inner.strip_prefix('#') {
+                Some("") => return None,
+                Some(from_end) => from_end.parse::<i64>().ok().filter(|n| *n < 0)?,
+                None => inner.parse::<i64>().ok().filter(|n| *n >= 0)?,
+            };
+            steps.push(Step::Index(i));
+            rest = &r[end + 1..];
+        } else {
+            return None;
+        }
+    }
+    Some(steps)
+}
+
+fn json_walk<'a>(mut v: &'a serde_json::Value, steps: &[Step]) -> Option<&'a serde_json::Value> {
+    for s in steps {
+        v = match (s, v) {
+            (Step::Key(k), serde_json::Value::Object(m)) => m.get(k)?,
+            (Step::Index(i), serde_json::Value::Array(a)) => {
+                let i = if *i < 0 { a.len() as i64 + i } else { *i };
+                a.get(usize::try_from(i).ok()?)?
+            }
+            _ => return None,
+        };
+    }
+    Some(v)
+}
+
+fn json_type_name(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "NULL",
+        serde_json::Value::Bool(_) => "BOOLEAN",
+        serde_json::Value::Number(n) if n.is_i64() => "BIGINT",
+        serde_json::Value::Number(n) if n.is_u64() => "UBIGINT",
+        serde_json::Value::Number(_) => "DOUBLE",
+        serde_json::Value::String(_) => "VARCHAR",
+        serde_json::Value::Array(_) => "ARRAY",
+        serde_json::Value::Object(_) => "OBJECT",
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+enum JsonKind {
+    Extract,
+    ExtractString,
+    Type,
+}
+
+/// `json_extract` (the value as JSON text, as DuckDB's JSON type prints), `json_extract_string`
+/// (a string's own text, NULL for JSON null) and `json_type`, over DuckDB's paths. Malformed JSON
+/// is refused, as DuckDB refuses it; a path that finds nothing is NULL.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Json {
+    sig: Signature,
+    kind: JsonKind,
+}
+
+impl ScalarUDFImpl for Json {
+    fn name(&self) -> &str {
+        match self.kind {
+            JsonKind::Extract => "json_extract",
+            JsonKind::ExtractString => "json_extract_string",
+            JsonKind::Type => "json_type",
+        }
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        match args {
+            [j] if self.kind == JsonKind::Type => Ok(vec![coerce_text(j)]),
+            [j, p] if p.is_integer() => Ok(vec![coerce_text(j), DataType::Int64]),
+            [j, p] => Ok(vec![coerce_text(j), coerce_text(p)]),
+            _ => plan_err!("{} takes JSON text and a path", self.name()),
+        }
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+        let doc = cast(&arrays[0], &DataType::Utf8)?;
+        let doc = doc.as_string::<i32>();
+        let path = arrays.get(1);
+        let mut b = StringBuilder::new();
+        for i in 0..doc.len() {
+            let steps = match path {
+                None => Some(vec![]),
+                Some(p) if p.is_null(i) => None,
+                Some(p) if p.data_type().is_integer() => {
+                    Some(vec![Step::Index(p.as_primitive::<arrow::datatypes::Int64Type>().value(i))])
+                }
+                Some(p) => {
+                    let text = cast(p, &DataType::Utf8)?;
+                    let text = text.as_string::<i32>().value(i).to_string();
+                    match json_path(&text) {
+                        Some(s) => Some(s),
+                        None => return exec_err!("Binder Error: JSON path error near '{text}'"),
+                    }
+                }
+            };
+            if doc.is_null(i) || steps.is_none() {
+                b.append_null();
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(doc.value(i)).map_err(|e| {
+                datafusion_common::DataFusionError::Execution(format!(
+                    "Invalid Input Error: Malformed JSON: {e}. Input: \"{}\"",
+                    doc.value(i)
+                ))
+            })?;
+            let found = json_walk(&v, steps.as_deref().unwrap_or(&[]));
+            match (self.kind, found) {
+                (_, None) => b.append_null(),
+                (JsonKind::Type, Some(v)) => b.append_value(json_type_name(v)),
+                (JsonKind::ExtractString, Some(serde_json::Value::Null)) => b.append_null(),
+                (JsonKind::ExtractString, Some(serde_json::Value::String(s))) => b.append_value(s),
+                (_, Some(v)) => b.append_value(serde_json::to_string(v).map_err(|e| {
+                    datafusion_common::DataFusionError::Execution(e.to_string())
+                })?),
+            }
+        }
+        scalar_out(scalar, Arc::new(b.finish()))
     }
 }
 

@@ -641,6 +641,11 @@ impl VisitorMut for Rewriter {
                     *e = call("burrmill_hugeint", vec![e.clone()]);
                 }
             }
+            // DuckDB's JSON operators: `->` is json_extract, `->>` json_extract_string.
+            SqlExpr::BinaryOp { left, op: op @ (BinaryOperator::Arrow | BinaryOperator::LongArrow), right } => {
+                let f = if matches!(op, BinaryOperator::Arrow) { "json_extract" } else { "json_extract_string" };
+                *e = call(f, vec![*left.clone(), *right.clone()]);
+            }
             SqlExpr::BinaryOp { left, op, right } => {
                 use BinaryOperator::*;
                 if let (SqlExpr::Tuple(a), SqlExpr::Tuple(b)) = (left.as_ref(), right.as_ref())
