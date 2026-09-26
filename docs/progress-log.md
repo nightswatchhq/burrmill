@@ -4,6 +4,29 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## DuckDB's constants moved, so its overflows are the ones that surface — 2026-09-26
+
+`WHERE block_number - 95 > 0` over a UBIGINT: DuckDB answers, Burrmill refused on the underflow at
+`1 - 95`. DuckDB's `MoveConstantsRule` rewrites it to `block_number > 95` before anything is
+evaluated. It was `KNOWN` as optimiser territory; it is a rule, so it is now ported case for case
+(`df/constants.rs`, after coercion and before the checked rule): `+`, `-`, `*` over integers
+against an integer constant, in any expression; `c - x` and a negative multiplier flip the
+comparison; a product not cleanly divisible decides `=` and `<>` outright; a moved constant that
+does not fit decides `=` (false, or NULL) and otherwise leaves it; a NULL constant makes the
+comparison NULL except under `IS [NOT] DISTINCT FROM`; applied until nothing moves.
+
+DuckDB's binder makes `x BETWEEN a AND b` two comparisons first, so the constants move through it
+too. That exposed a typing difference underneath: DuckDB fits integer literal bounds to the
+operand, where DataFusion widened `UBIGINT BETWEEN 5 AND 9` to DECIMAL(20,0); the bounds are now
+fitted where they fit.
+
+What remains of the fuzzer's overflow-order class is `BETWEEN 9 AND 5`, which DuckDB's filter
+combiner recognises as empty without evaluating the operand. `dialect-parity` 175/175, its only
+`KNOWN` entry now DuckDB's own bug. Fuzz, 10,000 cases: overflow-order 3 to 1, stricter 0, the four
+DuckDB-bug differences. The nest: 22/22, 0.648x, the slowest view 1.06x.
+
+---
+
 ## Aggregates that differ only by a cast — 2026-09-26
 
 DataFusion names an expression without its casts (deliberately, so `CAST(a AS INT)` is still `a`),
