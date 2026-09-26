@@ -811,13 +811,14 @@ impl ScalarUDFImpl for IntDiv {
         if !exact(a) || !exact(b) {
             return plan_err!("// needs numeric operands, not {a} and {b}");
         }
-        // As DuckDB types it: unsigned stays unsigned, unsigned beside signed is HUGEINT (a literal
-        // having been fitted to its partner already), the rest BIGINT.
+        // As DuckDB types it: unsigned stays unsigned; unsigned beside signed is their union, BIGINT
+        // where a signed type twice the unsigned width fits and HUGEINT past it (a literal having
+        // been fitted to its partner already); the rest BIGINT.
         let unsigned = |t: &DataType| t.is_unsigned_integer() || t.is_null();
+        let mixed = (a.is_unsigned_integer() && b.is_signed_integer()) || (a.is_signed_integer() && b.is_unsigned_integer());
         let wide = matches!(a, DataType::Decimal128(..))
             || matches!(b, DataType::Decimal128(..))
-            || (a.is_unsigned_integer() && b.is_signed_integer())
-            || (a.is_signed_integer() && b.is_unsigned_integer());
+            || (mixed && matches!(duck_union(a, b), Some(DataType::Decimal128(..))));
         let t = if wide {
             DataType::Decimal128(38, 0)
         } else if unsigned(a) && unsigned(b) && !(a.is_null() && b.is_null()) {

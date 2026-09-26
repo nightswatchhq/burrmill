@@ -223,9 +223,9 @@ const CORPUS: &[&str] = &[
 const KNOWN: &[(&str, &str)] = &[
     (
         "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
-        "a DuckDB 1.5 bug, not reported upstream yet: a comparison between text and a timestamp cast to \
-         text drops rows, for <>, >= and the rest, with or without a date part projected (fuzz seeds 61, \
-         9101288). Burrmill keeps them",
+        "a DuckDB 1.5 bug (docs/upstream/duckdb-cast-comparison-null-constant.md): once the zone is \
+         consulted, here by year(), text compared with a TIMESTAMPTZ cast to text is compared with \
+         NULL. Burrmill compares the text",
     ),
 ];
 
@@ -282,9 +282,6 @@ pub fn run() -> anyhow::Result<()> {
     fixture(tmp.path())?;
     let segs = tmp.path().join("segments");
     let duck = duckdb::Connection::open_in_memory()?;
-    // nuthatch sets no zone, so DuckDB follows the host's; hosted servers run in UTC, and so does
-    // Burrmill, deterministically.
-    duck.execute_batch("SET TimeZone = 'UTC';")?;
     duck.execute_batch(&format!(
         "CREATE VIEW transfer AS SELECT *, TRY_CAST(\"value\" AS DECIMAL(38,0)) AS \"value_dec\", \
          (\"value\" IS NOT NULL AND TRY_CAST(\"value\" AS DECIMAL(38,0)) IS NULL) AS \"value_overflow\", \

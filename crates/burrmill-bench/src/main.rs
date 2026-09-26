@@ -85,8 +85,16 @@ mod heap;
 #[global_allocator]
 static ALLOC: heap::Counting = heap::Counting;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // DuckDB follows the host's zone, as it does in nuthatch, which sets none; hosted servers run in
+    // UTC. Set here, before any thread exists. `SET TimeZone` would consult the zone on every query,
+    // which switches on a DuckDB bug (docs/upstream/duckdb-cast-comparison-null-constant.md) that
+    // nuthatch meets only in queries that consult it themselves.
+    std::env::set_var("TZ", "UTC");
+    tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(bench_main())
+}
+
+async fn bench_main() -> anyhow::Result<()> {
     #[cfg(all(feature = "alloc-stats", target_os = "linux"))]
     let sampled = heap::sample_peak();
     let r = run().await;
