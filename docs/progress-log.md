@@ -4,6 +4,36 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The fuzzer widened to the idioms the views write — 2026-09-26
+
+The grammar had gone quiet. The census still counts things it never drew: `substr` from the end,
+`string_split`, `xor`, `::` casts, list literals, `list_reduce`, `decode(from_hex)`, `FULL JOIN`,
+`VALUES`, `power`, `least`, and `unnest` in the select list. `::`, the joins, `VALUES`, `power`,
+`least` and `list_reduce` already agreed. The rest did not.
+
+- **`substr` from the end was a wrong answer.** DataFusion's unicode planner binds `substr` itself
+  and rejects a negative length, so `substr('10', -3, 2)` came back empty where DuckDB gives `1`.
+  The call is renamed to `burrmill_substr`, including `SUBSTRING(s FROM n FOR m)`, which is not a
+  function call. A negative start counts back from the end, a start short of the first character
+  shortens a written length, and a negative length runs backwards.
+- **`string_split`**, also `str_split` and `string_to_array`. An empty delimiter splits into
+  characters, an empty string stays one empty piece, and a NULL delimiter is the string unchanged.
+- **`xor`.** A literal takes its partner's integer type, and `BIGINT` beside `UBIGINT` is HUGEINT.
+  Bitwise, so the checked rule allows it.
+- **A list index had the wrong type.** `[5, block_number, 4]` was `DECIMAL(20,0)`, a digit string,
+  where DuckDB fits the literal and the element stays `UBIGINT`. The list itself is left as
+  DataFusion typed it, because a `list_reduce` lambda is already bound to that; the indexed value
+  is cast. A negative literal beside an unsigned column is HUGEINT.
+
+`FROM unnest(...)` is not planned. The select-list form, which is where the views write it, agrees.
+The only table functions remain `range` and `generate_series`.
+
+`dialect-parity` 206/206. Fuzz, 8,000 cases on four seeds: nothing stricter, nothing looser, no
+differences. A cast of `TIMESTAMPTZ` to `DATE` joins the no-ICU class: nuthatch's DuckDB refuses
+it, Burrmill computes it. The nest was not re-run.
+
+---
+
 ## The fuzzer's refusals audited, and a DuckDB bug traced to its line — 2026-09-26
 
 **Both-refuse was mostly the generator.** 36 to 76 cases a seed failed in both engines, mainly on
