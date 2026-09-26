@@ -26,7 +26,7 @@ decorrelate. Three causes, three fixes:
   catalog columns include it; a name two relations have, a derived table, or a table a CTE may
   shadow leaves it bare, and the rewrite declines rather than guesses.
 
-`dialect-parity` 170/170. Fuzz, 10,000 cases on five seeds: stricter **30 to 0**; the four
+`dialect-parity` 170/170. Fuzz, 10,000 cases on five seeds: stricter **33 to 0**; the four
 differences are the DuckDB text/timestamp bug; nothing looser. The nest: 22/22, 0.643x, the
 slowest view 1.26x.
 
