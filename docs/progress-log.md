@@ -4,6 +4,46 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The fuzzer widened, and what it found — 2026-09-26
+
+The grammar now draws what recent faults had in common: casts to other integer widths and inside
+aggregates, numbers of mixed type (an integer beside a decimal literal or a DOUBLE), aggregates
+with `FILTER`, arithmetic between aggregates, HAVING on any aggregate, two grouping keys, `IN`
+lists holding a NULL, windows over an expression and without a partition, and correlated scalar
+subqueries in the select list, some correlated through a non-equality. Two new outcome classes:
+**FLOAT-ORDER**, rows equal but for floats within 1e-12 relative (a DOUBLE sum taken in another
+order, which each engine's partitioning decides), and out-of-range cast errors joining
+**OVERFLOW-ORDER** (DataFusion unwraps `CAST(x AS UBIGINT) > 20` to `x > 20`, so the cast that
+DuckDB fails on is never evaluated; no value wraps, checked).
+
+On first run: 1 to 5 different answers and 1 to 5 looser per seed. All are fixed but the classes above:
+
+- **My own fault, from the exact `avg`.** It judged an argument an integer before coercion, where
+  `CASE WHEN .. THEN -8 ELSE 2.5 END` or `round(x / 7, 1) - 28` still reports its first branch's
+  or operand's integer type; the cast to DECIMAL(38,0) rounded 2.5 to 3. Now only for an argument
+  that is an integer on its face (integer columns, literals, casts, `+ - * %` of those).
+- **A float beside any other number in a set operation is DOUBLE**, as DuckDB has it. DataFusion
+  made DECIMAL and cast the floats in, printing their binary error as exact digits
+  (`1738368000.000000100663296`), in `UNION` and in `EXCEPT`/`INTERSECT` alike.
+- **An integer literal beside a HUGEINT branch** of a `CASE` now makes the `CASE` HUGEINT before
+  coercion, so a set operation over it gets DuckDB's type.
+- **`burrmill_decimal_to_double` declares its nullability** (NULL exactly where its input is): a
+  union's schema derived before it ran disagreed with the physical plan.
+- **Binder-time refusals.** DuckDB refuses an integer literal beside a DATE or TIMESTAMP in an
+  ordering comparison, `BETWEEN`, `greatest`, `least` and `coalesce`, whatever the rows; Burrmill
+  made the integer a date. `=`, `<>` and `nullif` DuckDB binds as a cast that fails only on a row,
+  so those are left, and DataFusion's plan-time refusal of `TIMESTAMP <> 16` is stricter only over
+  no rows.
+- **A subquery inside an aggregate in HAVING** (`HAVING count(*) FILTER (WHERE x IN (...))`) is
+  counts, as in the select list; DataFusion's membership test cannot be planned there.
+
+`dialect-parity` 184/184. Fuzz, 10,000 cases on five seeds: no differences, nothing looser; stricter
+23 to 29 a seed, nearly all scalar aggregate subqueries correlated through a non-equality
+(`x.weight > e.log_index`), which DataFusion 55 does not decorrelate. The nest: 22/22, 0.642x, the
+slowest view 1.25x.
+
+---
+
 ## DuckDB's constants moved, so its overflows are the ones that surface — 2026-09-26
 
 `WHERE block_number - 95 > 0` over a UBIGINT: DuckDB answers, Burrmill refused on the underflow at
