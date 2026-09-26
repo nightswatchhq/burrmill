@@ -281,3 +281,48 @@ fn a_small_table_is_not_fanned_out() {
     let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
     assert_eq!(serde_json::to_string(&rows).unwrap(), r#"[{"from":"0xa","n":2},{"from":"0xb","n":1}]"#);
 }
+
+/// A host function that refuses some input, as `nuthatch_abi_tuple` refuses a malformed payload.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Strict(datafusion_expr::Signature);
+
+impl datafusion_expr::ScalarUDFImpl for Strict {
+    fn name(&self) -> &str {
+        "host_strict"
+    }
+    fn signature(&self) -> &datafusion_expr::Signature {
+        &self.0
+    }
+    fn return_type(&self, _: &[DataType]) -> datafusion_common::Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> datafusion_common::Result<datafusion_expr::ColumnarValue> {
+        let a = datafusion_expr::ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let a = a.as_any().downcast_ref::<StringArray>().unwrap();
+        let mut out = Vec::new();
+        for i in 0..a.len() {
+            if a.value(i).starts_with("0xb") {
+                return datafusion_common::exec_err!("host_strict refuses {}", a.value(i));
+            }
+            out.push(format!("ok:{}", a.value(i)));
+        }
+        Ok(datafusion_expr::ColumnarValue::Array(Arc::new(StringArray::from(out))))
+    }
+}
+
+#[test]
+fn a_host_function_under_try_is_null_where_it_fails() {
+    let (_tmp, mut engine) = nest_with_transfer();
+    let sig = datafusion_expr::Signature::exact(vec![DataType::Utf8], datafusion_expr::Volatility::Immutable);
+    engine.register_scalar_udf(Arc::new(datafusion_expr::ScalarUDF::from(Strict(sig))));
+    assert!(engine.sql("SELECT host_strict(\"from\") FROM token__transfer").is_err());
+    let sql = "SELECT \"from\", TRY(host_strict(\"from\")) AS v FROM token__transfer ORDER BY _seq";
+    let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
+    assert_eq!(
+        serde_json::to_string(&rows).unwrap(),
+        r#"[{"from":"0xa","v":"ok:0xa"},{"from":"0xb","v":null},{"from":"0xa","v":"ok:0xa"}]"#
+    );
+}

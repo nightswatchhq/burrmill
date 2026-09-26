@@ -408,6 +408,42 @@ fn literal_key(v: &[sq::OrderByExpr]) -> Option<String> {
     .then(|| "Binder Error: ORDER BY non-integer literal has no effect.".to_string())
 }
 
+/// `arg_max(x, y)`: `x` from the row with the greatest `y`, rows with either NULL passed over, as
+/// DuckDB does; `first_value(x ORDER BY y DESC) FILTER (WHERE x IS NOT NULL AND y IS NOT NULL)`.
+/// Among equal `y` the row is arbitrary in both engines. The top-n and windowed forms are left.
+fn arg_extreme(f: &mut sq::Function, max: bool) {
+    let sq::FunctionArguments::List(l) = &mut f.args else {
+        return;
+    };
+    let exprs: Vec<SqlExpr> = l
+        .args
+        .iter()
+        .filter_map(|a| match a {
+            sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(e)) => Some(e.clone()),
+            _ => None,
+        })
+        .collect();
+    let [x, y] = exprs.as_slice() else {
+        return;
+    };
+    if f.over.is_some() || l.args.len() != 2 || l.duplicate_treatment.is_some() {
+        return;
+    }
+    let not_null = |e: &SqlExpr| SqlExpr::IsNotNull(Box::new(SqlExpr::Nested(Box::new(e.clone()))));
+    let both = binop(not_null(x), BinaryOperator::And, not_null(y));
+    f.filter = Some(Box::new(match f.filter.take() {
+        Some(w) => binop(SqlExpr::Nested(w), BinaryOperator::And, both),
+        None => both,
+    }));
+    l.args = vec![sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(x.clone()))];
+    l.clauses.push(sq::FunctionArgumentClause::OrderBy(vec![sq::OrderByExpr {
+        expr: y.clone(),
+        options: sq::OrderByOptions { asc: Some(!max), nulls_first: Some(false) },
+        with_fill: None,
+    }]));
+    f.name = sq::ObjectName::from(vec![sq::Ident::new("first_value")]);
+}
+
 /// DuckDB's names for functions DataFusion has under another: the date-part shorthands
 /// (`year(t)` is `date_part('year', t)`) and `regexp_matches`, which is `regexp_like`.
 fn rename_function(f: &mut sq::Function) {
@@ -415,6 +451,10 @@ fn rename_function(f: &mut sq::Function) {
         return;
     };
     let lower = name.value.to_ascii_lowercase();
+    if matches!(lower.as_str(), "arg_max" | "max_by" | "arg_min" | "min_by") {
+        arg_extreme(f, lower.ends_with("max") || lower == "max_by");
+        return;
+    }
     let part = match lower.as_str() {
         "year" | "month" | "day" | "hour" | "minute" | "second" | "quarter" | "week" | "epoch"
         | "millisecond" | "microsecond" | "isodow" | "decade" | "century" | "millennium" => lower.clone(),
@@ -845,6 +885,7 @@ impl AnalyzerRule for DuckSemantics {
                     let t = t.transform_data(|e| timestamp_as_text(e, &schema))?;
                     let t = t.transform_data(|e| dates_as_duckdb(e, &schema))?;
                     let t = t.transform_data(|e| case_nullability(e, &schema))?;
+                    let t = t.transform_data(|e| try_as_duckdb(e))?;
                     t.transform_data(|e| hugeint_rounding(e, &schema, &self.round))
                 })?;
                 if t.transformed && names_matter && t.data.schema_name().to_string() != name {
@@ -865,6 +906,28 @@ impl AnalyzerRule for DuckSemantics {
 
 /// DuckDB's date arithmetic types: `date_trunc` of a DATE and `DATE ± INTERVAL` are TIMESTAMP (in
 /// microseconds, where DataFusion gives nanoseconds or keeps the DATE and drops the hours).
+/// `TRY(x)`: a cast becomes `TRY_CAST`, a function call is evaluated with failures as NULL
+/// ([`super::duckfns::TryCall`]), and what cannot fail passes through. Anything else is refused:
+/// its errors would pass through a `TRY` that promised NULL.
+fn try_as_duckdb(e: Expr) -> DFResult<Transformed<Expr>> {
+    let Expr::ScalarFunction(f) = &e else {
+        return Ok(Transformed::no(e));
+    };
+    // A wrapped call takes its function's name, so what was rewritten is not rewritten again.
+    if f.func.name() != "try" || f.args.len() != 1 {
+        return Ok(Transformed::no(e));
+    }
+    Ok(Transformed::yes(match &f.args[0] {
+        Expr::Cast(Cast { expr, field }) => Expr::TryCast(TryCast::new(expr.clone(), field.data_type().clone())),
+        x @ (Expr::TryCast(_) | Expr::Column(_) | Expr::Literal(..)) => x.clone(),
+        Expr::ScalarFunction(inner) => Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::from(super::duckfns::TryCall { inner: Arc::clone(&inner.func) })),
+            inner.args.clone(),
+        )),
+        other => return plan_err!("TRY is supported here around a cast or a function call, not {other}"),
+    }))
+}
+
 /// DataFusion's logical planner proves some `CASE` values never NULL from which branches are
 /// reachable (`CASE WHEN m <> k THEN m ELSE 'x' END`); its physical expression cannot, calls the
 /// column nullable, and the physical planner then refuses the plan as a schema mismatch whenever

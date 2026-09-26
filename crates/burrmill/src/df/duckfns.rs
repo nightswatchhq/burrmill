@@ -24,6 +24,7 @@ pub fn all() -> Vec<Arc<ScalarUDF>> {
         udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::Extract }),
         udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::ExtractString }),
         udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::Type }),
+        udf(TryMark(Signature::user_defined(Volatility::Immutable))),
     ]
 }
 
@@ -276,6 +277,89 @@ impl ScalarUDFImpl for Json {
             }
         }
         scalar_out(scalar, Arc::new(b.finish()))
+    }
+}
+
+/// `TRY(x)` as written; `dialect::try_as_duckdb` replaces it once types are known.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct TryMark(Signature);
+
+impl ScalarUDFImpl for TryMark {
+    fn name(&self) -> &str {
+        "try"
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        match args {
+            [t] => Ok(vec![t.clone()]),
+            _ => plan_err!("TRY takes one expression"),
+        }
+    }
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        Ok(args[0].clone())
+    }
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        exec_err!("TRY was not planned")
+    }
+}
+
+/// A function call under `TRY`: evaluated for the batch, and where that fails, row by row with
+/// NULL for each row that fails, as DuckDB's `TRY` gives. The whole batch first, so the ordinary
+/// case costs nothing extra.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct TryCall {
+    pub inner: Arc<ScalarUDF>,
+}
+
+impl ScalarUDFImpl for TryCall {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn signature(&self) -> &Signature {
+        self.inner.signature()
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(args)
+    }
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(args)
+    }
+    fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<arrow::datatypes::FieldRef> {
+        let f = self.inner.return_field_from_args(args)?;
+        Ok(Arc::new(f.as_ref().clone().with_nullable(true)))
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if let Ok(v) = self.inner.invoke_with_args(args.clone()) {
+            return Ok(v);
+        }
+        let n = args.number_rows;
+        let mut rows: Vec<ArrayRef> = Vec::with_capacity(n);
+        for i in 0..n {
+            let one = ScalarFunctionArgs {
+                args: args
+                    .args
+                    .iter()
+                    .map(|a| match a {
+                        ColumnarValue::Array(x) => ColumnarValue::Array(x.slice(i, 1)),
+                        s => s.clone(),
+                    })
+                    .collect(),
+                number_rows: 1,
+                ..args.clone()
+            };
+            let row = match self.inner.invoke_with_args(one).and_then(|v| v.into_array(1)) {
+                Ok(v) => v,
+                Err(_) => arrow::array::new_null_array(args.return_field.data_type(), 1),
+            };
+            rows.push(row);
+        }
+        let refs: Vec<&dyn Array> = rows.iter().map(|r| r.as_ref()).collect();
+        if refs.is_empty() {
+            return Ok(ColumnarValue::Array(arrow::array::new_empty_array(args.return_field.data_type())));
+        }
+        Ok(ColumnarValue::Array(arrow::compute::concat(&refs)?))
     }
 }
 

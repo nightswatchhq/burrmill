@@ -299,6 +299,14 @@ impl MiniSession {
         Ok(())
     }
 
+    /// A scalar function under its name and aliases, replacing any of the same name.
+    pub fn register_udf(&mut self, f: Arc<ScalarUDF>) {
+        for a in f.aliases() {
+            self.scalar.insert(a.clone(), Arc::clone(&f));
+        }
+        self.scalar.insert(f.name().to_string(), f);
+    }
+
     pub fn register_table(&mut self, name: &str, table: Arc<dyn TableProvider>) {
         self.tables
             .insert(name.to_string(), provider_as_source(table));
@@ -415,7 +423,80 @@ impl FunctionRegistry for MiniSession {
     }
 }
 
+/// The number a literal argument to `range` or `generate_series` holds.
+fn integer_argument(e: &Expr) -> Option<i64> {
+    use datafusion_common::ScalarValue as S;
+    match e {
+        Expr::Literal(v, _) => match v {
+            S::Int8(Some(n)) => Some(*n as i64),
+            S::Int16(Some(n)) => Some(*n as i64),
+            S::Int32(Some(n)) => Some(*n as i64),
+            S::Int64(Some(n)) => Some(*n),
+            S::UInt8(Some(n)) => Some(*n as i64),
+            S::UInt16(Some(n)) => Some(*n as i64),
+            S::UInt32(Some(n)) => Some(*n as i64),
+            S::UInt64(Some(n)) => i64::try_from(*n).ok(),
+            _ => None,
+        },
+        Expr::Negative(x) => integer_argument(x)?.checked_neg(),
+        Expr::Cast(c) => integer_argument(&c.expr),
+        _ => None,
+    }
+}
+
+/// DuckDB's `range(stop)`, `range(start, stop[, step])` and `generate_series` (the same, the stop
+/// included): one BIGINT column named after the function. The only table functions nuthatch
+/// admits besides `unnest`, which DataFusion plans itself. Computed while planning, from literal
+/// arguments, and refused past ten million rows rather than held in memory.
+fn series(name: &str, args: &[Expr]) -> DFResult<Arc<dyn TableSource>> {
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    let n: Vec<i64> = args
+        .iter()
+        .map(|a| integer_argument(a).ok_or_else(|| plan_datafusion_err!("{name} takes integer literals")))
+        .collect::<DFResult<_>>()?;
+    let (start, stop, step) = match n.as_slice() {
+        [stop] => (0, *stop, 1),
+        [start, stop] => (*start, *stop, 1),
+        [start, stop, step] => (*start, *stop, *step),
+        _ => return Err(plan_datafusion_err!("{name} takes one to three arguments")),
+    };
+    if step == 0 {
+        return Err(plan_datafusion_err!("Binder Error: {name} step cannot be 0"));
+    }
+    let inclusive = name == "generate_series";
+    let span = (stop as i128 - start as i128) / step as i128 + 1;
+    if span > 10_000_000 {
+        return Err(plan_datafusion_err!("{name} of more than ten million rows is refused here"));
+    }
+    let mut values = Vec::with_capacity(span.max(0) as usize);
+    let mut v = start as i128;
+    let within = |v: i128| match (step > 0, inclusive) {
+        (true, true) => v <= stop as i128,
+        (true, false) => v < stop as i128,
+        (false, true) => v >= stop as i128,
+        (false, false) => v > stop as i128,
+    };
+    while within(v) {
+        values.push(v as i64);
+        v += step as i128;
+    }
+    let schema = Arc::new(Schema::new(vec![Field::new(name, DataType::Int64, false)]));
+    let batch = arrow::record_batch::RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(values))],
+    )?;
+    let table = datafusion_catalog::MemTable::try_new(schema, vec![vec![batch]])?;
+    Ok(provider_as_source(Arc::new(table)))
+}
+
 impl ContextProvider for MiniSession {
+    fn get_table_function_source(&self, name: &str, args: Vec<Expr>) -> DFResult<Arc<dyn TableSource>> {
+        match name.to_ascii_lowercase().as_str() {
+            n @ ("range" | "generate_series") => series(n, &args),
+            _ => datafusion_common::not_impl_err!("Table Functions are not supported"),
+        }
+    }
     fn get_table_source(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
         let tables = match name.schema() {
             Some(s) if s.eq_ignore_ascii_case("information_schema") => &self.information_schema,

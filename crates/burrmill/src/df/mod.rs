@@ -147,6 +147,14 @@ impl Engine {
             .map_err(df_err)
     }
 
+    /// A host's own scalar function, as nuthatch registers `nuthatch_abi_tuple` and its kind into
+    /// DuckDB. It is the host's to audit (`df_functions` covers only what Burrmill registers), and a
+    /// function returning an integer or decimal type is refused by the checked rule unless it can
+    /// be shown not to overflow, so hosts return text or check their own arithmetic.
+    pub fn register_scalar_udf(&mut self, f: Arc<datafusion_expr::ScalarUDF>) {
+        self.session.register_udf(f);
+    }
+
     /// Every scalar, aggregate and window function a statement can call, sorted.
     pub fn function_names(&self) -> Vec<String> {
         self.session.function_names()
