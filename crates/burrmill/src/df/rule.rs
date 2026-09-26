@@ -67,6 +67,8 @@ const SAFE_SCALARS: &[&str] = &[
     "burrmill_round_int",
     "burrmill_text_to_int",
     "burrmill_text_to_decimal",
+    // Closed on the integer width: no carry, so nothing to refuse.
+    "xor",
     "checked_add",
     "checked_sub",
     "checked_mul",

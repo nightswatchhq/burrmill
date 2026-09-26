@@ -151,7 +151,7 @@ impl Gen<'_> {
                 _ => self.one(&cols).to_string(),
             };
         }
-        match self.r.below(21) {
+        match self.r.below(26) {
             // Unsigned targets take a magnitude: a negative there is DuckDB's error, not a test of the cast.
             20 => match self.one(&["INTEGER", "SMALLINT", "UBIGINT", "HUGEINT", "UINTEGER"]) {
                 t @ ("UBIGINT" | "UINTEGER") => format!("CAST(abs({}) AS {t})", self.int(sc, d - 1)),
@@ -181,6 +181,25 @@ impl Gen<'_> {
             16 => format!("NULLIF({}, {})", self.int(sc, d - 1), self.r.below(5)),
             17 => format!("sign({})", self.int(sc, d - 1)),
             18 => format!("CAST(floor({} / 7.0) AS BIGINT)", self.int(sc, d - 1)),
+            21 => format!("least({}, {})", self.int(sc, d - 1), self.int(sc, d - 1)),
+            22 => format!("xor({}, {})", self.int(sc, d - 1), self.int(sc, d - 1)),
+            23 => match self.one(&["INTEGER", "BIGINT", "HUGEINT", "UBIGINT"]) {
+                t @ "UBIGINT" => format!("abs({})::{t}", self.int(sc, d - 1)),
+                t => format!("({})::{t}", self.int(sc, d - 1)),
+            },
+            24 => format!(
+                "[{}, {}, {}][{}]",
+                self.r.below(10) as i64 - 3,
+                self.int(sc, 0),
+                self.r.below(10),
+                self.one(&["1", "2", "3", "-1", "0", "4"])
+            ),
+            25 => format!(
+                "list_reduce([{}, {}, {}], lambda a, x: a + x)",
+                self.r.below(20) as i64 - 5,
+                self.r.below(20),
+                self.r.below(20)
+            ),
             _ => format!("date_diff('{}', {}, {})", self.one(&["day", "hour", "month"]), self.time(sc, d - 1), self.time(sc, d - 1)),
         }
     }
@@ -211,7 +230,7 @@ impl Gen<'_> {
                 _ => self.one(&cols).to_string(),
             };
         }
-        match self.r.below(22) {
+        match self.r.below(26) {
             0 => format!("lower({})", self.text(sc, d - 1)),
             1 => format!("upper({})", self.text(sc, d - 1)),
             2 => format!("({} || {})", self.text(sc, d - 1), self.text(sc, d - 1)),
@@ -241,6 +260,23 @@ impl Gen<'_> {
             ),
             19 => format!("TRY(e.doc ->> '{}')", self.one(&["a", "$.c[0]", "$.b"])),
             20 => format!("TRY(json_type(e.doc, '{}'))", self.one(&["$.a", "$.c", "$.n", "$"])),
+            // A negative start counts from the end, and a negative length runs backwards.
+            22 => format!(
+                "substr({}, {}, {})",
+                self.text(sc, d - 1),
+                self.r.below(8) as i64 - 4,
+                self.r.below(6) as i64 - 2
+            ),
+            23 => format!(
+                "string_split({}, '{}')[{}]",
+                self.text(sc, d - 1),
+                self.one(&[",", ":", "", "x", " "]),
+                self.one(&["1", "2", "-1", "0", "3"])
+            ),
+            // decode, so the result is text. A bare blob in a string operation is a different
+            // type, and DuckDB refuses it where a cast to text would answer.
+            24 => format!("decode(from_hex('{}'))", self.one(&["", "61", "6162", "20", "0a"])),
+            25 => format!("({}::VARCHAR)", self.int(sc, d - 1)),
             _ => format!("NULLIF({}, '')", self.text(sc, d - 1)),
         }
     }
@@ -258,7 +294,7 @@ impl Gen<'_> {
     /// A number of mixed type: an integer beside a decimal literal, a DOUBLE, or both.
     fn num(&mut self, sc: &Scope, d: usize) -> String {
         let d = d.max(1);
-        match self.r.below(10) {
+        match self.r.below(12) {
             0 => format!("({} {} {})", self.int(sc, d - 1), self.one(&["+", "-", "*"]), self.one(&["1.5", "0.1", "2.25", "-0.5"])),
             1 => format!("({} / {})", self.int(sc, d - 1), self.one(&["3", "7", "2.5", "0.3"])),
             2 => format!("CAST({} AS DOUBLE)", self.int(sc, d - 1)),
@@ -268,6 +304,8 @@ impl Gen<'_> {
             6 => format!("greatest({}, {})", self.int(sc, d - 1), self.one(&["1.5", "20.75"])),
             7 => format!("({} + {})", self.dec(sc, d - 1), self.int(sc, d - 1)),
             8 => format!("CAST({} AS DECIMAL({}, {}))", self.int(sc, d - 1), 10 + self.r.below(9), self.r.below(4)),
+            10 => format!("power({}, {})", self.one(&["2", "10", "-2", "1.5"]), self.r.below(5)),
+            11 => format!("({}::DOUBLE)", self.int(sc, d - 1)),
             _ => format!("({} - {})", self.num(sc, d - 1), self.int(sc, d - 1)),
         }
     }
@@ -343,7 +381,7 @@ impl Gen<'_> {
         let sc = Scope { joined: self.chance(3) };
         let from = self.from(&sc);
         let filter = if self.chance(2) { format!(" WHERE {}", self.pred(&sc, 2)) } else { String::new() };
-        match self.r.below(14) {
+        match self.r.below(17) {
             // Grouped over a derived table, keys and values computed inside.
             8 => {
                 let key = if self.chance(2) { self.text(&sc, 1) } else { self.int(&sc, 1) };
@@ -411,6 +449,34 @@ impl Gen<'_> {
                 ]);
                 (format!("SELECT {key} AS k, {a} AS a, count(*) AS n FROM ev e{filter} GROUP BY 1"), false)
             }
+            // FULL JOIN keeps the unmatched side, which an inner join drops.
+            14 => {
+                let on = self.one(&["l.addr = e.\"to\"", "l.addr = e.\"from\"", "lower(l.addr) = lower(e.\"to\")"]);
+                (
+                    format!(
+                        "SELECT e.block_number, e.log_index, l.name AS n, l.weight AS w FROM ev e FULL JOIN lbl l ON {on}{filter}"
+                    ),
+                    false,
+                )
+            }
+            // A literal row set joined on the log index.
+            15 => (
+                format!(
+                    "SELECT e.block_number, e.log_index, v.n FROM ev e JOIN (VALUES (0), (1), (2), ({})) v(n) ON e.log_index = v.n",
+                    self.r.below(4) as i64 - 1
+                ),
+                false,
+            ),
+            // unnest in the select list, which is where the views write it. `FROM unnest` is not
+            // planned: the only table functions are range and generate_series.
+            16 => (
+                format!(
+                    "SELECT e.block_number, e.log_index, unnest(string_split(COALESCE(e.memo, ''), '{}')) AS c FROM ev e WHERE e.block_number < {}",
+                    self.one(&[",", ":", ""]),
+                    4 + self.r.below(6)
+                ),
+                false,
+            ),
             // The anti-join written as a LEFT JOIN, and IN over an ordered, limited subquery.
             12 | 13 => {
                 if self.chance(2) {
@@ -793,8 +859,12 @@ pub fn run() -> anyhow::Result<()> {
                 *stricter_why.entry(key).or_default() += 1;
                 "STRICTER"
             }
-            // Nuthatch's DuckDB has no ICU and cannot add an INTERVAL to a TIMESTAMPTZ; Burrmill can.
-            (Err(e), Ok(_)) if e.contains("(TIMESTAMP WITH TIME ZONE, INTERVAL)") => {
+            // Nuthatch's DuckDB has no ICU. It cannot add an INTERVAL to a TIMESTAMPTZ, nor cast
+            // one to DATE; Burrmill can, and that is the difference the build makes.
+            (Err(e), Ok(_))
+                if e.contains("(TIMESTAMP WITH TIME ZONE, INTERVAL)")
+                    || e.contains("TIMESTAMP WITH TIME ZONE -> DATE") =>
+            {
                 designed += 1;
                 "DESIGNED"
             }

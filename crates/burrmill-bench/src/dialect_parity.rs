@@ -217,6 +217,22 @@ const CORPUS: &[&str] = &[
     "SELECT x, round(x / 7, 1) - CAST(1 AS HUGEINT) AS a, (x / 7) - CAST(1 AS HUGEINT) AS d FROM range(-5, 5) t(x) ORDER BY x",
     // A TRY_CAST key beside the column it casts.
     "SELECT TRY_CAST(\"value\" AS BIGINT) AS k, \"value\" AS v, count(*) AS n FROM transfer GROUP BY 1, 2 ORDER BY 2",
+    // A negative substr start counts from the end; a negative length runs backwards.
+    "SELECT substr(\"value\", -3, 2) AS a, substr(\"value\", 0, 2) AS b, substr(\"value\", -2) AS c, substr(\"value\", 2, -2) AS d FROM transfer ORDER BY block_number, log_index",
+    "SELECT substr('naïve', -2, 2) AS a, substr('abcdef', -10) AS b, substr('abcdef', 5, -3) AS c, substr('ééé', 0, 2) AS d",
+    // string_split: empty delimiter is characters, NULL delimiter is the string unchanged.
+    "SELECT string_split('a,b,c', ',')[1] AS a, string_split('a,,c', ',')[2] AS b, string_split('abc', '')[2] AS c, string_split('ab', NULL)[1] AS d, string_split('', '')[1] AS e, str_split('a::b', '::')[-1] AS f",
+    "SELECT \"from\", string_split(COALESCE(substr(\"value\", -4), ''), '')[1] AS c FROM transfer ORDER BY block_number, log_index",
+    // xor fits a literal to its partner, and mixed signs are HUGEINT.
+    "SELECT xor(block_number, 7) AS a, xor(log_index, 3) AS b, xor(CAST(block_number AS BIGINT), log_index) AS c FROM transfer ORDER BY block_number, log_index",
+    "SELECT xor(1, 2) AS a, xor(-1, 1) AS b, least(block_number, 2) AS c, power(2, log_index) AS d FROM transfer ORDER BY block_number, log_index",
+    // List literals, a full join, a values list, and unnest of a split.
+    "SELECT [1, 2, 3][1] AS a, [1, 2, 3][-1] AS b, list_reduce([1, 2, block_number], lambda a, x: a + x) AS r FROM transfer ORDER BY block_number",
+    "SELECT [5, block_number, 4][1] AS a, [5, block_number, 4][2] AS b, [5, block_number, 4][-1] AS c, [-1, block_number][1] AS n FROM transfer ORDER BY block_number",
+    "SELECT t.block_number, l.name FROM transfer t FULL JOIN label l ON l.addr = t.\"to\" ORDER BY 1, 2",
+    "SELECT t.block_number, v.n FROM transfer t JOIN (VALUES (0), (1), (NULL)) v(n) ON t.log_index = v.n ORDER BY 1, 2",
+    "SELECT unnest(string_split('a,b,c', ',')) AS c",
+    "SELECT decode(from_hex('6162')) AS t, from_hex('abc') AS b, (block_number::VARCHAR) AS s, (5::HUGEINT) AS h FROM transfer ORDER BY block_number LIMIT 1",
 ];
 
 /// Differences that stand, and why.

@@ -125,6 +125,8 @@ impl MiniSession {
         scalar.insert(round.name().to_string(), round);
         let intdiv = super::dialect::IntDiv::udf();
         scalar.insert(intdiv.name().to_string(), intdiv);
+        let xor = super::dialect::Xor::udf();
+        scalar.insert(xor.name().to_string(), xor);
         for f in datafusion_functions_nested::all_default_nested_functions() {
             let f = match f.name() {
                 "array_prepend" => super::lists::ElementAndList::udf(f, true),

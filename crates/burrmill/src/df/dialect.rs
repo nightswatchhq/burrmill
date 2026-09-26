@@ -15,8 +15,14 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, Decimal128Builder, Int64Builder};
-use arrow::datatypes::{DataType, Decimal128Type, Int64Type, TimeUnit, UInt64Type};
+use arrow::array::{
+    Array, ArrayRef, AsArray, Decimal128Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder,
+    UInt8Builder, UInt16Builder, UInt32Builder, UInt64Builder,
+};
+use arrow::datatypes::{
+    DataType, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
+};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result as DFResult, ScalarValue, exec_err, plan_err};
@@ -486,6 +492,12 @@ fn rename_function(f: &mut sq::Function) {
         arg_extreme(f, lower.ends_with("max") || lower == "max_by");
         return;
     }
+    // DataFusion's unicode planner binds `substr` itself and rejects a negative length.
+    // Ours is looked up by name, so the call has to stop being called substr.
+    if matches!(lower.as_str(), "substr" | "substring") {
+        f.name = sq::ObjectName::from(vec![sq::Ident::new("burrmill_substr")]);
+        return;
+    }
     let part = match lower.as_str() {
         "year" | "month" | "day" | "hour" | "minute" | "second" | "quarter" | "week" | "epoch"
         | "millisecond" | "microsecond" | "isodow" | "decade" | "century" | "millennium" => lower.clone(),
@@ -734,6 +746,24 @@ impl VisitorMut for Rewriter {
                     SqlExpr::Value(sq::Value::Boolean(false).into()),
                 );
             }
+            // `SUBSTRING(s FROM n FOR m)` is not a function call, so the rename above misses it,
+            // and the unicode planner would bind DataFusion's substr.
+            SqlExpr::Substring { expr, substring_from, substring_for, .. } => {
+                let mut args = vec![(**expr).clone()];
+                match (substring_from, substring_for) {
+                    (Some(from), Some(for_)) => {
+                        args.push((**from).clone());
+                        args.push((**for_).clone());
+                    }
+                    (Some(from), None) => args.push((**from).clone()),
+                    (None, Some(for_)) => {
+                        args.push(SqlExpr::Value(sq::Value::Number("1".into(), false).into()));
+                        args.push((**for_).clone());
+                    }
+                    (None, None) => {}
+                }
+                *e = call("burrmill_substr", args);
+            }
             SqlExpr::Cast { data_type, .. } => {
                 let hugeint = matches!(data_type, SqlType::HugeInt);
                 if let Some(why) = retype(data_type) {
@@ -914,6 +944,100 @@ impl ScalarUDFImpl for IntDiv {
             Ok(ColumnarValue::Scalar(
                 datafusion_common::ScalarValue::try_from_array(&out, 0)?,
             ))
+        } else {
+            Ok(ColumnarValue::Array(out))
+        }
+    }
+}
+
+/// `xor(a, b)`, bitwise, typed as DuckDB types it: a literal takes its partner's integer type,
+/// and mixed signs take the union (`xor` of `BIGINT` and `UBIGINT` is HUGEINT).
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct Xor {
+    sig: Signature,
+}
+
+impl Xor {
+    pub fn udf() -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable) }))
+    }
+}
+
+impl ScalarUDFImpl for Xor {
+    fn name(&self) -> &str {
+        "xor"
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn coerce_types(&self, args: &[DataType]) -> DFResult<Vec<DataType>> {
+        let [a, b] = args else {
+            return plan_err!("xor takes two integers");
+        };
+        let exact = |t: &DataType| t.is_integer() || matches!(t, DataType::Decimal128(_, 0) | DataType::Null);
+        if !exact(a) || !exact(b) {
+            return plan_err!("xor takes two integers, not {a} and {b}");
+        }
+        // Literals are already fitted to a column partner, so equal inputs stay that width.
+        let t = if a.is_null() {
+            if b.is_null() { DataType::Int32 } else { b.clone() }
+        } else if b.is_null() || a == b {
+            a.clone()
+        } else if matches!(a, DataType::Decimal128(..)) || matches!(b, DataType::Decimal128(..)) {
+            DataType::Decimal128(38, 0)
+        } else {
+            duck_union(a, b).unwrap_or(DataType::Int64)
+        };
+        Ok(vec![t.clone(), t])
+    }
+    fn return_type(&self, args: &[DataType]) -> DFResult<DataType> {
+        Ok(args[0].clone())
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+        let (a, b) = (&arrays[0], &arrays[1]);
+        let n = a.len();
+        macro_rules! xor_prim {
+            ($ty:ty, $builder:ty) => {{
+                let a = a.as_primitive::<$ty>();
+                let b = b.as_primitive::<$ty>();
+                let mut o = <$builder>::with_capacity(n);
+                for i in 0..n {
+                    if a.is_null(i) || b.is_null(i) {
+                        o.append_null();
+                    } else {
+                        o.append_value(a.value(i) ^ b.value(i));
+                    }
+                }
+                Arc::new(o.finish()) as ArrayRef
+            }};
+        }
+        let out = match a.data_type() {
+            DataType::Int8 => xor_prim!(Int8Type, Int8Builder),
+            DataType::Int16 => xor_prim!(Int16Type, Int16Builder),
+            DataType::Int32 => xor_prim!(Int32Type, Int32Builder),
+            DataType::Int64 => xor_prim!(Int64Type, Int64Builder),
+            DataType::UInt8 => xor_prim!(UInt8Type, UInt8Builder),
+            DataType::UInt16 => xor_prim!(UInt16Type, UInt16Builder),
+            DataType::UInt32 => xor_prim!(UInt32Type, UInt32Builder),
+            DataType::UInt64 => xor_prim!(UInt64Type, UInt64Builder),
+            DataType::Decimal128(_, _) => {
+                let (a, b) = (a.as_primitive::<Decimal128Type>(), b.as_primitive::<Decimal128Type>());
+                let mut o = Decimal128Builder::with_capacity(n);
+                for i in 0..n {
+                    if a.is_null(i) || b.is_null(i) {
+                        o.append_null();
+                    } else {
+                        o.append_value(a.value(i) ^ b.value(i));
+                    }
+                }
+                Arc::new(o.finish().with_precision_and_scale(38, 0)?) as ArrayRef
+            }
+            other => return exec_err!("xor has no form for {other}"),
+        };
+        if scalar {
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(&out, 0)?))
         } else {
             Ok(ColumnarValue::Array(out))
         }
@@ -1485,6 +1609,21 @@ fn as_double(e: Expr, schema: &DFSchema) -> DFResult<Expr> {
 }
 
 /// The one integer type among `types` that is not a bare literal, if there is exactly one.
+/// DuckDB's element type for `[...]` of integers. A literal takes the column's type when it
+/// fits (`[5, block_number]` is UBIGINT); a negative beside an unsigned column does not, and the
+/// list is HUGEINT. `None` when there is nothing to correct.
+fn list_element_type(args: &[Expr], schema: &DFSchema) -> DFResult<Option<DataType>> {
+    let refs: Vec<&Expr> = args.iter().collect();
+    if let Some(t) = sole_integer(&refs, schema)? {
+        let unfit = args.iter().any(|a| match a {
+            Expr::Literal(v, _) if v.data_type().is_integer() => !v.cast_to(&t).is_ok_and(|c| !c.is_null()),
+            _ => false,
+        });
+        return Ok(Some(if unfit { DataType::Decimal128(38, 0) } else { t }));
+    }
+    integer_union(&refs, schema)
+}
+
 fn sole_integer(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType>> {
     let mut found: Option<DataType> = None;
     for e in exprs {
@@ -1632,8 +1771,33 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             }
             Expr::Case(c)
         }
+        // The list stays as DataFusion typed it (a lambda was already bound to that), and the
+        // indexed value is cast to DuckDB's element type. Rewriting the list itself disagrees
+        // with the lambda.
+        Expr::ScalarFunction(f)
+            if f.func.name() == "array_element"
+                && f.args.first().is_some_and(|a| {
+                    matches!(a, Expr::ScalarFunction(m) if m.func.name() == "make_array")
+                }) =>
+        {
+            let args = match &f.args[0] {
+                Expr::ScalarFunction(m) => m.args.clone(),
+                _ => unreachable!(),
+            };
+            match list_element_type(&args, schema)? {
+                Some(t) => {
+                    let expr = Expr::ScalarFunction(f);
+                    if expr.get_type(schema).ok().as_ref() == Some(&t) {
+                        expr
+                    } else {
+                        Expr::Cast(Cast::new(Box::new(expr), t))
+                    }
+                }
+                None => Expr::ScalarFunction(f),
+            }
+        }
         Expr::ScalarFunction(mut f)
-            if matches!(f.func.name(), "coalesce" | "greatest" | "least" | "nullif" | "burrmill_intdiv") =>
+            if matches!(f.func.name(), "coalesce" | "greatest" | "least" | "nullif" | "burrmill_intdiv" | "xor") =>
         {
             if matches!(f.func.name(), "greatest" | "least" | "coalesce")
                 && f.args.iter().any(|a| matches!(a, Expr::Literal(v, _) if v.data_type().is_integer()))
@@ -1647,7 +1811,9 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
                     }
                 }
             }
-            if f.func.name() != "burrmill_intdiv" && floats_win(&f.args.iter().collect::<Vec<_>>(), schema)? {
+            if !matches!(f.func.name(), "burrmill_intdiv" | "xor")
+                && floats_win(&f.args.iter().collect::<Vec<_>>(), schema)?
+            {
                 f.args = f.args.into_iter().map(|a| as_double(a, schema)).collect::<DFResult<_>>()?;
                 return Ok(Transformed::yes(Expr::ScalarFunction(f)));
             }

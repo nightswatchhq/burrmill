@@ -3,9 +3,9 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, Int64Builder, Int8Builder, StringBuilder};
+use arrow::array::{Array, ArrayRef, AsArray, Int64Builder, Int8Builder, ListBuilder, StringBuilder};
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, Field, TimeUnit};
 use chrono::{DateTime, Datelike, NaiveDateTime, Timelike};
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
@@ -27,6 +27,11 @@ pub fn all() -> Vec<Arc<ScalarUDF>> {
         udf(TryMark(Signature::user_defined(Volatility::Immutable))),
         udf(FromJson(Signature::user_defined(Volatility::Immutable))),
         udf(Len(Signature::user_defined(Volatility::Immutable))),
+        udf(Substr(Signature::user_defined(Volatility::Immutable))),
+        udf(StringSplit(
+            Signature::user_defined(Volatility::Immutable),
+            vec!["str_split".into(), "string_to_array".into()],
+        )),
     ]
 }
 
@@ -1047,6 +1052,169 @@ impl ScalarUDFImpl for Sign {
     }
 }
 
+/// `substr` / `substring` as DuckDB counts it. A negative start counts back from the end, a start
+/// short of the first character shortens a written length, and a negative length runs backwards.
+/// Arrow's substr does none of those: `substr('10', -3, 2)` came back empty.
+fn duck_substr(s: &str, mut start: i64, len: Option<i64>) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len() as i64;
+    if start < 0 {
+        start = n + start + 1;
+    }
+    let Some(mut len) = len else {
+        if start < 1 {
+            start = 1;
+        }
+        if start > n {
+            return String::new();
+        }
+        return chars[(start as usize) - 1..].iter().collect();
+    };
+    if start < 1 {
+        len = len.saturating_sub(1i64.saturating_sub(start));
+        start = 1;
+    }
+    if len < 0 {
+        let end = start;
+        let begin = (start.saturating_add(len)).max(1);
+        if end <= begin || begin > n {
+            return String::new();
+        }
+        let end = end.min(n + 1);
+        return chars[(begin as usize) - 1..(end as usize) - 1].iter().collect();
+    }
+    if len == 0 || start > n {
+        return String::new();
+    }
+    let from = (start as usize) - 1;
+    let take = (len as usize).min(chars.len() - from);
+    chars[from..from + take].iter().collect()
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Substr(Signature);
+
+impl ScalarUDFImpl for Substr {
+    fn name(&self) -> &str {
+        "burrmill_substr"
+    }
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        let int = |t: &DataType| {
+            if t.is_integer() || matches!(t, DataType::Decimal128(_, 0) | DataType::Null) {
+                Ok(DataType::Int64)
+            } else {
+                plan_err!("substr start and length are integers, not {t}")
+            }
+        };
+        match args {
+            [s, start] => Ok(vec![coerce_text(s), int(start)?]),
+            [s, start, len] => Ok(vec![coerce_text(s), int(start)?, int(len)?]),
+            _ => plan_err!("substr takes a string, a start, and an optional length"),
+        }
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+        let s = cast(&arrays[0], &DataType::Utf8)?;
+        let s = s.as_string::<i32>();
+        let start = arrays[1].as_primitive::<arrow::datatypes::Int64Type>();
+        let len = arrays.get(2).map(|a| a.as_primitive::<arrow::datatypes::Int64Type>());
+        let mut b = StringBuilder::new();
+        for i in 0..s.len() {
+            let Some(len) = len else {
+                if s.is_null(i) || start.is_null(i) {
+                    b.append_null();
+                } else {
+                    b.append_value(duck_substr(s.value(i), start.value(i), None));
+                }
+                continue;
+            };
+            if s.is_null(i) || start.is_null(i) || len.is_null(i) {
+                b.append_null();
+            } else {
+                b.append_value(duck_substr(s.value(i), start.value(i), Some(len.value(i))));
+            }
+        }
+        scalar_out(scalar, Arc::new(b.finish()))
+    }
+}
+
+/// `string_split(s, delim)`: an empty delimiter splits into characters (an empty string stays one
+/// empty piece), and a NULL delimiter is the string unchanged, as one element.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct StringSplit(Signature, Vec<String>);
+
+impl ScalarUDFImpl for StringSplit {
+    fn name(&self) -> &str {
+        "string_split"
+    }
+    fn aliases(&self) -> &[String] {
+        &self.1
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        match args {
+            [s, d] if s.is_null() || is_text(s) => Ok(vec![coerce_text(s), coerce_text(d)]),
+            _ => plan_err!("string_split takes a string and a delimiter"),
+        }
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))))
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+        let s = cast(&arrays[0], &DataType::Utf8)?;
+        let d = cast(&arrays[1], &DataType::Utf8)?;
+        let s = s.as_string::<i32>();
+        let d = d.as_string::<i32>();
+        let mut lists = ListBuilder::new(StringBuilder::new());
+        for i in 0..s.len() {
+            if s.is_null(i) {
+                lists.append(false);
+                continue;
+            }
+            let s = s.value(i);
+            if d.is_null(i) {
+                lists.values().append_value(s);
+            } else {
+                let delim = d.value(i);
+                if delim.is_empty() {
+                    if s.is_empty() {
+                        lists.values().append_value("");
+                    } else {
+                        for c in s.chars() {
+                            let mut buf = [0u8; 4];
+                            lists.values().append_value(c.encode_utf8(&mut buf));
+                        }
+                    }
+                } else {
+                    for part in s.split(delim) {
+                        lists.values().append_value(part);
+                    }
+                }
+            }
+            lists.append(true);
+        }
+        scalar_out(scalar, Arc::new(lists.finish()))
+    }
+}
+
+fn is_text(t: &DataType) -> bool {
+    matches!(t, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1080,5 +1248,26 @@ mod tests {
         assert_eq!(rewrite(&caps, "\\1\\1[\\0]\\\\", 1).as_deref(), Some("bb[b]\\"));
         assert_eq!(timestamp_text(1704067200_500_000, true).unwrap(), "2024-01-01 00:00:00.5+00");
         assert_eq!(timestamp_text(1704071_523_000_120, false).unwrap(), "2024-01-01 01:12:03.00012");
+        // Negative start counts from the end; a start before the first character shortens the
+        // length; a negative length runs backwards. Measured with duck-eval.
+        assert_eq!(duck_substr("abcdef", -1, Some(1)), "f");
+        assert_eq!(duck_substr("abcdef", -3, Some(2)), "de");
+        assert_eq!(duck_substr("abcdef", -10, Some(4)), "");
+        assert_eq!(duck_substr("abcdef", -2, None), "ef");
+        assert_eq!(duck_substr("ab", -3, Some(2)), "a");
+        assert_eq!(duck_substr("10", -3, Some(2)), "1");
+        assert_eq!(duck_substr("010", -3, Some(2)), "01");
+        assert_eq!(duck_substr("abc", 0, Some(2)), "a");
+        assert_eq!(duck_substr("abc", 0, None), "abc");
+        assert_eq!(duck_substr("abcdef", -10, None), "abcdef");
+        assert_eq!(duck_substr("abcdef", 5, Some(-3)), "bcd");
+        assert_eq!(duck_substr("abcdef", 1, Some(-1)), "");
+        assert_eq!(duck_substr("abcdef", 6, Some(-10)), "abcde");
+        assert_eq!(duck_substr("abcdef", -2, Some(-2)), "cd");
+        assert_eq!(duck_substr("abc", -1, Some(-1)), "b");
+        assert_eq!(duck_substr("abc", 0, Some(-1)), "");
+        assert_eq!(duck_substr("naïve", -2, Some(2)), "ve");
+        assert_eq!(duck_substr("ééé", 0, Some(2)), "é");
+        assert_eq!(duck_substr("ab", 5, Some(2)), "");
     }
 }
