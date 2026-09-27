@@ -114,10 +114,18 @@ call to both engines, serves the primary's rows, and runs the secondary afterwar
 permit. It can be built and tested with two DuckDB sessions and a planted difference before any
 Burrmill session exists.
 
-- [ ] Burrmill as a second trait implementation behind the flag, opening the same nest directory
-      read-only.
-- [ ] Every statement runs on both. Differences logged with the statement, both answers (or both
-      errors), timings and peak memory, to a file the operator can pull.
+- [x] The pairing itself (2026-09-27, nuthatch `src/engine_shadow.rs` on `pete/shadow-session`,
+      off `pete/engine-trait`): `ShadowEngine` opens a primary and a secondary session per nest;
+      `ShadowSession` forwards every catalogue call to both, serves the primary's `collect`, compares
+      the secondary's rows as a multiset, and records `Rows`, `Refusal`, `Catalogue` and `Skipped`
+      differences through a sink (the `shadow` log target by default). The shadow runs inline and is
+      skipped once the primary has used half the guard's budget; `Session::set_deadline` carries the
+      deadline in. Five tests, with a planted one-row-short secondary and a past deadline. Nothing
+      installs it yet: `engine_shadow::install` waits for the second engine.
+- [ ] Burrmill as that second engine behind the flag, opening the same nest directory read-only.
+      Blocked on the dependency decision above.
+- [ ] Peak memory beside the timings in each record, and a file sink the operator can pull, not
+      only the log.
 - [ ] Classifier for expected differences, so the log holds only the unexplained: `cold_velocity`
       DOUBLE, `/` semantics, DuckDB 1.5.x wraps (duckdb#24081), the cast-comparison bug
       (`docs/upstream/duckdb-cast-comparison-null-constant.md`), the no-ICU class.
