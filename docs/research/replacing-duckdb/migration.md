@@ -1,0 +1,144 @@
+# Migration: nuthatch from DuckDB to Burrmill
+
+Decided 2026-09-26. Gate 1 is taken as passed: parity 22/22 views byte-identical, 0.65x DuckDB
+time-weighted and 22/22 within 1.5x on the 1,925-segment nest, 241-245 MB at 989,690 groups in a
+Burrmill-only binary, and the footprint (495 MB querying test binary, 112 MB release, 4.76 GB
+target) accepted by Chief as the price of taking DuckDB's C++ out of nuthatch. Build time is not a
+win and is tracked separately in burrmill#7.
+
+This file is the working plan for phases 2 and 3 of [plan.md](plan.md). Tick items here as they
+land; the progress log carries the measurements.
+
+## The fleet this has to survive
+
+From muster, checked 2026-09-26. Every nest below serves something live.
+
+| where | nest | version | read by | roll |
+|---|---|---|---|---|
+| Helsinki | `graph-allocations-nest-next` 8107 | 3.11.0 | Lodestar `/alloc`, `/horizon`, bare path; Foghorn; kittiwake | unit edit + restart |
+| Helsinki | `graph-gns-nest-next` 8113 | 3.11.0 | Lodestar `/gns` | unit edit + restart |
+| Helsinki | `nuthatch-dips` 8104 | 3.11.0 | Lodestar `/dips` | unit edit + restart |
+| ThinkPad | `qos-reo-nest` 8124 | 3.11.0 | Helsinki `/qos` over the tailnet | unit edit + restart |
+| ThinkPad | hosted platform, `nh-*` containers and pools | image `nuthatch:3.11.0` | platform users | image tag, many nests at once |
+| ThinkPad | four Arcaidia hackathon nests | 3.6.1 | Max's dashboard | cannot roll in place (old decode registry); killswitch 2026-09-30 |
+
+Rules that follow from it:
+
+- **One nest at a time**, quiet ones first: DIPS, GNS, QoS, then alloc. The platform image last.
+- **Stopped-store tar before every roll** that changes the engine. Roll-back is the previous binary in
+  the unit plus that tar, exactly as today's runbook (`muster/runbooks.md`, "Roll a nest").
+- **Shadow mode runs on real traffic**, replayed or live, never only on fixtures. Differences are
+  classified, not hidden.
+- **The 3.12.1 fixes (#1522, #1521) roll before any engine release** so a regression can be told
+  from a pre-existing fault.
+- No user query on DuckDB in a shipped binary once cutover lands (RFC-0042 §3a).
+
+## Phase 2a: the engine trait, DuckDB the only implementation
+
+Branch `pete/engine-trait` in nuthatch. A refactor that changes no answer: every test that passes
+today passes unchanged. DuckDB reaches eleven source files, `analytics.rs` above all (connection,
+spill directory, interrupt handles, `duckdb_views()` catalogue, `ToSql` binding, allowlist walk),
+then `graft.rs`, `analytics_budget.rs`, `authored_entity_spike.rs`, `entities.rs`, `port_emit.rs`,
+`dune_views.rs`, `analytics_scalars.rs`, `seal.rs`, `entity_offchain.rs`, `entity_lower.rs`.
+
+- [x] Map every DuckDB touch point (2026-09-26). `tests/duckdb_containment.rs` already pins the
+      boundary: nine source files import the crate, no DuckDB type crosses a `pub` signature, and
+      six `pub(crate)` signatures carry one (`analytics_scalars::register`, five in `graft.rs`).
+      The engine-shaped core is small: run SQL to rows with column names, one pooled session per
+      nest with a content-hash invalidation key, a cross-thread interrupt, a memory/thread/spill
+      budget, and the JSON encoder. Everything else is DuckDB-shaped: `json_serialize_sql` ASTs
+      (security walk, reachability, graft identity, entity lowering, Dune), `EXPLAIN (FORMAT JSON)`
+      operator names for RFC-0048, `duckdb_views/tables/functions`, `read_parquet(union_by_name)`
+      with footer binding at DDL time, the `allowed_directories` sandbox, the Appender for hot rows,
+      error-text matching (`segment_vanished`, `sql_errors.rs`), the seven `vscalar` UDFs under
+      `graph`, and `version()` in graft identity.
+- [x] Define the trait. Shape settled on 2026-09-26: it speaks nuthatch's nouns, not DDL. A
+      `Session` binds a fact table from `(name, declared cols, sealed segment paths, hot rows,
+      window)`, binds offchain snapshots and labels by path, defines an authored view by
+      `(name, body)`, probes whether one segment binds, reads one file's schema, lists relations
+      and view definitions, serialises a statement to an AST (DuckDB's JSON for now), counts cold
+      scan operators for the admission bound, hands out an interrupt handle, and collects rows to
+      JSON under a row and byte cap with the bind/execute failure split `Attempt` depends on. Flat
+      files `src/engine.rs` and `src/engine_duck.rs`, because the containment scanner reads `src/`
+      flat and a subdirectory would slip past it. `analytics.rs` keeps policy (guards, text gates,
+      cache, deadline, sweep) and loses every `duckdb::` import; `engine_duck.rs` joins `KNOWN` and
+      `analytics.rs` leaves it.
+- [x] Written 2026-09-27 (nuthatch `src/engine.rs`): `Engine::{open, open_bare}` and `Session` with
+      20 methods over `serde_json::Value`, `PathBuf` and arrow `RecordBatch`, nothing generic. `Died`
+      and the interrupt handle moved with it.
+- [x] Move DuckDB behind it (`src/engine_duck.rs`, 900 lines, the code moved verbatim): the opener
+      and lockdown, the spill directory, the view DDL, the hot-row Appender, `json_serialize_sql`,
+      `EXPLAIN` and its operator names, the catalogue functions, the encoder. `Session` is implemented
+      on `duckdb::Connection` itself so tests keep their oracle connections; `DuckSession` adds the
+      spill directory's lifetime. `analytics.rs` has no `duckdb::` outside its test module.
+- [x] Every caller goes through the trait: `analytics.rs`'s public API is unchanged, so `/sql`,
+      `/q/{name}`, `/explain`, the CLI, MCP and the seeds did not move. `FoldBinder` carries a
+      `graft::Parser` for the parser role, which stays DuckDB's until phase 2 proper.
+- [ ] The catalogue questions answered from `views/*.sql` and the registry where they can be. Not
+      done: `has_relation` and `view_definitions` are trait methods the Burrmill session will answer
+      from its own catalogue in 2b.
+- [x] `tests/duckdb_containment.rs` passes with its pinned count still six: `engine_duck.rs` joins
+      the known sites, three DuckDB-only tests moved into it, no new connection-typed `pub(crate)`
+      signature.
+- [x] Suite green on 2026-09-27: `cargo test --locked` as CI runs it, 1,836 passed and 0 failed
+      across ten test binaries; with `folds`, analytics and engine_duck 124/124; `cargo fmt --check`
+      and `cargo clippy --all-targets -D warnings` clean on both feature sets. No test changed except
+      where it named a moved function. Uncommitted on `pete/engine-trait`.
+- [ ] Release as an ordinary nuthatch release; roll it as one. Nothing in it is new behaviour.
+
+## Phase 2b: shadow mode
+
+Feature flag `shadow-burrmill`, off in release builds by default. Burrmill answers beside DuckDB;
+DuckDB is served. It carries two engines and two Arrows, so the period is short.
+
+- [ ] Burrmill as a second trait implementation behind the flag, opening the same nest directory
+      read-only.
+- [ ] Every statement runs on both. Differences logged with the statement, both answers (or both
+      errors), timings and peak memory, to a file the operator can pull.
+- [ ] Classifier for expected differences, so the log holds only the unexplained: `cold_velocity`
+      DOUBLE, `/` semantics, DuckDB 1.5.x wraps (duckdb#24081), the cast-comparison bug
+      (`docs/upstream/duckdb-cast-comparison-null-constant.md`), the no-ICU class.
+- [ ] Shadow never changes the served answer, its latency budget or its memory accounting: it runs
+      after the DuckDB answer is sent, under its own permit, and is dropped if the guard is near.
+- [ ] Replay harness: the dashboard's real statements against a ThinkPad copy of the allocations
+      store (`~/1165-corpus`), the platform's against a pool copy.
+- [ ] Shadow on the ThinkPad copies first. Then Helsinki DIPS, then GNS, each for a release cycle.
+- [ ] Concurrency sweep on the DataFusion path at 32 clients on the nest it will serve (plan risk).
+- [ ] Joins and cancellation: a per-query timeout that drops the stream at the 30 s guard, since
+      DataFusion joins do not yield (#19358). Test that a cancelled join frees its memory.
+
+**Gate 2** (all four, or no cutover):
+
+- [ ] A release cycle of real nest traffic with zero unexplained differences.
+- [ ] p99 within the `/sql` budget (30 s, 2 permits) on every shadowed nest.
+- [ ] Memory within the RFC-0047 envelope with both engines resident, and Burrmill alone under the
+      nest's `MemoryHigh`.
+- [ ] `burrmill::inspect::reach` at least as strict as `json_serialize_sql` on the security corpus
+      (`reach-parity` 38/46 identical, 8 stricter, 0 looser today; the 8 documented).
+
+## Phase 3a: cutover
+
+- [ ] Burrmill the default engine; DuckDB a dev-dependency oracle only, gone from the shipped binary.
+- [ ] The parser role (`reach`, graft canonical form, entity gate, Dune, lowering) off
+      `json_serialize_sql`.
+- [ ] `NUTHATCH_ANALYTICS_MEMORY_LIMIT`, `NUTHATCH_SQL_MAX_CONCURRENCY` and the spill settings keep
+      their names and meanings on the new engine.
+- [ ] Docker image built without a C++ toolchain; image size recorded.
+- [ ] Roll: stopped-store tar, then DIPS. Watch a day. GNS. QoS. Alloc, with Lodestar's crons watched
+      through one full cycle. Platform image last, pools first, then per-nest containers.
+- [ ] Roll-back rehearsed once on the ThinkPad before the first Helsinki roll.
+
+## Phase 3b: removal
+
+- [ ] One clean release on Burrmill across the fleet.
+- [ ] `duckdb` out of `Cargo.toml`, `deny.toml` and the Dockerfile. The generated corpus, the `.slt`
+      files and the reference oracle stay as the regression suite.
+- [ ] Footprint and build time re-measured on nuthatch itself (burrmill#7's consumer half,
+      nuthatch#1428).
+- [ ] muster updated: versions, the runbook's roll and roll-back, and the `.duckdb/` line under
+      "Nests".
+
+## Not in this plan
+
+- Hackathon nests: retire on schedule, never migrate.
+- DataFusion as a cold-path fallback, JIT, format changes, crates.io (ROADMAP, "Not on this roadmap").

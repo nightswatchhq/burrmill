@@ -1,190 +1,246 @@
 # Burrmill
 
-**SQL over sealed Parquet segments plus a live tip, with exact integer arithmetic and
-refuse-on-overflow, faster than DuckDB on the queries an indexer actually runs. One binary, nothing
-to configure.**
+**SQL over sealed Parquet segments plus a live tip, in DuckDB's dialect, with exact integer
+arithmetic that refuses rather than wraps. Faster than DuckDB on the queries an indexer actually
+runs, at a third of the memory, in one Rust binary with no C++ in it.**
 
-Status: **slice 1 of [RFC-0044](docs/rfc/RFC-0044-burrmill.md) gate passed; the seam, n-table folds
-and serving work have landed since** (see [ROADMAP.md](ROADMAP.md)). One owned operator family, the
-allowlist, a generated corpus against two oracles, and a head-to-head harness against both
-incumbents. Not yet usable as a general query engine. Replacing DuckDB inside nuthatch is
-investigated in [docs/research/replacing-duckdb](docs/research/replacing-duckdb/README.md);
-phase 0 (footprint) measured 2026-09-17 and failed burrmill#1.
-
-The gate is "≤1.0x DuckDB at exact parity under 256 MB peak RSS", and both legs are met **at eight
-threads per query, with all three engines held to the same budget**: 0.38-0.87x across fourteen
-configurations with parity verified on every one, and 210 MB at 989,690 groups. The parallelism is
-part of the claim rather than a footnote, because the same binary measures 145 MB on one thread and
-340 on thirty-two, and a budget that depends on the host's core count is not a budget.
+Status, 2026-09-26: **Gate 1 of [RFC-0044 Amendment 2](docs/rfc/RFC-0044-burrmill.md) is taken as passed, and the
+migration of nuthatch from DuckDB to Burrmill is decided.** Every authored view of a real production
+nest is byte-identical to DuckDB's answer, the set runs at 0.65x DuckDB's time, the memory gate
+passes as nuthatch would run it, and the larger build footprint has been accepted as the price of
+taking DuckDB's C++ out of nuthatch. The plan with its tick lists is
+[docs/research/replacing-duckdb/migration.md](docs/research/replacing-duckdb/migration.md); the
+measurements behind every number below are in [docs/progress-log.md](docs/progress-log.md), newest
+first, with transcripts under [docs/bench/](docs/bench/). Nothing in nuthatch runs on Burrmill yet:
+that is phase 2, and it started on 2026-09-26.
 
 ## What it is
 
-A query engine-*layer*. Burrmill owns the semantics **and** the execution of a deliberately small
-admitted subset of SQL - the shapes a blockchain indexer runs on its hot path - all the way down to
-the vectorised operator. It rents Arrow for the in-memory format and its kernels, and parquet-rs for
-decode, permanently and without embarrassment: nobody solo-maintains a better SIMD kernel library,
-and there is no evidence that trying would pay.
+Two layers, one crate.
 
-It is not a general database. It needs to be faster than DuckDB on *these* shapes over *this*
-layout, and honest about everything else.
+**The engine** (`burrmill::Engine`, feature `datafusion`) is DataFusion 55 as the host planner and
+executor, with Burrmill owning the parts DataFusion gets wrong for an indexer:
+
+- **`CheckedArithmetic`**: every sum, product and cast in a plan is rewritten to refuse on overflow
+  instead of wrapping, exact through CTEs, joins and windows, `TRY_CAST` tainted and its sums made
+  exact through unions and negation (`tests/df_checked.rs`).
+- **DuckDB's dialect**: authored views are DuckDB SQL and stay that way. Integer literals are fitted
+  as DuckDB fits them (`UBIGINT - 1` stays `UBIGINT`), casts round as DuckDB's do (half to even from a
+  float, half away from a decimal), `DECIMAL` to `DOUBLE` reproduces two DuckDB roundings that arrow
+  does correctly, `HUGEINT` is `DECIMAL(38,0)`, `list_reduce` is DuckDB's, list comprehensions and
+  `IS DISTINCT FROM` parse as DuckDB parses them, and identifiers resolve without case.
+- **Plan shapes DataFusion lacks**: a range join for `x >= start AND x <= until` (DataFusion runs it
+  as a nested loop), top-per-group, a distinct split, shared repeated subqueries, DuckDB's
+  `MoveConstants`, correlated subqueries decorrelated by key, and repartitions removed where the
+  scans beneath read under 4 MiB.
+- **`FoldSubstitution`**: where a plan contains the signed-union `GROUP BY` an indexer's balance
+  rebuilds are made of, the owned operator below is swapped in, provably equal, visible in `EXPLAIN`.
+- **A catalogue that knows the nest and nothing else**: `Engine::open_nest` reads the seal manifest,
+  offers `_dec` and `_overflow` beside every wide column as nuthatch does, and registers no table
+  factory and no file function. An unconfigured DataFusion `SessionContext` will read `/etc/hosts`.
+
+**The operator** (`burrmill::Burrmill`, the default build) is the vectorised partitioned fold that
+the RFC began with: arrow for the format and kernels, parquet-rs for decode, checked `i128`
+arithmetic, eight threads per query, a FIFO admission gate. It runs alone for the shapes it admits
+and inside the engine's plans for everything else.
+
+**The parser role** (`burrmill::inspect::reach`, default build) is nuthatch's allowlist and
+reachability rules on sqlparser's AST, failing closed.
 
 ## The three claims
 
-**Faster.** On a real nest's own authored views — the actual queries, not a synthetic stand-in —
-**0.80x, 0.95x and 1.01x** DuckDB over 6,000 to 9,745 sealed segments, parity verified, same files
-and same eight threads (`burrmill-bench views`). That test did not exist until recently and the
-claim did not survive it first time: re-reading immutable Parquet footers cost 57-93 ms of every
-query and the ratios were 1.20-1.38x until they were cached. **Caveat (roadmap 4.2c):** that run did
-not give DuckDB its own `parquet_metadata_cache`, which is off by default and worth about 9% on the
-curation fold, so these ratios flatter Burrmill until they are re-run with it set.
+**Faster.** Measured 2026-09-24 and 25 on a 32-core ThinkPad against a 1,925-segment copy of the
+graph-allocations nest that Lodestar reads in production, DuckDB set up exactly as nuthatch sets it
+up, every view's whole output compared as a multiset of nuthatch-encoded rows before any timing was
+printed (`burrmill-bench engine-views`, `docs/bench/phase1b-thinkpad.txt`,
+`docs/bench/rangejoin-thinkpad.txt`):
 
-On the synthetic sweep: 0.38-0.87x DuckDB across fourteen configurations, parity verified on every one, on a
-twelve-column nest-shaped fixture with every engine on the same eight threads. On the same runs
-general DataFusion measures 3.6x DuckDB at ten thousand segments — the many-small-files layout a nest
-actually produces — while beating it at high cardinality. **That 3.6x is DataFusion's defaults**
-(`register_parquet`): plan-time statistics, a footer cache too small for the table, and a per-file
-`head` on every scan. On the real authored views, with a provider that knows its files and a cache
-that fits, DataFusion is 0.71x DuckDB overall and 0.55x on the worst six (`burrmill-bench df-views`,
-`docs/research/replacing-duckdb/04-real-views-on-datafusion.md`). The synthetic sweep has not been
-re-run with those remedies.
-`cargo run -p burrmill-bench --release` re-runs it, parity first.
+| | DuckDB | Burrmill |
+|---|---:|---:|
+| authored views byte-identical | | **22 of 22** |
+| time-weighted over the 22 | 39.6 s | **0.65x** |
+| views within 1.5x of DuckDB | | **22 of 22** |
+| worst view | | `lodestar_disputes`, 8 rows, 0.80x |
 
-**Exact.** Integer overflow returns `BurrmillError::Overflow`, never a wrapped number. Said precisely,
-because a generated corpus made the difference visible: it refuses when an intermediate **partial
-sum** leaves `i128`, and the answer decides. A party whose values are `MAX, +1, -1` sums to exactly
-`MAX` and is returned; an entry whose running total wanders outside the range carries a high word
-until the rows are produced. It costs nothing when nothing overflows, which is always. DuckDB still
-refuses that case, in both directions, so the two engines disagree about which queries are
-*answerable* even where neither returns a wrong number. DataFusion's
-integer arithmetic silently wraps - `SELECT 10000000000 * 10000000000` yields `7766279631452241920`
-where Postgres, Trino and Snowflake all raise - and as of August 2026 there is still no core config
-flag to stop it (issues #17539, #14771, #20034, all open). Worse, it is inconsistent by operation:
-`%` errors on `i32::MIN % -1` while `+` wraps on `i32::MIN + -1`.
+Later nest runs on 2026-09-26 read 0.60x to 0.66x. It was not always so: on 2026-09-24 the same
+harness measured 1.54x, with stock DataFusion at 1.81x on the same nest, and the owned plan shapes
+above are what closed it. An earlier 0.71x was measured on a 38,428-segment copy where DuckDB pays
+per file; the compacted layout is the fairer test and is the one quoted.
 
-DuckDB is better and errors on `HUGEINT` overflow, but it is **not watertight**, and the generated
-corpus found where. Credit one party with `i128::MAX` and then `1`, across two files, with two
-threads, and DuckDB returns **`i128::MIN`** for a sum whose true value is `MAX + 1`: a wrapped
-balance, silently. At one thread, or over a single file, the same query refuses correctly - so the
-check is in the single-threaded path and missing from the partial-aggregate combine, which means it
-only goes wrong once the data is large enough to parallelise. Measured on libduckdb-sys 1.10501.0,
-and still present in the 1.5.5 CLI; `cargo run -p burrmill-bench --release -- duckdb-gaps`
-reproduces it across the grid. Upstream already knows: it is
-[duckdb#24081](https://github.com/duckdb/duckdb/issues/24081), fixed on `main` by #24168 after 1.5.5
-was cut, so the claim holds for the 1.5 line and will expire with the next major release.
+Serving all 22 views to 1 to 32 concurrent clients (`burrmill-bench serve-views`,
+`docs/bench/serve-views-thinkpad.txt`): about **2x DuckDB's queries per second**, worst p99 255 to
+1,350 ms against 507 to 7,424, fairness 0.89 to 0.97 against 0.58 to 0.00, and 3.9 GB of memory
+against 15.4 at 32 clients, where DuckDB also fails under the default `ulimit -n`.
 
-Refusing, everywhere, is a guarantee neither of them offers.
+**Exact.** Integer overflow returns an error, never a wrapped number, on both layers. The owned fold
+refuses when an intermediate partial sum leaves `i128`; the engine's `CheckedArithmetic` makes the
+same promise on DataFusion's plans, where stock DataFusion silently wraps
+(`SELECT 10000000000 * 10000000000` is `7766279631452241920`, and as of August 2026 there is no core
+flag to stop it: #17539, #14771, #20034). DuckDB errors on `HUGEINT` overflow but not watertight: in
+the 1.5 line a `SUM` over two files on two threads returns `i128::MIN` for a true `MAX + 1`
+([duckdb#24081](https://github.com/duckdb/duckdb/issues/24081), fixed on `main` after 1.5.5;
+`burrmill-bench duckdb-gaps` reproduces it). The differential fuzzer also found a DuckDB wrong answer
+nobody had reported, a text comparison against a `TIMESTAMPTZ` cast dropping every row once the
+session's zone has been consulted, written up in
+[docs/upstream/](docs/upstream/duckdb-cast-comparison-null-constant.md) and not yet filed.
 
-**Closed.** Table names resolve against a positive allowlist of registered providers, and Burrmill
-registers **no file-I/O SQL functions at all** - no `read_parquet`, no `read_csv`, no `COPY TO`, no
-`getenv`. `read_parquet('/etc/passwd')` does not fail a check; it has nowhere in the grammar to
-parse to. That is a different claim from a denylist, which is the model that let DuckDB's
-`sniff_csv` keep reading the filesystem with `enable_external_access=false` set (CVE-2024-41672) and
-that made Grafana's DuckDB-backed SQL Expressions a CVSS 9.9 local file read (CVE-2024-9264).
+**Closed.** The owned path resolves table names against a positive allowlist and registers no
+file-I/O function at all: `read_parquet('/etc/passwd')` has nowhere in the grammar to parse to. The
+engine refuses anything but `SELECT` at the surface, registers no table factories, and had
+`input_file_name()` removed after a path leak (6.2). `reach` agrees with nuthatch's own walk over
+DuckDB on 38 of 46 security-corpus statements and is stricter on the other 8, never looser
+(`burrmill-bench reach-parity`).
 
-## What it does not do yet
+## How it is checked
+
+The confidence comes from running both engines on the same statements, not from reading either.
+
+- **`burrmill-bench fuzz`**: SQL drawn from a typed grammar over awkward data, run on DuckDB and on
+  the engine, answers compared as multisets. `CASES=<n> SEED=<n>`; a difference is reported with the
+  seed that reproduces it (`SEED=<n> CASES=1 PRINT=1`), and `SQL=<query>` runs one statement. It
+  found nine faults in Burrmill on its first day, three of them silent wrong answers, then a
+  DataFusion wrong answer on subqueries used as predicates, then the two DuckDB findings above. The
+  last runs: 25,000 cases on five seeds, 8,000 on four, 6,000 on three, each with no differing answer
+  (`docs/bench/fuzz.txt`).
+- **Parity harnesses**, all against DuckDB: `dialect-parity` 209/209 statements, `encode-parity`
+  17/17 (nuthatch's JSON, byte for byte), `error-parity` 14/14 (nuthatch's error classes),
+  `reach-parity` 38/46 identical and 8 stricter, `rewrite-parity <nest> <views-dir>` for a rewritten
+  view against its original.
+- **The memory gate**: `examples/hosted_fold`, the fold in a binary shaped like nuthatch after the
+  swap, **241 to 245 MB peak RSS at 989,690 groups** against the 256 MB gate, DuckDB at 572 to 598 MB
+  on the same fold (`docs/bench/memory-gate-thinkpad-2026-09-25.txt`). The bench binary reads 20 MB
+  higher because it links DuckDB and the umbrella crate as oracles, and their code pages count.
+- **The generated fold corpus** (`burrmill-bench gen`, `tests/generated_folds.rs`) and the `.slt`
+  files, which run against Burrmill in `cargo test` and against DuckDB with `burrmill-bench slt`.
+
+## What it does not do, and where it loses
 
 Said plainly, because a README that implies otherwise is the thing this project is against.
 
-- **One plan family, and no whole statements.** The signed union fold is generalised to n tables,
-  composite and computed group keys, and several `SUM`s, and every fold sub-plan in the real
-  workload now admits (8/8). But each of those folds sits inside a CTE or a join, so **0 of 65 real
-  statements** run end to end (roadmap 4.1f, `docs/bench/a4-plan-shapes.txt`). Everything else is
-  `NotAllowed`.
-- **No redb adapter yet.** The hot/cold seam exists and COR-1 holds under concurrent seal (stage 3),
-  but the only `HotTip` is in-memory. A redb-backed one needs nuthatch's hot entity encoding pinned
-  down (roadmap 3.4).
-- **A narrower value domain than DuckDB, deliberately.** Surrounding whitespace is trimmed, as DuckDB
-  does; it was silently dropping the row and returning a short balance. But DuckDB also reads
-  `1e18`, `7.0` and `1_000`, and **rounds `7.9` to 8**, and Burrmill will not guess at any of them: a
-  value that carries digits but is not a canonical integer is **refused, loudly, naming the value**.
-  Diverging out loud costs a query; diverging silently costs someone's answer, and silently agreeing
-  would mean adopting rounding into an engine whose first claim is exactness.
-  `cargo run -p burrmill-bench --release -- cast` prints the divergence table.
-- **Eight threads per query by default.** `Limits::max_threads`. Deliberate: the cores past it buy
-  6% and cost the concurrency story that is most of why a serving path wants this.
-- **It does not yet win under concurrent load, and that was expected to be the easy part.** RFC-0044
-  §3.5 reasoned that DuckDB's single-connection mutex - throughput flat from one client to
-  thirty-two, p99 29.5 ms to 7066 ms - made this the project's easiest headline. Measured: that
-  reproduces exactly for DuckDB *embedded the way nuthatch embeds it*, but embedded its own way, one
-  database with a connection per client, DuckDB reaches **171 qps at 32 clients where Burrmill
-  manages 96**, with a worst-client p99 of **423 ms against 2378 ms**, and it serves every client
-  where Burrmill *used to* starve some outright. The absence of a lock was never the whole story:
-  what replaced it is a bounded shared pool, and a pool that hands every worker to one query at a
-  time starves the queue just as a mutex does — at a twenty-second window one client completed 220
-  queries and another completed **none**.
-  
-  A FIFO admission gate (roadmap 5.3) fixed the liveness half: fairness 0.00 to **0.81**, worst-client
-  p99 **2378 ms to 601 ms**, every client served, for eight per cent of throughput. The throughput
-  half is now partly closed too (5.3a): a sharing query takes a slice of the pool rather than all of
-  it, giving 100 qps and 0.94 fairness at 32 clients, and **beating DuckDB outright at four**.
-  Burrmill wins outright below eight clients (**133-143 qps against 110** at four), is markedly fairer at every count
-  (0.89 against 0.57 at thirty-two) and has a comparable tail. It trails on raw throughput above
-  sixteen clients: 135 against 160. That gap is diagnosed and not fixed — it is utilisation rather
-  than work, since the fold costs 53 ms on one thread against DuckDB'''s implied 48, but eight threads
-  buy only 3.3x.
-  `docs/bench/serve-concurrency.txt` has the numbers;
-  `cargo run -p burrmill-bench --release -- serve <fixture>` re-runs them.
-- **No streaming.** A fold's result is materialised; it is one row per party, so this costs little
-  today and will be revisited with the async cancellation contract.
-- **No DataFusion fallback.** Deliberately not yet built. Building the fast path first is what makes
-  the go/no-go cheap.
+- **The binary is bigger and the build is not faster.** On a nuthatch-shaped consumer, same machine,
+  32 jobs (`probes/footprint6/results/burrmill.txt`): querying test binary 495 MB against DuckDB's
+  162, release binary 112 MB against 41, `target/` 4.76 GB against 3.27, clean test build 84 s
+  against 77, incremental 1.8 s against 1.1. DuckDB is one C++ archive compiled once; DataFusion is
+  dozens of crates whose generic operators are instantiated per type into every test binary. The
+  footprint is accepted; the build time is [burrmill#7](https://github.com/nightswatchhq/burrmill/issues/7).
+- **Small queries.** An eight-row view runs eighteen DataFusion operators. `lodestar_disputes` is
+  0.80x DuckDB after the small-input rule, and the worst ratio on the nest.
+- **`HUGEINT` stops at 38 digits.** `DECIMAL(38,0)` reaches 10^38 - 1 where DuckDB's reaches
+  2^127 - 1. A value between refuses; it does not answer wrongly. No real nest has produced one.
+- **An integer compared with a boolean** (`1 = false`) casts in DuckDB and refuses here.
+- **What DuckDB computes and Burrmill refuses, by design**: a `SUM` over a `TRY_CAST` that DuckDB
+  answers by dropping what did not fit. The fuzzer counts these separately and they are allowed.
+- **What Burrmill computes and DuckDB refuses**: `TIMESTAMPTZ + INTERVAL` and a `TIMESTAMPTZ` to
+  `DATE` cast, which nuthatch's DuckDB, built without ICU, will not do.
+- **Four of DuckDB's six roles in nuthatch are still DuckDB's.** The executor is replaced and the
+  parser role partway; the canonical plan for grafting identity, entity lowering, the DuneSQL
+  translation and the `entities.toml` function vocabulary still ask DuckDB's parser. They move in
+  phase 2.
+- **The owned operator alone runs 0 of 65 real statements.** Every fold sub-plan in the workload
+  admits (8/8), but each sits inside a CTE or a join, so whole statements run on the engine.
+- **No redb `HotTip`.** The hot/cold seam holds under concurrent seal (COR-1), but the only tip is
+  in-memory (roadmap 3.4).
+- **DataFusion joins do not yield to cancellation** (apache/datafusion#19358). A statement with a join
+  cannot promise the one-morsel cancellation bound; the mitigation is a per-query timeout at
+  nuthatch's 30 s guard.
+- **4.2c is still owed**: the earliest `views` bench gave DuckDB no `parquet_metadata_cache`, worth
+  about 9% on the curation fold. The Gate 1 harnesses set DuckDB up as nuthatch does; the old
+  synthetic sweep has not been re-run with it.
+- **The seven rewritten views** live on the nest's `pete/portable-views` branch on the ThinkPad, not
+  pushed. Two more (`lodestar_delegator_stakes`, `lodestar_delegators`) run unchanged.
 
 ## Layout
 
-    crates/burrmill        the library. Pure Rust: arrow, parquet, rustc-hash, rayon, sqlparser.
-                           No DuckDB. No DataFusion. No C++.
-    crates/burrmill-bench  publish = false. Where the oracles live, so they can never reach the
-                           shipped graph.
+    crates/burrmill          the library. Default build: arrow, parquet, rustc-hash, rayon,
+                             hashbrown, sqlparser. Feature `datafusion` adds the engine: about
+                             sixteen datafusion-* component crates pinned =55.0.0, tokio,
+                             object_store. No DuckDB. No C++. `src/df/` holds the engine and its
+                             rules, one file each.
+    crates/burrmill/examples hosted_fold: the memory gate in a Burrmill-only binary.
+    crates/burrmill-bench    publish = false. Both oracles (DuckDB, the umbrella DataFusion) live
+                             here, so neither can reach the shipped graph. Note it lends the crate
+                             DataFusion features by unification; test a consumer on burrmill alone.
+    docs/progress-log.md     every measurement, newest first
+    docs/research/replacing-duckdb  the investigations, plan.md, and migration.md with the tick lists
+    docs/upstream            bugs found in DuckDB, DataFusion and nuthatch, drafted for filing
+    docs/bench               transcripts the numbers above are quoted from
 
-## Running the gate
+## Running Gate 1
 
 ```sh
-# Synthetic fixture, nest-shaped (bimodal segment sizes), parity checked before any timing.
-ROWS=2000000 SEGMENTS=100 REPEATS=5 cargo run -p burrmill-bench --release
+# Every authored view of a real nest on both engines: parity as a multiset of nuthatch JSON rows,
+# then warm timings. Read-only; nothing is written to the nest.
+cargo run -p burrmill-bench --release -- engine-views /path/to/nest
 
-# The high-cardinality gate - where DataFusion's two-phase aggregation is weakest.
-ROWS=2000000 SEGMENTS=100 ADDRS=1000000 REPEATS=5 cargo run -p burrmill-bench --release
+# One view's plan on both engines, or one SQL file.
+cargo run -p burrmill-bench --release -- engine-analyze /path/to/nest lodestar_epochs
+cargo run -p burrmill-bench --release -- engine-sql /path/to/nest query.sql
 
-# Prove the parity guard actually refuses. No RESULT line must be printed.
-BREAK_PARITY=1 cargo run -p burrmill-bench --release
+# A rewritten view against its original, both on DuckDB, then Burrmill against DuckDB.
+cargo run -p burrmill-bench --release -- rewrite-parity /path/to/nest /path/to/views
 
-# Page-cache order is a confound; a ratio that survives both orderings is about the engines.
-ORDER=burrmill_first cargo run -p burrmill-bench --release
+# All 22 views served to 1, 4, 16 and 32 clients on both engines.
+cargo run -p burrmill-bench --release -- serve-views /path/to/nest
 
-# Against real sealed segments, read-only. A ratio that is mostly fixed cost is not printed as a
-# number; the field reads UNSAFE_fixed_duck=NNpct instead. See docs/bench/method.md.
-cargo run -p burrmill-bench --release -- inspect /path/to/nest/segments
-cargo run -p burrmill-bench --release -- explain /path/to/nest/segments
-cargo run -p burrmill-bench --release -- nest /path/to/nest/segments <table-prefix>
+# The memory gate, as nuthatch would run it (Linux, for the /proc split).
+cargo run -p burrmill --release --example hosted_fold --features datafusion /path/to/nest/segments
+
+# Stock DataFusion on the same nest, the control.
+cargo run -p burrmill-bench --release -- df-views /path/to/nest
 ```
+
+Set `TZ=UTC` in the environment before any of these, as nuthatch's hosts do; the harnesses take
+DuckDB's zone from it and never `SET TimeZone`, because doing so switches on the DuckDB bug above.
 
 ## Checking it is right
 
-Correctness has its own commands, and they are not the benchmark. `cargo test` runs the fast half of
-this on every invocation.
-
 ```sh
-# Generated cases against DuckDB: answers, refusals, and the ones where the two disagree about
-# whether the query is answerable at all.
-CASES=3000 cargo run -p burrmill-bench --release -- gen
+# Differential fuzzing against DuckDB. A difference prints the seed that reproduces it.
+CASES=5000 SEED=7 cargo run -p burrmill-bench --release -- fuzz
+SEED=7 CASES=1 PRINT=1 cargo run -p burrmill-bench --release -- fuzz
+SQL="SELECT substr('10', -3, 2)" cargo run -p burrmill-bench --release -- fuzz
 
-# The hand-computed .slt corpus, pointed at the other engine. It runs against Burrmill in `cargo
-# test`; this is the same files against DuckDB, which is the reason for using a standard format.
+# The parity harnesses.
+cargo run -p burrmill-bench --release -- dialect-parity
+cargo run -p burrmill-bench --release -- encode-parity
+cargo run -p burrmill-bench --release -- error-parity
+cargo run -p burrmill-bench --release -- reach-parity
+
+# Generated fold cases against DuckDB, and the .slt corpus pointed at DuckDB.
+CASES=3000 cargo run -p burrmill-bench --release -- gen
 cargo run -p burrmill-bench --release -- slt
 
-# Where Burrmill's TRY_CAST and DuckDB's disagree, printed rather than assumed.
+# Where the two engines' casts disagree, printed; DuckDB's HUGEINT wrap, reproduced.
 cargo run -p burrmill-bench --release -- cast
-
-# DuckDB silently wrapping a HUGEINT sum, reproduced across threads and file counts.
 cargo run -p burrmill-bench --release -- duckdb-gaps
 
-# The seal-layout canary against a real nest: naming, schema, and every table opening.
+# The seal-layout canary against a real nest; more generated cases; one case again.
 BURRMILL_NEST=/path/to/nest/segments cargo test --test seal_layout -- --nocapture
-
-# More generated cases than the default, or one exact case again.
 BURRMILL_CASES=5000 cargo test --test generated_folds
 BURRMILL_SEED=1234 cargo test --test generated_folds
 ```
+
+`cargo test` runs the fast half of this on every invocation.
+
+## Running the slice 1 gate
+
+The owned operator's original gate, "at most 1.0x DuckDB at exact parity under 256 MB peak RSS at
+eight threads", still runs and still passes: 0.38 to 0.87x across fourteen configurations, 199 to
+218 MB at 989,690 groups depending on the stage.
+
+```sh
+ROWS=2000000 SEGMENTS=100 REPEATS=5 cargo run -p burrmill-bench --release
+ROWS=2000000 SEGMENTS=100 ADDRS=1000000 REPEATS=5 cargo run -p burrmill-bench --release
+BREAK_PARITY=1 cargo run -p burrmill-bench --release      # the guard must refuse; no RESULT line
+ORDER=burrmill_first cargo run -p burrmill-bench --release # page-cache order is a confound
+cargo run -p burrmill-bench --release -- inspect /path/to/nest/segments
+cargo run -p burrmill-bench --release -- explain /path/to/nest/segments
+cargo run -p burrmill-bench --release -- nest /path/to/nest/segments <table-prefix>
+cargo run -p burrmill-bench --release -- serve <fixture-dir>
+```
+
+A real-nest ratio that is mostly fixed cost is not printed as a number; the field reads
+`UNSAFE_fixed_duck=NNpct` instead (`docs/bench/method.md`).
 
 ## Licence
 

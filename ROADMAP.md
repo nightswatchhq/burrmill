@@ -131,11 +131,13 @@ work is not now sitting on an assumption.
 
 ---
 
-## Stage 6 — replacing DuckDB in nuthatch · **PLANNED 2026-09-16**
+## Stage 6 — replacing DuckDB in nuthatch · **GATE 1 TAKEN AS PASSED, MIGRATION DECIDED 2026-09-26**
 
 Chief's direction, RFC-0044 Amendment 2. The design, gates and risks are in
 `docs/research/replacing-duckdb/plan.md`. The evidence is investigations 01-05 in the same
-directory. Nothing in nuthatch changes until Chief says so.
+directory. Phases 2 and 3, in nuthatch, are tracked with tick lists in
+`docs/research/replacing-duckdb/migration.md`; phase 2a (the engine trait, DuckDB behind it) began
+on 2026-09-26 on nuthatch branch `pete/engine-trait`.
 
 | # | Work | Done when |
 |---|---|---|
@@ -166,7 +168,8 @@ The memory leg passes as nuthatch would run it: **241-245 MB at 989,690 groups**
 binary (6.6d).
 The footprint leg, re-measured on Burrmill itself (6.0b): **495 MB querying test binary, 112 MB
 release, 4.76 GB target**, 7-15% over 6.0's stand-in, all of it traced to features added since.
-That is Chief's trade to accept or refuse.
+**Accepted by Chief on 2026-09-26** as the price of taking DuckDB's C++ out of nuthatch; build time
+is not a win and is tracked as burrmill#7.
 
 **Gate 1:**
 
