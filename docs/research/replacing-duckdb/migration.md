@@ -170,7 +170,9 @@ Burrmill session exists.
 - [ ] Memory within the RFC-0047 envelope with both engines resident, and Burrmill alone under the
       nest's `MemoryHigh`.
 - [ ] `burrmill::inspect::reach` at least as strict as `json_serialize_sql` on the security corpus
-      (`reach-parity` 38/46 identical, 8 stricter, 0 looser today; the 8 documented).
+      (`reach-parity` 38/46 identical, 8 stricter, 0 looser today; the 8 documented). Measured live
+      since 2026-09-27: the shadow runs both walks on every statement and counts `ParserLooser`;
+      run g over the 22 views and 81 dashboard statements had none of either kind.
 
 ## Phase 3a: cutover
 

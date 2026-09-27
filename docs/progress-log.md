@@ -39,6 +39,11 @@ functions with ids resolved from the nest (`docs/bench/shadow-replay-thinkpad-20
   unexplained** (`shadow-replay-thinkpad-2026-09-27e.txt`).
 - **f.** The same with Burrmill's cancel token as the shadow's interrupt handle and RSS in each
   record: four records, nothing unexplained (`shadow-replay-thinkpad-2026-09-27f.txt`).
+- **g.** The parser role in shadow too: the security walk moved behind `Session::reach` (DuckDB's
+  AST walk unchanged), Burrmill's `inspect::reach` beside it, a walk that reaches less or admits
+  what DuckDB refused counted as `ParserLooser`. Over the 22 views and 81 statements, every one
+  walked by both: **no parser disagreement of either kind**, the same four records as before, and
+  the JSON-lines sink written (`shadow-replay-thinkpad-2026-09-27g.txt`, `shadow-2026-09-27g.jsonl`).
 
 The shadow runs inline and is skipped once the primary has used half the guard's budget, so a
 shadowed request pays for both engines; Gate 2's p99 is measured with it on. Burrmill's session has
