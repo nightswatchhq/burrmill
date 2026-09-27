@@ -19,6 +19,7 @@ use datafusion_common::{DFSchema, Result as DFResult, TableReference, plan_dataf
 use datafusion_execution::TaskContext;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::config::SessionConfig;
+use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
@@ -75,18 +76,29 @@ impl std::fmt::Debug for MiniSession {
 }
 
 impl MiniSession {
-    pub fn new(threads: usize, fold: FoldTables) -> DFResult<Self> {
+    pub fn new(threads: usize, fold: FoldTables, memory: Option<usize>) -> DFResult<Self> {
         let mut config = SessionConfig::new()
             .with_target_partitions(threads.max(1))
             .with_collect_statistics(false);
         config.options_mut().sql_parser.enable_ident_normalization = false;
         // DuckDB types `1.5` as DECIMAL(2,1), and nuthatch prints a DECIMAL as a string.
         config.options_mut().sql_parser.parse_float_as_decimal = true;
-        let runtime = RuntimeEnvBuilder::new()
-            .with_cache_manager(
+        let runtime = match memory {
+            None => RuntimeEnvBuilder::new().with_cache_manager(
                 CacheManagerConfig::default().with_metadata_cache_limit(1024 * 1024 * 1024),
-            )
-            .build_arc()?;
+            ),
+            // The footer cache sits outside the pool, so it takes an eighth of the bound rather
+            // than adding to it. No spilling: over the bound is a refusal, never a disk.
+            Some(bytes) => RuntimeEnvBuilder::new()
+                .with_cache_manager(
+                    CacheManagerConfig::default().with_metadata_cache_limit(bytes / 8),
+                )
+                .with_memory_limit(bytes - bytes / 8, 1.0)
+                .with_disk_manager_builder(
+                    DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+                ),
+        }
+        .build_arc()?;
         // Under every name DataFusion gives a function: `length` is `character_length`'s, and
         // registering primary names alone refused it.
         let mut scalar = HashMap::new();

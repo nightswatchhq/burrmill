@@ -72,7 +72,7 @@ impl Engine {
                 segments.display()
             )));
         }
-        Self::from_tables(tables, Limits::default().max_threads)
+        Self::from_tables(tables, Limits::default().max_threads, None)
     }
 
     /// Open a nest root (`segments/` plus optional `schema.json` for unsealed and `_dec`).
@@ -88,10 +88,14 @@ impl Engine {
                 root.display()
             )));
         }
-        Self::from_tables(tables, Limits::default().max_threads)
+        Self::from_tables(tables, Limits::default().max_threads, None)
     }
 
-    fn from_tables(tables: Vec<NestTable>, threads: usize) -> Result<Self> {
+    fn from_tables(
+        tables: Vec<NestTable>,
+        threads: usize,
+        memory: Option<usize>,
+    ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -118,7 +122,7 @@ impl Engine {
             tables: Arc::new(fold_tables),
             pool: Arc::new(pool),
         };
-        let mut session = MiniSession::new(threads, fold).map_err(df_err)?;
+        let mut session = MiniSession::new(threads, fold, memory).map_err(df_err)?;
         let groups = threads.max(1);
         let cancel = crate::CancelToken::new();
         for t in &tables {

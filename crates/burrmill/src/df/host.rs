@@ -41,7 +41,14 @@ fn hidden(name: &str) -> bool {
 impl Engine {
     /// No tables until the host registers them.
     pub fn open_empty() -> Result<Self> {
-        Self::from_tables(Vec::new(), Limits::default().max_threads)
+        Self::from_tables(Vec::new(), Limits::default().max_threads, None)
+    }
+
+    /// As `open_empty`, with every statement's working memory and the footer cache held under
+    /// `bytes` together, as DuckDB's `max_memory` holds a nest's session. A statement that needs
+    /// more is refused; nothing spills.
+    pub fn open_empty_within(bytes: usize) -> Result<Self> {
+        Self::from_tables(Vec::new(), Limits::default().max_threads, Some(bytes))
     }
 
     /// Define `name` over `files`, unioned by name with `hot` (unsealed rows as nuthatch keeps

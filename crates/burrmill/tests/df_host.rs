@@ -192,3 +192,28 @@ fn rows_become_a_text_table() {
         ]
     );
 }
+
+#[test]
+fn a_bounded_engine_refuses_what_an_unbounded_one_answers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let who: Vec<String> = (0..200_000).map(|i| format!("0x{i:040x}")).collect();
+    let data: Vec<(u64, &str, &str)> = who.iter().map(|w| (1, w.as_str(), "1")).collect();
+    let seg = segment(tmp.path(), 1, &data);
+    let sql = "SELECT who, count(*) AS n FROM t GROUP BY who ORDER BY who";
+
+    let mut free = Engine::open_empty().unwrap();
+    free.register_facts("t", &declared(), vec![seg.clone()], &[], (None, None))
+        .unwrap();
+    assert_eq!(rows(&free, sql).len(), 200_000);
+
+    let mut bounded = Engine::open_empty_within(4 << 20).unwrap();
+    bounded
+        .register_facts("t", &declared(), vec![seg], &[], (None, None))
+        .unwrap();
+    let err = bounded.sql(sql).unwrap_err().to_string();
+    assert!(err.contains("Resources exhausted"), "{err}");
+    assert_eq!(
+        rows(&bounded, "SELECT count(*) AS n FROM t"),
+        vec![json!({"n": 200000})]
+    );
+}
