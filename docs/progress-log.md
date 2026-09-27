@@ -4,6 +4,19 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The nest re-run, with everything since 25 September in — 2026-09-27
+
+`engine-views` over `~/scratch/gan-portable` on the thinkpad (1,925 segments, the rewritten views),
+`TZ=UTC`, at `nice 10` beside the hosted platform and the QoS nest, which is not how the 25th was
+measured and is noted for that reason. **22/22 views identical, both zero-row checks agree, and
+41,380 ms DuckDB against 26,194 ms Burrmill: 0.63x time-weighted, 22/22 within 1.5x.** The worst
+is `lodestar_disputes` at 1.11x (10 ms against 9); the best `lodestar_deployments` at 0.14x (165
+against 1,173). `lodestar_indexer_ledger`, the largest at 1.68 M rows, is 0.86x. The two pinned
+checks still disagree with their August fixtures on both engines, as before. Transcript:
+`docs/bench/engine-views-thinkpad-2026-09-27.txt`.
+
+---
+
 ## List comprehensions, which the views still write — 2026-09-26
 
 `lodestar_network`, `lodestar_params` and the indexer-deployment daily view fold a hex word with

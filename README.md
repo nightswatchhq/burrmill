@@ -62,7 +62,8 @@ printed (`burrmill-bench engine-views`, `docs/bench/phase1b-thinkpad.txt`,
 | views within 1.5x of DuckDB | | **22 of 22** |
 | worst view | | `lodestar_disputes`, 8 rows, 0.80x |
 
-Later nest runs on 2026-09-26 read 0.60x to 0.66x. It was not always so: on 2026-09-24 the same
+Re-run on 2026-09-27 with everything since in: 22 of 22 identical, **0.63x**, 22 of 22 within 1.5x
+(`docs/bench/engine-views-thinkpad-2026-09-27.txt`). It was not always so: on 2026-09-24 the same
 harness measured 1.54x, with stock DataFusion at 1.81x on the same nest, and the owned plan shapes
 above are what closed it. An earlier 0.71x was measured on a 38,428-segment copy where DuckDB pays
 per file; the compacted layout is the fairer test and is the one quoted.
