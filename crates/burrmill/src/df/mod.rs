@@ -18,6 +18,7 @@ use crate::limits::Limits;
 
 mod catalog;
 pub mod encode;
+mod host;
 mod errors;
 mod checked;
 mod constants;
@@ -51,6 +52,8 @@ use session::MiniSession;
 pub struct Engine {
     rt: tokio::runtime::Runtime,
     session: MiniSession,
+    /// Partitions for a table the host registers later (`host.rs`); the ones opened here use it too.
+    threads: usize,
     /// First-come-first-served admission, as on the owned path (roadmap 5.3). Without it, 32
     /// clients sharing one runtime starved one of them outright (roadmap 6.8).
     gate: crate::gate::Gate,
@@ -135,7 +138,12 @@ impl Engine {
             .build_information_schema(|n| n.ends_with("__raw"))
             .map_err(df_err)?;
         let gate = crate::gate::Gate::new(crate::default_width(threads.max(1)));
-        Ok(Self { rt, session, gate })
+        Ok(Self {
+            rt,
+            session,
+            threads: threads.max(1),
+            gate,
+        })
     }
 
     /// Define a view over the nest's tables and earlier views, as nuthatch defines its authored

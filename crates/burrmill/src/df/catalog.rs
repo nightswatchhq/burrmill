@@ -20,7 +20,7 @@ use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 
-fn view_schema(schema: &Schema) -> Schema {
+pub(super) fn view_schema(schema: &Schema) -> Schema {
     let fields: Vec<Arc<Field>> = schema
         .fields()
         .iter()
