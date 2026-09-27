@@ -151,7 +151,7 @@ impl Gen<'_> {
                 _ => self.one(&cols).to_string(),
             };
         }
-        match self.r.below(26) {
+        match self.r.below(27) {
             // Unsigned targets take a magnitude: a negative there is DuckDB's error, not a test of the cast.
             20 => match self.one(&["INTEGER", "SMALLINT", "UBIGINT", "HUGEINT", "UINTEGER"]) {
                 t @ ("UBIGINT" | "UINTEGER") => format!("CAST(abs({}) AS {t})", self.int(sc, d - 1)),
@@ -200,6 +200,16 @@ impl Gen<'_> {
                 self.r.below(20),
                 self.r.below(20)
             ),
+            // The lodestar hex fold: a comprehension over the characters, reduced base 16.
+            26 => {
+                let mut hex = String::new();
+                for _ in 0..1 + self.r.below(4) {
+                    hex.push_str(self.one(&["0", "1", "a", "b", "f", "e"]));
+                }
+                format!(
+                    "list_reduce([CAST(strpos('0123456789abcdef', c) - 1 AS HUGEINT) FOR c IN string_split('{hex}', '')], lambda acc, d: acc * 16 + d)"
+                )
+            }
             _ => format!("date_diff('{}', {}, {})", self.one(&["day", "hour", "month"]), self.time(sc, d - 1), self.time(sc, d - 1)),
         }
     }
@@ -230,7 +240,7 @@ impl Gen<'_> {
                 _ => self.one(&cols).to_string(),
             };
         }
-        match self.r.below(26) {
+        match self.r.below(27) {
             0 => format!("lower({})", self.text(sc, d - 1)),
             1 => format!("upper({})", self.text(sc, d - 1)),
             2 => format!("({} || {})", self.text(sc, d - 1), self.text(sc, d - 1)),
@@ -277,6 +287,11 @@ impl Gen<'_> {
             // type, and DuckDB refuses it where a cast to text would answer.
             24 => format!("decode(from_hex('{}'))", self.one(&["", "61", "6162", "20", "0a"])),
             25 => format!("({}::VARCHAR)", self.int(sc, d - 1)),
+            26 => format!(
+                "[c FOR c IN string_split(COALESCE({}, 'ab'), '{}') IF c <> ''][1]",
+                self.one(&["e.kind", "e.flag", "e.memo"]),
+                self.one(&["", ","])
+            ),
             _ => format!("NULLIF({}, '')", self.text(sc, d - 1)),
         }
     }

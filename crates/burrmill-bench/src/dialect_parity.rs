@@ -233,6 +233,10 @@ const CORPUS: &[&str] = &[
     "SELECT t.block_number, v.n FROM transfer t JOIN (VALUES (0), (1), (NULL)) v(n) ON t.log_index = v.n ORDER BY 1, 2",
     "SELECT unnest(string_split('a,b,c', ',')) AS c",
     "SELECT decode(from_hex('6162')) AS t, from_hex('abc') AS b, (block_number::VARCHAR) AS s, (5::HUGEINT) AS h FROM transfer ORDER BY block_number LIMIT 1",
+    // A list comprehension is list_transform, and IF is a list_filter in front of it.
+    "SELECT [x * 2 FOR x IN [1, 2, 3]][1] AS a, [x * 2 FOR x IN [1, 2, 3]][-1] AS b, [x * 2 FOR x IN [1, 2, 3] IF x > 1][1] AS c",
+    "SELECT list_reduce([CAST(strpos('0123456789abcdef', c) - 1 AS HUGEINT) FOR c IN string_split(substr('00ab10ff', -4), '')], lambda acc, d: acc * 16 + d) AS h",
+    "SELECT [c FOR c IN string_split(\"value\", '') IF c <> '0'][1] AS c FROM transfer ORDER BY block_number, log_index",
 ];
 
 /// Differences that stand, and why.

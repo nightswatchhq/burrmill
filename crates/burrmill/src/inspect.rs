@@ -105,6 +105,9 @@ impl Visitor for Walk {
 
 /// The tables `sql` reaches, or why it is refused.
 pub fn reach(sql: &str) -> Result<Reach> {
+    // The same rewrite `Engine` parses with, so a comprehension does not hide the tables in it.
+    let expanded = crate::listcomp::expand(sql);
+    let sql = expanded.as_str();
     let stmts = Parser::parse_sql(&DuckDbDialect {}, sql)
         .map_err(|e| BurrmillError::Parse(format!("Parser Error: {e}")))?;
     let [stmt] = stmts.as_slice() else {
@@ -153,6 +156,14 @@ mod tests {
             assert!(reach(sql).is_err(), "{sql}");
         }
         assert!(reach("SELECT * FROM range(3)").is_ok());
+    }
+
+    #[test]
+    fn a_list_comprehension_does_not_hide_its_table() {
+        assert_eq!(
+            tables("SELECT [lower(name) FOR c IN string_split(name, '')][1] FROM label"),
+            vec!["label"]
+        );
     }
 
     #[test]

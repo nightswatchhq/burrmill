@@ -4,6 +4,30 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## List comprehensions, which the views still write — 2026-09-26
+
+`lodestar_network`, `lodestar_params` and the indexer-deployment daily view fold a hex word with
+
+```sql
+list_reduce([CAST(strpos('0123456789abcdef', c) - 1 AS HUGEINT)
+             FOR c IN string_split(substr(lower(CAST(result AS VARCHAR)), -32), '')],
+            lambda acc, d: acc * 16 + d)
+```
+
+sqlparser stops at `FOR`. `list_transform` and `list_filter` already agree with DuckDB, so the
+text is rewritten into those before either parser sees it: `[expr FOR x IN list]` is
+`list_transform`, and `IF` is a `list_filter` in front of it. A list literal is left alone, and
+so is the word `FOR` inside a string. `reach` uses the same rewrite, so the tables inside the
+comprehension are not hidden by a parse error.
+
+`string_split('ab', '')` folded that way is 171 on both. `dialect-parity` 209/209. Fuzz, 6,000
+cases on three seeds: nothing stricter, nothing looser, no differences. The nest was not re-run.
+
+**2026-09-27:** the scanner skipped strings and comments but not `"quoted identifiers"`, so a
+column named `"for x"` read as the keyword; it skips them now, and a test says so.
+
+---
+
 ## The fuzzer widened to the idioms the views write — 2026-09-26
 
 The grammar had gone quiet. The census still counts things it never drew: `substr` from the end,

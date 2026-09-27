@@ -50,6 +50,7 @@ pub mod gate;
 pub mod inspect;
 pub mod exec;
 pub mod limits;
+mod listcomp;
 pub mod plan;
 pub mod seam;
 pub mod segment;

@@ -42,6 +42,9 @@ use crate::error::{BurrmillError, Result};
 /// Parse with DuckDB's dialect and rewrite into what DataFusion plans. The result columns' DuckDB
 /// names come back too, taken from the statement as written, before any rewrite.
 pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String>>)> {
+    // Before the parser: sqlparser rejects `[expr FOR x IN list]`, which the views still write.
+    let expanded = crate::listcomp::expand(sql);
+    let sql = expanded.as_str();
     let stmts = DFParser::parse_sql_with_dialect(sql, &Duck)
         .map_err(|e| BurrmillError::Parse(super::errors::restate(format!("SQL error: {e:?}"))))?;
     let Some(mut stmt) = stmts.into_iter().next() else {
