@@ -68,10 +68,11 @@ harness measured 1.54x, with stock DataFusion at 1.81x on the same nest, and the
 above are what closed it. An earlier 0.71x was measured on a 38,428-segment copy where DuckDB pays
 per file; the compacted layout is the fairer test and is the one quoted.
 
-Serving all 22 views to 1 to 32 concurrent clients (`burrmill-bench serve-views`,
-`docs/bench/serve-views-thinkpad.txt`): about **2x DuckDB's queries per second**, worst p99 255 to
-1,350 ms against 507 to 7,424, fairness 0.89 to 0.97 against 0.58 to 0.00, and 3.9 GB of memory
-against 15.4 at 32 clients, where DuckDB also fails under the default `ulimit -n`.
+Serving the 12 views that were portable on 2026-09-24 to 1, 4, 16 and 32 concurrent clients
+(`burrmill-bench serve-views`, `docs/bench/serve-views-thinkpad.txt`): **14.7 against 7.2 qps at
+one client and 32.9 against 15.1 at 32**, worst p99 1,350 ms against 7,424, fairness 0.90 against
+0.00, and 3.9 GB of process memory against 15.4, all at 32 clients with `ulimit -n` raised, since
+DuckDB fails outright at the default. Not re-run over the 22.
 
 **Exact.** Integer overflow returns an error, never a wrapped number, on both layers. The owned fold
 refuses when an intermediate partial sum leaves `i128`; the engine's `CheckedArithmetic` makes the
