@@ -112,8 +112,18 @@ Burrmill session exists.
       skipped once the primary has used half the guard's budget; `Session::set_deadline` carries the
       deadline in. Five tests, with a planted one-row-short secondary and a past deadline. Nothing
       installs it yet: `engine_shadow::install` waits for the second engine.
-- [ ] Burrmill as that second engine behind the flag, opening the same nest directory read-only.
-      Blocked on the dependency decision above.
+- [x] Burrmill as that second engine (2026-09-27, nuthatch `src/engine_burrmill.rs`, feature
+      `shadow-burrmill`, `git` dependency pinned to burrmill `b059dd0`): a `burrmill::Engine` opened
+      empty per session, tables registered as the policy code binds them through burrmill's new
+      `register_facts` (segment list, declared columns, hot rows as JSON, window) and
+      `register_rows` (labels); rows cross as nuthatch JSON via `burrmill::df::encode`, never as
+      arrow, since the two arrows differ (58 and 59). `enable_shadow()` installs it at `dev` start
+      when the feature is on. Refused on purpose, and only ever asked of the primary: the parser
+      role, the DuckDB plan walk, `view_definitions`, `query_arrow`. No cancellation handle yet: the
+      budget rule and the primary's watchdog bound the request. One test seals a nest with
+      nuthatch's own `seal_range`, stages hot rows, binds on both engines and runs three
+      dashboard-shaped statements: no difference recorded. Clippy clean; the lockfile gained 64
+      packages and changed no existing version.
 - [ ] Peak memory beside the timings in each record, and a file sink the operator can pull, not
       only the log.
 - [ ] Classifier for expected differences, so the log holds only the unexplained: `cold_velocity`
