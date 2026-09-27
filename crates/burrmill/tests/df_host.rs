@@ -217,3 +217,75 @@ fn a_bounded_engine_refuses_what_an_unbounded_one_answers() {
         vec![json!({"n": 200000})]
     );
 }
+
+#[test]
+fn ordered_list_per_group_across_segments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = segment(
+        tmp.path(),
+        1,
+        &[(5, "x", "1"), (2, "y", "7"), (9, "x", "3")],
+    );
+    let b = segment(
+        tmp.path(),
+        2,
+        &[(1, "x", "4"), (7, "y", "8"), (3, "z", "0")],
+    );
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_facts("t", &declared(), vec![a, b], &[], (None, None))
+        .unwrap();
+    let got = rows(
+        &engine,
+        "SELECT who, CAST(list(amount ORDER BY block_number DESC) AS VARCHAR) AS l, \
+         CAST(list(amount ORDER BY block_number) FILTER (WHERE amount <> '0') AS VARCHAR) AS f \
+         FROM t GROUP BY who ORDER BY who",
+    );
+    assert_eq!(
+        got,
+        vec![
+            json!({"who": "x", "l": "[3, 1, 4]", "f": "[4, 1, 3]"}),
+            json!({"who": "y", "l": "[8, 7]", "f": "[7, 8]"}),
+            json!({"who": "z", "l": "[0]", "f": null}),
+        ]
+    );
+}
+
+#[test]
+fn ordered_list_when_partial_aggregation_is_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Pairs for the first 30,000 rows, singles after: 285,000 groups, enough to skip.
+    let who: Vec<String> = (0..300_000)
+        .map(|i| format!("0x{:040x}", if i < 30_000 { i / 2 } else { i }))
+        .collect();
+    let data: Vec<(u64, &str, &str)> = who
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            (
+                300_000 - i as u64,
+                w.as_str(),
+                if i % 2 == 0 { "a" } else { "b" },
+            )
+        })
+        .collect();
+    let seg = segment(tmp.path(), 1, &data);
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_facts("t", &declared(), vec![seg], &[], (None, None))
+        .unwrap();
+    let got = rows(
+        &engine,
+        "SELECT CAST(l AS VARCHAR) AS l, count(*) AS n FROM \
+         (SELECT who, list(amount ORDER BY block_number) AS l FROM t GROUP BY who) GROUP BY 1 \
+         ORDER BY 1",
+    );
+    assert_eq!(
+        got,
+        vec![
+            json!({"l": "[a]", "n": 135000}),
+            json!({"l": "[b, a]", "n": 15000}),
+            json!({"l": "[b]", "n": 135000}),
+        ]
+    );
+}

@@ -31,6 +31,7 @@ mod fold;
 mod host;
 mod lists;
 mod names;
+mod ordered_agg;
 mod rangejoin;
 mod rule;
 mod session;

@@ -169,6 +169,11 @@ impl MiniSession {
         }
         // DuckDB's `list(x ORDER BY k)`.
         if let Some(f) = aggregate.get("array_agg").cloned() {
+            let f = super::ordered_agg::OrderedArrayAgg::udaf(f);
+            for a in f.aliases() {
+                aggregate.insert(a.clone(), Arc::clone(&f));
+            }
+            aggregate.insert("array_agg".into(), Arc::clone(&f));
             aggregate.insert("list".into(), f);
         }
         let exact_text = CheckedAgg::udaf(Mode::SumText, None);

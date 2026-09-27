@@ -53,10 +53,28 @@ What is actually holding the memory, from the refusals and `EXPLAIN ANALYZE`
 So gate 2's "Burrmill alone under the nest's `MemoryHigh`" is not met at DuckDB's figure, and no
 setting reaches it: DuckDB answers these views in 512 MB by spilling, and DataFusion's join cannot.
 
+### The 6.1 GB, found and fixed
+
+It was the ordered `array_agg`. Run alone, the `folded` CTE of `lodestar_delegator_stakes` asks
+for 6.0 GB even in an 8 GB pool, while its `exact` sibling (all the checked sums) answers in 512 MB.
+DataFusion 55 has no groups accumulator for `array_agg(x ORDER BY k)`: every one of 484k groups gets
+a row accumulator holding `ScalarValue` structs, each a one-row slice whose size counts the array
+behind it. `df/ordered_agg.rs` is one: values stay in their arriving batches, entries are
+`(group, batch, row)`, keys are row-encoded, a group is sorted once at emit, the state is the
+built-in's. The fold now answers at 512 MB; `engine-views` 22/22 identical, `dialect-parity`
+210/210, `fuzz` 2,000 with no difference, and a test drives the partial-skip path (193.5k rows
+skipped) as well as the merge.
+
+Refusals barely move (24 at 512 MB; 12, 10 and 8 on three identical runs at 1 GB), because what is
+left is the other class: `Memory Exhausted while SpillPool` from the repartition buffers, and the
+joins and final aggregates that cannot spill. The three 1 GB runs are also a finding: near the
+bound, which statements are refused depends on which partition reserves first.
+
 ### Owed
 
-- Understand the 6.1 GB reservation; if it is `array_agg` accounting, an owned ordered-fold
-  aggregate for the `list_reduce` shape, which is one view but the two largest refusals.
+- The non-spilling class: repartition buffers, hash-join builds and final aggregates across eight
+  partitions. A spill directory (nuthatch's own, as DuckDB's) takes 24 to 19; the rest is engine
+  work.
 - A decision on the budget: a larger Burrmill figure per permit means amending RFC-0047's 2 GiB
   split; or engine work on the non-spilling operators.
 - The hang, with symbols.
