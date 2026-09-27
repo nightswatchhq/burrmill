@@ -169,6 +169,9 @@ Burrmill session exists.
 - [ ] p99 within the `/sql` budget (30 s, 2 permits) on every shadowed nest.
 - [ ] Memory within the RFC-0047 envelope with both engines resident, and Burrmill alone under the
       nest's `MemoryHigh`.
+      **Not met at DuckDB's figure (2026-09-27):** bounded to the same 512 MB, Burrmill refuses 24
+      of the replay's statements that DuckDB answers; 10 at 1 GB, 2 at 2 GB. DataFusion's hash join
+      and final aggregate cannot spill (progress log, "Shadow mode under DuckDB's memory limit").
 - [ ] `burrmill::inspect::reach` at least as strict as `json_serialize_sql` on the security corpus
       (`reach-parity` 38/46 identical, 8 stricter, 0 looser today; the 8 documented). Measured live
       since 2026-09-27: the shadow runs both walks on every statement and counts `ParserLooser`;

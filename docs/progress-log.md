@@ -4,6 +4,65 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Shadow mode under DuckDB's memory limit: Burrmill does not fit — 2026-09-27
+
+Jules on nuthatch#1527: the shadow opened a second engine with no memory bound. True, and worse
+than the shadow: the DataFusion path had never been bounded at all (DataFusion's default pool is
+unlimited, plus a 1 GiB footer cache). `Engine::open_empty_within(bytes)` now holds the pool and the
+footer cache under one figure, with spilling off; nuthatch gives it `analytics.memory_limit`, the
+512 MB DuckDB gets, and its cursor-budget check counts two engines when the shadow is installed
+(the shipped split is exactly 2,048 MB, so a shadow build must run one permit or less memory).
+
+Replayed on the thinkpad copy (22 views, 81 dashboard statements) with the bound in place, run h
+against run g's zero unexplained. Refusals are statements DuckDB answered and Burrmill refused for
+memory. Transcripts: `shadow-replay-thinkpad-2026-09-27h.txt`, `shadow-memory-2026-09-27-*.txt`.
+
+| Burrmill limit | threads | pool | spill | refusals |
+|---:|---:|---|---|---:|
+| 512 MB | 8 | greedy | off | 24 |
+| 512 MB | 8 | greedy | on | 19 |
+| 512 MB | 2 | greedy | off | 26 |
+| 512 MB | 8 | fair | on | 31 |
+| 512 MB | 2 | fair | on | **hung** |
+| 512 MB | 8 | greedy, probe 1,000 | off | 24 |
+| 1,024 MB | 8 | greedy | off | 10 |
+| 1,024 MB | 8 | greedy | on | 9 |
+| 1,024 MB | 8 | greedy, probe 1,000 | off | 11 |
+| 2,048 MB | 8 | greedy | off | 2 |
+
+What is actually holding the memory, from the refusals and `EXPLAIN ANALYZE`
+(`engine-analyze-delegators-2026-09-27.txt`):
+
+- **Operators that cannot spill.** `lodestar_allocations` alone in a fresh 512 MB engine: eight
+  partitions each hold a hash-join build of ~26 MB and a final aggregate of ~26 MB, every one
+  `can spill: false`. DataFusion's hash join does not spill at all. Not a leak: every refused view
+  is refused alone too.
+- **Partial aggregation that reduces nothing.** On `lodestar_delegators` the partial aggregates
+  reduce 504.9k rows to 483.8k groups and are never skipped, because DataFusion probes only after
+  100,000 rows per partition and each partition sees about 60,000. A probe at 1,000 skips them and
+  takes the process peak from 3,910 to 2,488 MB, but changes no refusal: the pool's own accounting
+  is not what the RSS is.
+- **A 6.1 GB reservation.** `lodestar_delegator_stakes` and `lodestar_delegators` are refused
+  asking for 6.1 GB in one allocation, in a process that peaks at 2.5 GB. The `array_agg` of
+  structs feeding the rewritten `list_reduce` fold is the suspect: its accumulators hold
+  `ScalarValue` structs sliced from larger batches. Not yet proven.
+- **A hang.** Two threads, the fair pool and spilling together parked every worker on
+  `lodestar_delegator_stakes` for 2 h 42 m at 0.2% CPU. The cancel token cannot reach a statement
+  whose futures are never polled. Not reproduced or traced; the binary had no symbols.
+
+So gate 2's "Burrmill alone under the nest's `MemoryHigh`" is not met at DuckDB's figure, and no
+setting reaches it: DuckDB answers these views in 512 MB by spilling, and DataFusion's join cannot.
+
+### Owed
+
+- Understand the 6.1 GB reservation; if it is `array_agg` accounting, an owned ordered-fold
+  aggregate for the `list_reduce` shape, which is one view but the two largest refusals.
+- A decision on the budget: a larger Burrmill figure per permit means amending RFC-0047's 2 GiB
+  split; or engine work on the non-spilling operators.
+- The hang, with symbols.
+
+---
+
 ## Shadow mode's first day — 2026-09-27
 
 Phase 2b in nuthatch (`pete/shadow-session`): `ShadowEngine` pairs a DuckDB and a Burrmill session

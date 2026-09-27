@@ -1,0 +1,293 @@
+
+running 1 test
+VIEW	deployment_signal	rows=14654	ms=105	differences=0
+VIEW	epoch_boundaries	rows=269	ms=87	differences=0
+DIFF	Refusal	primary=117938 rows, truncated	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 2.7 MB for FinalHashAggregateStream[2] with 25.4 MB already allocated for this reservation - 1039.3 KB remain available for the total memory pool: greedy(used: 447.0 MB, pool_size: 448.0 MB)
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 2.7 MB for FinalHashAggregateStream[2] with 25.4 MB already allocated for this reservation - 1039.3 KB remain available for the total memory pool: greedy(used: 447.0 MB, pool_size: 448.0 MB)	primary_ms=1048	secondary_ms=139
+	SELECT * FROM "lodestar_allocations"
+VIEW	lodestar_allocations	rows=117938	ms=1284	differences=1
+VIEW	lodestar_curator_signals	rows=15821	ms=864	differences=0
+VIEW	lodestar_curators	rows=1825	ms=72	differences=0
+VIEW	lodestar_delegations	rows=264829	ms=772	differences=0
+DIFF	Refusal	primary=146630 rows, truncated	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 6.1 GB for FinalHashAggregateStream[1] with 0.0 B already allocated for this reservation - 241.6 MB remain available for the total memory pool: greedy(used: 206.4 MB, pool_size: 448.0 MB)
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 6.1 GB for FinalHashAggregateStream[1] with 0.0 B already allocated for this reservation - 241.6 MB remain available for the total memory pool: greedy(used: 206.4 MB, pool_size: 448.0 MB)	primary_ms=5387	secondary_ms=442
+	SELECT * FROM "lodestar_delegator_stakes"
+VIEW	lodestar_delegator_stakes	rows=146630	ms=6121	differences=1
+DIFF	Refusal	primary=309868 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 6.1 GB for FinalHashAggregateStream[2] with 0.0 B already allocated for this reservation - 251.4 MB remain available for the total memory pool: greedy(used: 196.6 MB, pool_size: 448.0 MB)
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 6.1 GB for FinalHashAggregateStream[2] with 0.0 B already allocated for this reservation - 251.4 MB remain available for the total memory pool: greedy(used: 196.6 MB, pool_size: 448.0 MB)	primary_ms=5263	secondary_ms=406
+	SELECT * FROM "lodestar_delegators"
+VIEW	lodestar_delegators	rows=309868	ms=6141	differences=1
+VIEW	lodestar_deployments	rows=24833	ms=1709	differences=0
+VIEW	lodestar_disputes	rows=8	ms=37	differences=0
+DIFF	Refusal	primary=269 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=1900	secondary_ms=183
+	SELECT * FROM "lodestar_epochs"
+VIEW	lodestar_epochs	rows=269	ms=2293	differences=1
+VIEW	lodestar_escrow_transactions	rows=77941	ms=398	differences=0
+DIFF	Refusal	primary=19733 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=5161	secondary_ms=135
+	SELECT * FROM "lodestar_indexer_daily"
+VIEW	lodestar_indexer_daily	rows=19733	ms=5678	differences=1
+DIFF	Refusal	primary=188501 rows, truncated	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 3.7 MB for HashJoinInput[2] with 7.1 MB already allocated for this reservation - 767.8 KB remain available for the total memory pool: greedy(used: 447.3 MB, pool_size: 448.0 MB)
+Resources exhausted: Failed to allocate additional 3.7 MB for HashJoinInput[2] with 7.1 MB already allocated for this reservation - 767.8 KB remain available for the total memory pool: greedy(used: 447.3 MB, pool_size: 448.0 MB)	primary_ms=5504	secondary_ms=130
+	SELECT * FROM "lodestar_indexer_deployment_daily"
+VIEW	lodestar_indexer_deployment_daily	rows=188501	ms=5943	differences=1
+DIFF	Refusal	primary=377599 rows, truncated	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=3249	secondary_ms=769
+	SELECT * FROM "lodestar_indexer_ledger"
+VIEW	lodestar_indexer_ledger	rows=377599	ms=4210	differences=1
+DIFF	Refusal	primary=143 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=2531	secondary_ms=114
+	SELECT * FROM "lodestar_indexer_pool"
+VIEW	lodestar_indexer_pool	rows=143	ms=2918	differences=1
+DIFF	Refusal	primary=184 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 2.3 MB for ExternalSorter[5] with 0.0 B already allocated for this reservation - 2.1 MB remain available for the total memory pool: greedy(used: 445.9 MB, pool_size: 448.0 MB)
+Not enough memory to continue external sort. Consider increasing the memory limit config: 'datafusion.runtime.memory_limit', or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'.
+caused by
+Resources exhausted: Failed to allocate additional 2.3 MB for ExternalSorter[5] with 0.0 B already allocated for this reservation - 2.1 MB remain available for the total memory pool: greedy(used: 445.9 MB, pool_size: 448.0 MB)	primary_ms=3678	secondary_ms=161
+	SELECT * FROM "lodestar_indexers"
+VIEW	lodestar_indexers	rows=184	ms=4325	differences=1
+DIFF	Refusal	primary=1 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=4402	secondary_ms=853
+	SELECT * FROM "lodestar_network"
+VIEW	lodestar_network	rows=1	ms=6053	differences=1
+VIEW	lodestar_network_params	rows=1	ms=167	differences=0
+VIEW	lodestar_provisions	rows=95	ms=968	differences=0
+VIEW	open_allocations	rows=6812	ms=153	differences=0
+VIEW	port_queue	rows=3943	ms=195	differences=0
+DIFF	Refusal	primary=1 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=3478	secondary_ms=119
+	SELECT id FROM lodestar_indexers ORDER BY staked_tokens DESC LIMIT 1
+test engine_burrmill::tests::shadow_replay_over_a_nest has been running for over 60 seconds
+DIFF	Unordered	primary=1 rows	secondary=1 rows; first differing row: {"id":"0x29b95eb4b366da001e2fc23b2d36c37aff394ab6"} against {"id":"0x44504ce0432c2d3ab2b96cddac1f1a95fb36bbcf"}	primary_ms=5812	secondary_ms=102
+	SELECT id FROM lodestar_delegators LIMIT 1
+DIFF	Unordered	primary=1 rows	secondary=1 rows; first differing row: {"id":"0xec9a7fb6cbc2e41926127929c2dce6e9c5d33bec"} against {"id":"0x0b58857708a6f84e7ee04beaef069a7e6d1d4a0b"}	primary_ms=19	secondary_ms=9
+	SELECT id FROM lodestar_curators LIMIT 1
+DIFF	Refusal	primary=1 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=3441	secondary_ms=123
+	SELECT id FROM lodestar_indexers ORDER BY staked_tokens DESC LIMIT 1
+DIFF	Unordered	primary=1 rows	secondary=1 rows; first differing row: {"id":"0x40812db012d25c73a63acd77a7813b37e8eae0f294625fa39f3a977bf9b6c2e1"} against {"id":"0xabdd4b9bd0c1bd5b5b5efdf71d3e32665394819c8f4550c77bd86714162808f2"}	primary_ms=1107	secondary_ms=102
+	SELECT id FROM lodestar_deployments LIMIT 1
+MARKERS	resolved=5/5
+DIFF	Refusal	primary=50 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=3935	secondary_ms=198
+	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR) AS locked_tokens, CAST(delegated_tokens AS VARCHAR) AS delegated_tokens, CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, allocation_count, indexing_reward_cut, query_fee_cut, last_delegation_parameter_update, CAST(rewards_earned AS VARCHAR) AS rewards_earned, CAST(query_fees_collected AS VARCHAR) AS query_fees_collected, CAST(delegator_shares AS VARCHAR) AS delegator_shares, url, geohash, created_at FROM lodestar_indexers i WHERE i.staked_tokens > 0 AND i.id <> '0xb43b2cccceada5292732a8c58ae134adefce09bb' ORDER BY i.staked_tokens DESC, i.id ASC LIMIT 50 OFFSET 0
+STMT	rows=50	ms=4646	differences=1	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+DIFF	Refusal	primary=47 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=3917	secondary_ms=198
+	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR) AS locked_tokens, CAST(delegated_tokens AS VARCHAR) AS delegated_tokens, CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, allocation_count, indexing_reward_cut, query_fee_cut, last_delegation_parameter_update, CAST(rewards_earned AS VARCHAR) AS rewards_earned, CAST(query_fees_collected AS VARCHAR) AS query_fees_collected, CAST(delegator_shares AS VARCHAR) AS delegator_shares, url, geohash, created_at FROM lodestar_indexers i WHERE i.staked_tokens > 0 AND i.id <> '0xb43b2cccceada5292732a8c58ae134adefce09bb' ORDER BY i.allocation_count ASC, i.id ASC LIMIT 50 OFFSET 50
+STMT	rows=47	ms=4653	differences=1	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+DIFF	Refusal	primary=1 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 1088.1 KB for HashJoinInput[6] with 11.1 MB already allocated for this reservation - 34.3 KB remain available for the total memory pool: greedy(used: 448.0 MB, pool_size: 448.0 MB)
+shared subquery
+caused by
+Resources exhausted: Failed to allocate additional 1088.1 KB for HashJoinInput[6] with 11.1 MB already allocated for this reservation - 34.3 KB remain available for the total memory pool: greedy(used: 448.0 MB, pool_size: 448.0 MB)	primary_ms=4517	secondary_ms=804
+	SELECT CAST(total_tokens_staked AS VARCHAR) AS total_tokens_staked, CAST(total_delegated_tokens AS VARCHAR) AS total_delegated_tokens, CAST(total_tokens_signalled AS VARCHAR) AS total_tokens_signalled, CAST(total_tokens_allocated AS VARCHAR) AS total_tokens_allocated, CAST(total_indexing_rewards AS VARCHAR) AS total_indexing_rewards, CAST(total_query_fees AS VARCHAR) AS total_query_fees, CAST(total_supply AS VARCHAR) AS total_supply, CAST(issuance_per_block AS VARCHAR) AS issuance_per_block, CAST(bridge_minted AS VARCHAR) AS bridge_minted, CAST(bridge_burned AS VARCHAR) AS bridge_burned, indexer_count, staked_indexers_count, delegator_count, active_delegator_count, curator_count, active_curator_count, subgraph_count, active_subgraph_count, current_epoch FROM lodestar_network
+STMT	rows=1	ms=6170	differences=1	SELECT CAST(total_tokens_staked AS VARCHAR) AS total_tokens_staked, CAST(total_delegated_t
+STMT	rows=1	ms=143	differences=0	SELECT delegation_ratio, curation_tax_percentage, protocol_payment_cut, max_thawing_period
+STMT	rows=30	ms=2892	differences=0	SELECT id, start_block, end_block, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, 
+STMT	rows=100	ms=66	differences=0	SELECT id, "eventType", indexer, delegator, tokens, CAST(ts AS VARCHAR) AS "timestamp", "t
+STMT	rows=0	ms=67	differences=0	SELECT id, "eventType", indexer, delegator, tokens, CAST(ts AS VARCHAR) AS "timestamp", "t
+STMT	rows=40	ms=81	differences=0	SELECT id, CAST(total_signalled_tokens AS VARCHAR) AS total_signalled_tokens, CAST(total_u
+STMT	rows=1	ms=88	differences=0	SELECT id, CAST(total_signalled_tokens AS VARCHAR) AS total_signalled_tokens, CAST(total_u
+STMT	rows=50	ms=937	differences=0	SELECT id, subgraph_deployment, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAS
+STMT	rows=1	ms=3209	differences=0	SELECT id, CAST(total_staked_tokens AS VARCHAR) AS total_staked_tokens, CAST(total_unstake
+STMT	ERROR	ms=521	WITH s AS (SELECT p.id, p.indexer, p.total_delegated_tokens, p.share_amount, p.locked_toke	failed to prepare query: Catalog Error: Table with name lodestar_delegator_positions does not exist!
+Did you mean "lodestar_delegators"?
+
+LINE 1: ..., i.query_fee_cut, i.allocation_count, i.url, i.geohash FROM lodestar_delegator_positions p LEFT JOIN lodestar_indexers...
+                                                                        ^: Error code 1: Unknown error code
+STMT	ERROR	ms=498	WITH s AS (SELECT p.id, p.indexer, p.total_delegated_tokens, p.share_amount, p.locked_toke	failed to prepare query: Catalog Error: Table with name lodestar_delegator_positions does not exist!
+Did you mean "lodestar_delegators"?
+
+LINE 1: ..., i.query_fee_cut, i.allocation_count, i.url, i.geohash FROM lodestar_delegator_positions p LEFT JOIN lodestar_indexers...
+                                                                        ^: Error code 1: Unknown error code
+STMT	rows=1	ms=1802	differences=0	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+STMT	rows=1	ms=38	differences=0	SELECT operator FROM (SELECT LOWER(operator) AS operator, allowed, ROW_NUMBER() OVER (PART
+STMT	rows=0	ms=70	differences=0	WITH events AS ( SELECT LOWER(delegator) AS delegator, 'in' AS kind, CAST(tokens AS HUGEIN
+STMT	rows=0	ms=772	differences=0	WITH events AS ( SELECT LOWER(delegator) AS delegator, 'in' AS kind, CAST(tokens AS HUGEIN
+DIFF	Refusal	primary=277 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 2.7 MB for FinalHashAggregateStream[4] with 25.4 MB already allocated for this reservation - 912.3 KB remain available for the total memory pool: greedy(used: 447.1 MB, pool_size: 448.0 MB)
+shared subquery
+caused by
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 2.7 MB for FinalHashAggregateStream[4] with 25.4 MB already allocated for this reservation - 912.3 KB remain available for the total memory pool: greedy(used: 447.1 MB, pool_size: 448.0 MB)	primary_ms=830	secondary_ms=130
+	SELECT a.id, CAST(a.allocated_tokens AS VARCHAR) AS allocated_tokens, a.created_at_epoch, a.subgraph_deployment, CAST(a.signalled_tokens AS VARCHAR) AS signalled_tokens, CAST((SELECT SUM(allocated_tokens) FROM lodestar_allocations d WHERE d.subgraph_deployment = a.subgraph_deployment AND d.status = 'Active') AS VARCHAR) AS deployment_staked_tokens FROM lodestar_allocations a WHERE LOWER(a.indexer) = '0x090f7382f9ea85c733cd501f4d87f16cb5b83ed3' AND a.status = 'Active' ORDER BY a.id
+STMT	rows=277	ms=1106	differences=1	SELECT a.id, CAST(a.allocated_tokens AS VARCHAR) AS allocated_tokens, a.created_at_epoch, 
+STMT	rows=50	ms=807	differences=0	SELECT id, CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, created_at_epoch, closed
+STMT	rows=3	ms=922	differences=0	SELECT c.cutoff, CAST(COALESCE((SELECT SUM(stake_delta) FROM lodestar_indexer_ledger l WHE
+STMT	rows=61	ms=1143	differences=0	SELECT indexer, day_start, CAST(total_rewards AS VARCHAR) AS total_rewards, CAST(indexer_r
+STMT	rows=61	ms=1113	differences=0	SELECT day_start, CAST(indexer_rewards AS VARCHAR) AS indexer_rewards, CAST(total_rewards 
+STMT	rows=611	ms=999	differences=0	SELECT deployment, CAST(SUM(indexer_rewards) AS VARCHAR) AS indexer_rewards, CAST(SUM(tota
+STMT	rows=1	ms=124	differences=0	SELECT delegation_ratio FROM lodestar_network_params
+DIFF	Refusal	primary=2779 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 4.4 MB for FinalHashAggregateStream[0] with 32.1 MB already allocated for this reservation - 1590.3 KB remain available for the total memory pool: greedy(used: 446.4 MB, pool_size: 448.0 MB)
+shared subquery
+caused by
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 4.4 MB for FinalHashAggregateStream[0] with 32.1 MB already allocated for this reservation - 1590.3 KB remain available for the total memory pool: greedy(used: 446.4 MB, pool_size: 448.0 MB)	primary_ms=815	secondary_ms=132
+	SELECT LOWER(indexer) AS indexer, subgraph_deployment, CAST(SUM(allocated_tokens) AS VARCHAR) AS allocated_tokens FROM lodestar_allocations WHERE status = 'Active' AND subgraph_deployment IN (SELECT subgraph_deployment FROM lodestar_allocations WHERE LOWER(indexer) = '0x090f7382f9ea85c733cd501f4d87f16cb5b83ed3' AND status = 'Active') GROUP BY 1, 2
+STMT	rows=2779	ms=1089	differences=1	SELECT LOWER(indexer) AS indexer, subgraph_deployment, CAST(SUM(allocated_tokens) AS VARCH
+STMT	rows=13754	ms=662	differences=0	SELECT LOWER(indexer) AS indexer, subgraph_deployment, CAST(SUM(allocated_tokens) AS VARCH
+STMT	rows=1	ms=887	differences=0	SELECT p.id, p.indexer, p.data_service, CAST(p.tokens_provisioned AS VARCHAR) AS tokens_pr
+STMT	rows=0	ms=4876	differences=0	SELECT p.id, p.indexer, p.data_service, CAST(p.tokens_provisioned AS VARCHAR) AS tokens_pr
+STMT	rows=0	ms=778	differences=0	SELECT data_service, CAST(SUM(tokens_provisioned) AS VARCHAR) AS total_tokens_provisioned,
+STMT	rows=1	ms=22	differences=0	SELECT result FROM max_thawing_period WHERE NOT reverted ORDER BY block_number DESC LIMIT 
+STMT	rows=0	ms=38	differences=0	SELECT LOWER(c.verifier) AS data_service, c."thawRequestId" AS id, c.shares, c."thawingUnt
+STMT	rows=50	ms=98	differences=0	WITH created AS (SELECT * FROM staking__thaw_request_created WHERE "requestType" = '0' AND
+STMT	rows=79	ms=717	differences=0	SELECT indexer, COUNT(DISTINCT data_service) AS n FROM lodestar_provisions WHERE tokens_pr
+DIFF	Refusal	primary=50 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 7.7 MB for FinalHashAggregateStream[6] with 17.7 MB already allocated for this reservation - 247.4 KB remain available for the total memory pool: greedy(used: 447.8 MB, pool_size: 448.0 MB)
+shared subquery
+caused by
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 7.7 MB for FinalHashAggregateStream[6] with 17.7 MB already allocated for this reservation - 247.4 KB remain available for the total memory pool: greedy(used: 447.8 MB, pool_size: 448.0 MB)	primary_ms=1075	secondary_ms=135
+	WITH staked AS (SELECT subgraph_deployment, CAST(SUM(CAST(allocated_tokens AS HUGEINT)) AS VARCHAR) AS staked FROM lodestar_allocations WHERE status = 'Active' GROUP BY 1) SELECT a.id, a.poi, a.indexer, CAST(a.allocated_tokens AS VARCHAR) AS allocated_tokens, a.closed_at_epoch, a.closed_at, a.subgraph_deployment, CAST(a.signalled_tokens AS VARCHAR) AS signalled_tokens, COALESCE(s.staked, '0') AS staked_tokens FROM lodestar_allocations a LEFT JOIN staked s ON s.subgraph_deployment = a.subgraph_deployment WHERE a.status = 'Closed' AND a.poi IS NOT NULL AND a.poi <> '0x0000000000000000000000000000000000000000000000000000000000000000' ORDER BY a.closed_at DESC, a.id DESC LIMIT 50
+STMT	rows=50	ms=1349	differences=1	WITH staked AS (SELECT subgraph_deployment, CAST(SUM(CAST(allocated_tokens AS HUGEINT)) AS
+DIFF	Refusal	primary=50 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 7.7 MB for FinalHashAggregateStream[3] with 17.7 MB already allocated for this reservation - 6.2 MB remain available for the total memory pool: greedy(used: 441.8 MB, pool_size: 448.0 MB)
+shared subquery
+caused by
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 7.7 MB for FinalHashAggregateStream[3] with 17.7 MB already allocated for this reservation - 6.2 MB remain available for the total memory pool: greedy(used: 441.8 MB, pool_size: 448.0 MB)	primary_ms=859	secondary_ms=133
+	WITH staked AS (SELECT subgraph_deployment, CAST(SUM(CAST(allocated_tokens AS HUGEINT)) AS VARCHAR) AS staked FROM lodestar_allocations WHERE status = 'Active' GROUP BY 1) SELECT a.id, a.poi, a.indexer, CAST(a.allocated_tokens AS VARCHAR) AS allocated_tokens, a.closed_at_epoch, a.closed_at, a.subgraph_deployment, CAST(a.signalled_tokens AS VARCHAR) AS signalled_tokens, COALESCE(s.staked, '0') AS staked_tokens FROM lodestar_allocations a LEFT JOIN staked s ON s.subgraph_deployment = a.subgraph_deployment WHERE a.status = 'Closed' AND a.poi IS NOT NULL AND a.poi <> '0x0000000000000000000000000000000000000000000000000000000000000000' AND a.subgraph_deployment = '0x40812db012d25c73a63acd77a7813b37e8eae0f294625fa39f3a977bf9b6c2e1' ORDER BY a.closed_at DESC, a.id DESC LIMIT 50
+STMT	rows=50	ms=1148	differences=1	WITH staked AS (SELECT subgraph_deployment, CAST(SUM(CAST(allocated_tokens AS HUGEINT)) AS
+STMT	rows=50	ms=92	differences=0	WITH mv AS (SELECT LOWER(payer) p, LOWER(collector) c, LOWER(receiver) r, CAST(tokens AS H
+STMT	rows=5	ms=86	differences=0	WITH mv AS (SELECT LOWER(payer) p, LOWER(collector) c, LOWER(receiver) r, CAST(tokens AS H
+STMT	rows=50	ms=121	differences=0	WITH ev AS (SELECT tx_hash, log_index, block_timestamp, LOWER(payer) AS payer, LOWER(recei
+STMT	rows=50	ms=147	differences=0	WITH ev AS (SELECT tx_hash, log_index, block_timestamp, LOWER(payer) AS payer, LOWER(recei
+STMT	rows=50	ms=59	differences=0	SELECT LOWER(payer) AS payer, LOWER(receiver) AS receiver, "collectionId" AS collection_id
+STMT	rows=50	ms=48	differences=0	SELECT LOWER(payer) AS payer, LOWER(receiver) AS receiver, "collectionId" AS collection_id
+STMT	rows=6	ms=53	differences=0	SELECT LOWER(payer) AS payer, COUNT(DISTINCT "collectionId") AS collections, CAST(SUM(CAST
+STMT	rows=2	ms=47	differences=0	SELECT LOWER(payer) AS payer, COUNT(DISTINCT "collectionId") AS collections, CAST(SUM(CAST
+STMT	rows=50	ms=1629	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=50	ms=1593	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=5576	ms=1625	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=1	ms=1563	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=10447	ms=1621	differences=0	SELECT id FROM lodestar_deployments WHERE signalled_tokens > 0 OR staked_tokens > 0
+STMT	rows=1	ms=628	differences=0	SELECT subgraph_deployment, CAST(MAX(signalled_tokens) AS VARCHAR) AS signalled_tokens, CA
+DIFF	Refusal	primary=10 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 7.7 MB for FinalHashAggregateStream[5] with 17.7 MB already allocated for this reservation - 897.0 KB remain available for the total memory pool: greedy(used: 447.1 MB, pool_size: 448.0 MB)
+shared subquery
+caused by
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 7.7 MB for FinalHashAggregateStream[5] with 17.7 MB already allocated for this reservation - 897.0 KB remain available for the total memory pool: greedy(used: 447.1 MB, pool_size: 448.0 MB)	primary_ms=4065	secondary_ms=218
+	SELECT LOWER(a.indexer) AS indexer, i.url, CAST(a.allocated_tokens AS VARCHAR) AS allocated_tokens FROM lodestar_allocations a LEFT JOIN lodestar_indexers i ON i.id = LOWER(a.indexer) WHERE LOWER(a.subgraph_deployment) = '0x40812db012d25c73a63acd77a7813b37e8eae0f294625fa39f3a977bf9b6c2e1' AND a.status = 'Active' ORDER BY a.allocated_tokens DESC, a.indexer LIMIT 50
+STMT	rows=10	ms=4812	differences=1	SELECT LOWER(a.indexer) AS indexer, i.url, CAST(a.allocated_tokens AS VARCHAR) AS allocate
+STMT	rows=1	ms=861	differences=0	SELECT id, curator, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(unsignalle
+STMT	rows=1	ms=47	differences=0	SELECT CAST(block_timestamp AS BIGINT) AS timestamp, 'MintSignal' AS type, CAST(CAST(token
+STMT	rows=50	ms=614	differences=0	SELECT CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, created_at, closed_at FROM l
+STMT	rows=50	ms=772	differences=0	SELECT LOWER(subgraph_deployment) AS id, CAST(SUM(query_fees_collected) AS VARCHAR) AS que
+STMT	rows=4193	ms=807	differences=0	SELECT LOWER(subgraph_deployment) AS id, CAST(SUM(query_fees_collected) AS VARCHAR) AS que
+DIFF	Refusal	primary=10 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 7.8 MB for FinalHashAggregateStream[4] with 17.7 MB already allocated for this reservation - 3.3 MB remain available for the total memory pool: greedy(used: 444.7 MB, pool_size: 448.0 MB)
+shared subquery
+caused by
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 7.8 MB for FinalHashAggregateStream[4] with 17.7 MB already allocated for this reservation - 3.3 MB remain available for the total memory pool: greedy(used: 444.7 MB, pool_size: 448.0 MB)	primary_ms=3965	secondary_ms=231
+	SELECT a.indexer AS id, i.url FROM lodestar_allocations a JOIN lodestar_indexers i ON i.id = a.indexer WHERE a.status = 'Active' AND LOWER(a.subgraph_deployment) = '0x40812db012d25c73a63acd77a7813b37e8eae0f294625fa39f3a977bf9b6c2e1' ORDER BY a.allocated_tokens DESC LIMIT 50
+STMT	rows=10	ms=4741	differences=1	SELECT a.indexer AS id, i.url FROM lodestar_allocations a JOIN lodestar_indexers i ON i.id
+STMT	rows=1	ms=1637	differences=0	SELECT url FROM lodestar_indexers WHERE id = '0x090f7382f9ea85c733cd501f4d87f16cb5b83ed3'
+DIFF	Refusal	primary=97 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=3949	secondary_ms=204
+	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR) AS locked_tokens, locked_until, CAST(delegated_tokens AS VARCHAR) AS delegated_tokens, CAST(delegated_thawing_tokens AS VARCHAR) AS delegated_thawing_tokens, CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, allocation_count, indexing_reward_cut, query_fee_cut, last_delegation_parameter_update, CAST(rewards_earned AS VARCHAR) AS rewards_earned, CAST(query_fees_collected AS VARCHAR) AS query_fees_collected, CAST(delegator_shares AS VARCHAR) AS delegator_shares, CAST(provisioned_tokens AS VARCHAR) AS provisioned_tokens, url, geohash, created_at FROM lodestar_indexers WHERE staked_tokens > 0 AND id <> '0xb43b2cccceada5292732a8c58ae134adefce09bb' ORDER BY id
+STMT	rows=97	ms=4677	differences=1	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+DIFF	Refusal	primary=13754 rows	secondary=refused executing: substrate error: Out of Memory Error: Failed to allocate additional 7.7 MB for FinalHashAggregateStream[4] with 17.7 MB already allocated for this reservation - 15.8 KB remain available for the total memory pool: greedy(used: 448.0 MB, pool_size: 448.0 MB)
+shared subquery
+caused by
+Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
+caused by
+Resources exhausted: Failed to allocate additional 7.7 MB for FinalHashAggregateStream[4] with 17.7 MB already allocated for this reservation - 15.8 KB remain available for the total memory pool: greedy(used: 448.0 MB, pool_size: 448.0 MB)	primary_ms=896	secondary_ms=121
+	SELECT a.id, LOWER(a.indexer) AS indexer, CAST(a.allocated_tokens AS VARCHAR) AS allocated_tokens, CAST(a.signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(d.staked AS VARCHAR) AS deployment_staked_tokens FROM lodestar_allocations a JOIN (SELECT subgraph_deployment, SUM(allocated_tokens) AS staked FROM lodestar_allocations WHERE status = 'Active' GROUP BY 1) d ON d.subgraph_deployment = a.subgraph_deployment WHERE a.status = 'Active'
+STMT	rows=13754	ms=1191	differences=1	SELECT a.id, LOWER(a.indexer) AS indexer, CAST(a.allocated_tokens AS VARCHAR) AS allocated
+STMT	rows=37087	ms=171	differences=0	SELECT event_type, indexer, CAST(tokens AS VARCHAR) AS tokens FROM lodestar_delegations WH
+DIFF	FloatOrder	primary=441 rows	secondary=441 rows; first differing row: {"date":"2024-07-16","inflows":377175.576858065,"outflows":768424.5431807879} against {"date":"2024-07-16","inflows":377175.576858065,"outflows":768424.543180788}	primary_ms=22	secondary_ms=12
+	WITH events AS (SELECT block_timestamp, CAST(tokens AS DOUBLE) / 1e18 AS tokens, 'inflow' AS direction          FROM staking_legacy__stake_delegated          UNION ALL SELECT block_timestamp, CAST(tokens AS DOUBLE) / 1e18, 'outflow'          FROM staking_legacy__stake_delegated_locked          UNION ALL SELECT block_timestamp, CAST(tokens AS DOUBLE) / 1e18, 'inflow'          FROM staking__tokens_delegated          UNION ALL SELECT block_timestamp, CAST(tokens AS DOUBLE) / 1e18, 'outflow'          FROM staking__tokens_undelegated)          SELECT strftime(to_timestamp(block_timestamp), '%Y-%m-%d') AS date,          SUM(CASE WHEN direction = 'inflow' THEN tokens ELSE 0 END) AS inflows,          SUM(CASE WHEN direction = 'outflow' THEN tokens ELSE 0 END) AS outflows          FROM events WHERE block_timestamp >= 1720000000 AND block_timestamp < 1758000000          GROUP BY 1 ORDER BY 1
+STMT	rows=441	ms=77	differences=1	WITH events AS (SELECT block_timestamp, CAST(tokens AS DOUBLE) / 1e18 AS tokens, 'inflow' 
+STMT	rows=0	ms=32	differences=0	WITH events AS (SELECT block_timestamp, CAST(tokens AS DOUBLE) / 1e18 AS tokens, 'inflow' 
+STMT	rows=115732	ms=877	differences=0	SELECT LOWER(indexer) AS indexer, CAST(indexing_delegator_rewards AS VARCHAR) AS indexing_
+DIFF	Refusal	primary=134 rows	secondary=refused executing: substrate error: Out of Memory Error: Memory Exhausted while SpillPool (DiskManager is disabled)
+Resources exhausted: Memory Exhausted while SpillPool (DiskManager is disabled)	primary_ms=2415	secondary_ms=95
+	SELECT indexer, CAST(SUM(pool_delta) AS VARCHAR) AS pool_tokens, CAST(SUM(shares_delta) AS VARCHAR) AS pool_shares FROM lodestar_indexer_ledger WHERE ts <= 1758000000 GROUP BY 1 HAVING SUM(shares_delta) > 0
+STMT	rows=134	ms=2713	differences=1	SELECT indexer, CAST(SUM(pool_delta) AS VARCHAR) AS pool_tokens, CAST(SUM(shares_delta) AS
+STMT	rows=50	ms=32	differences=0	SELECT tx_hash, log_index, block_number, block_timestamp, LOWER("serviceProvider") AS inde
+STMT	rows=10555	ms=36	differences=0	SELECT block_timestamp AS "createdAt" FROM "gns__subgraph_published" WHERE block_timestamp
+STMT	ERROR	ms=15	SELECT subgraph_id FROM deployment_subgraphs WHERE LOWER(deployment_id) = '0x40812db012d25	failed to prepare query: Catalog Error: Table with name deployment_subgraphs does not exist!
+Did you mean "deployment_signal"?
+
+LINE 1: SELECT subgraph_id FROM deployment_subgraphs WHERE LOWER(deployment_id) = '0x40812d...
+                                ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT deployment_id, version_metadata, version_number, created_at FROM subgraph_versions 	failed to prepare query: Catalog Error: Table with name subgraph_versions does not exist!
+Did you mean "subgraph_service__allocation_closed"?
+
+LINE 1: ...ment_id, version_metadata, version_number, created_at FROM subgraph_versions WHERE subgraph_id = '1' ORDER BY version_...
+                                                                      ^: Error code 1: Unknown error code
+STMT	rows=1	ms=665	differences=0	SELECT LOWER(subgraph_deployment) AS subgraph_deployment, CAST(MAX(signalled_tokens) AS VA
+STMT	ERROR	ms=16	SELECT subgraph_metadata FROM subgraph_current WHERE NOT deprecated AND subgraph_metadata 	failed to prepare query: Catalog Error: Table with name subgraph_current does not exist!
+Did you mean "subgraph_service__allocation_resized"?
+
+LINE 1: SELECT subgraph_metadata FROM subgraph_current WHERE NOT deprecated AND subgraph_metadata...
+                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT * FROM dips_current_allocation	failed to prepare query: Catalog Error: Table with name dips_current_allocation does not exist!
+Did you mean "curation__signalled"?
+
+LINE 1: SELECT * FROM dips_current_allocation
+                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT * FROM dips_timeline ORDER BY block_number	failed to prepare query: Catalog Error: Table with name dips_timeline does not exist!
+Did you mean "pg_description"?
+
+LINE 1: SELECT * FROM dips_timeline ORDER BY block_number
+                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT d.target, d.block_number, d.block_timestamp, d.amount_dec FROM "issuance_allocator_	failed to prepare query: Catalog Error: Table with name issuance_allocator__issuance_distributed does not exist!
+Did you mean "staking_legacy__allocation_created"?
+
+LINE 1: ....target, d.block_number, d.block_timestamp, d.amount_dec FROM "issuance_allocator__issuance_distributed" d JOIN (SELECT...
+                                                                         ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT count(*) AS publishers FROM qos_publisher	failed to prepare query: Catalog Error: Table with name qos_publisher does not exist!
+Did you mean "gns__subgraph_published"?
+
+LINE 1: SELECT count(*) AS publishers FROM qos_publisher
+                                           ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT topic, newest_bucket_start, buckets, last_post_block, last_post_time FROM qos_fresh	failed to prepare query: Catalog Error: Table with name qos_freshness does not exist!
+Did you mean "lodestar_disputes"?
+
+LINE 1: ...ucket_start, buckets, last_post_block, last_post_time FROM qos_freshness
+                                                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT (SELECT sum(buckets_stored) FROM qos_day_resolution WHERE day = DATE '1970-01-01' +	failed to prepare query: Catalog Error: Table with name qos_day_resolution does not exist!
+Did you mean "lodestar_indexer_pool"?
+
+LINE 1: SELECT (SELECT sum(buckets_stored) FROM qos_day_resolution WHERE day = DATE '1970-01-01' + 20300...
+                                                ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT indexer, CAST(day AS VARCHAR) AS date, query_count, num_200, success_rate, latency_	failed to prepare query: Catalog Error: Table with name qos_indexer_daily does not exist!
+Did you mean "lodestar_indexer_daily"?
+
+LINE 1: ...tart, worst_bucket_success_rate, worst_bucket_queries FROM qos_indexer_daily WHERE day = DATE '1970-01-01' + 20300
+                                                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT indexer, seconds_behind_peers, share_queries_over_5min_behind, share_with_block_tim	failed to prepare query: Catalog Error: Table with name qos_indexer_seconds_behind does not exist!
+Did you mean "pg_index"?
+
+LINE 1: ..., share_queries_over_5min_behind, share_with_block_time FROM qos_indexer_seconds_behind WHERE day = DATE '1970-01-01...
+                                                                        ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT indexer, CAST(day AS VARCHAR) AS date, query_count, num_200, success_rate, latency_	failed to prepare query: Catalog Error: Table with name qos_indexer_daily does not exist!
+Did you mean "lodestar_indexer_daily"?
+
+LINE 1: ...tart, worst_bucket_success_rate, worst_bucket_queries FROM qos_indexer_daily WHERE indexer = '0x090f7382f9ea85c733cd50...
+                                                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT indexer, seconds_behind_peers, share_queries_over_5min_behind, share_with_block_tim	failed to prepare query: Catalog Error: Table with name qos_indexer_seconds_behind does not exist!
+Did you mean "pg_index"?
+
+LINE 1: ..., share_queries_over_5min_behind, share_with_block_time FROM qos_indexer_seconds_behind WHERE indexer = '0x090f7382f9ea8...
+                                                                        ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT CAST(day AS VARCHAR) AS date, string_agg(DISTINCT gateway, ',' ORDER BY gateway) AS	failed to prepare query: Catalog Error: Table with name qos_allocation_daily does not exist!
+Did you mean "open_allocations"?
+
+LINE 1: ...(DISTINCT gateway, ',' ORDER BY gateway) AS gateways FROM qos_allocation_daily WHERE indexer = '0x090f7382f9ea85c733c...
+                                                                     ^: Error code 1: Unknown error code
+SHADOW	views=22	records=28	unexplained=24
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1452 filtered out; finished in 146.92s
+

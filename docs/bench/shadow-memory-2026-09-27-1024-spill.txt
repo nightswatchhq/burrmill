@@ -1,0 +1,270 @@
+
+running 1 test
+VIEW	deployment_signal	rows=14654	ms=104	differences=0
+VIEW	epoch_boundaries	rows=269	ms=87	differences=0
+VIEW	lodestar_allocations	rows=118343	ms=2181	differences=0
+VIEW	lodestar_curator_signals	rows=15821	ms=874	differences=0
+VIEW	lodestar_curators	rows=1825	ms=71	differences=0
+VIEW	lodestar_delegations	rows=264829	ms=732	differences=0
+DIFF	Refusal	primary=146638 rows, truncated	secondary=refused executing: substrate error: Out of Memory Error: Additional allocation failed for FinalHashAggregateStream[4] with top memory consumers (across reservations) as:
+Resources exhausted: Additional allocation failed for FinalHashAggregateStream[4] with top memory consumers (across reservations) as:
+  FinalHashAggregateStream[6]#957(can spill: true) consumed 41.5 MB, peak 41.5 MB,
+  FinalHashAggregateStream[5]#940(can spill: true) consumed 41.1 MB, peak 41.1 MB,
+  FinalHashAggregateStream[2]#907(can spill: true) consumed 41.1 MB, peak 41.1 MB,
+  FinalHashAggregateStream[4]#923(can spill: true) consumed 41.0 MB, peak 41.0 MB,
+  FinalHashAggregateStream[1]#900(can spill: true) consumed 40.9 MB, peak 40.9 MB.
+Error: Failed to allocate additional 6.1 GB for FinalHashAggregateStream[4] with 0.0 B already allocated for this reservation - 520.4 MB remain available for the total memory pool: greedy(used: 375.6 MB, pool_size: 896.0 MB)	primary_ms=4977	secondary_ms=1749
+	SELECT * FROM "lodestar_delegator_stakes"
+VIEW	lodestar_delegator_stakes	rows=146638	ms=7032	differences=1
+DIFF	Refusal	primary=309868 rows	secondary=refused executing: substrate error: Out of Memory Error: Additional allocation failed for FinalHashAggregateStream[3] with top memory consumers (across reservations) as:
+Resources exhausted: Additional allocation failed for FinalHashAggregateStream[3] with top memory consumers (across reservations) as:
+  FinalHashAggregateStream[6]#1231(can spill: true) consumed 41.6 MB, peak 41.6 MB,
+  FinalHashAggregateStream[3]#1219(can spill: true) consumed 41.2 MB, peak 41.2 MB,
+  FinalHashAggregateStream[2]#1215(can spill: true) consumed 41.1 MB, peak 41.1 MB,
+  FinalHashAggregateStream[4]#1223(can spill: true) consumed 41.0 MB, peak 41.0 MB,
+  FinalHashAggregateStream[1]#1211(can spill: true) consumed 40.8 MB, peak 40.8 MB.
+Error: Failed to allocate additional 6.1 GB for FinalHashAggregateStream[3] with 0.0 B already allocated for this reservation - 569.0 MB remain available for the total memory pool: greedy(used: 327.0 MB, pool_size: 896.0 MB)	primary_ms=4953	secondary_ms=1763
+	SELECT * FROM "lodestar_delegators"
+VIEW	lodestar_delegators	rows=309868	ms=7107	differences=1
+VIEW	lodestar_deployments	rows=24833	ms=1635	differences=0
+VIEW	lodestar_disputes	rows=8	ms=40	differences=0
+VIEW	lodestar_epochs	rows=269	ms=2846	differences=0
+VIEW	lodestar_escrow_transactions	rows=77941	ms=523	differences=0
+DIFF	Refusal	primary=19733 rows	secondary=refused executing: substrate error: Out of Memory Error: Additional allocation failed for ExternalSorterMerge[5] with top memory consumers (across reservations) as:
+Not enough memory to continue external sort. Consider increasing the memory limit config: 'datafusion.runtime.memory_limit', or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'.
+caused by
+Resources exhausted: Additional allocation failed for ExternalSorterMerge[5] with top memory consumers (across reservations) as:
+  ExternalSorterMerge[4]#2164(can spill: false) consumed 165.2 MB, peak 165.2 MB,
+  ExternalSorter[4]#2044(can spill: true) consumed 46.3 MB, peak 95.1 MB,
+  ExternalSorter[4]#2092(can spill: true) consumed 43.3 MB, peak 59.3 MB,
+  FinalHashAggregateStream[2]#2225(can spill: true) consumed 31.3 MB, peak 31.3 MB,
+  FinalHashAggregateStream[3]#2227(can spill: true) consumed 31.3 MB, peak 31.3 MB.
+Error: Failed to allocate additional 10.0 MB for ExternalSorterMerge[5] with 0.0 B already allocated for this reservation - 5.7 MB remain available for the total memory pool: greedy(used: 890.3 MB, pool_size: 896.0 MB)	primary_ms=4524	secondary_ms=309
+	SELECT * FROM "lodestar_indexer_daily"
+VIEW	lodestar_indexer_daily	rows=19733	ms=5285	differences=1
+DIFF	Refusal	primary=188719 rows, truncated	secondary=refused executing: substrate error: Out of Memory Error: Additional allocation failed for ExternalSorterMerge[6] with top memory consumers (across reservations) as:
+Not enough memory to continue external sort. Consider increasing the memory limit config: 'datafusion.runtime.memory_limit', or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'.
+caused by
+Resources exhausted: Additional allocation failed for ExternalSorterMerge[6] with top memory consumers (across reservations) as:
+  ExternalSorterMerge[4]#2553(can spill: false) consumed 176.3 MB, peak 176.3 MB,
+  ExternalSorter[4]#2433(can spill: true) consumed 77.9 MB, peak 77.9 MB,
+  ExternalSorter[4]#2481(can spill: true) consumed 71.0 MB, peak 71.0 MB,
+  FinalHashAggregateStream[3]#2610(can spill: true) consumed 31.4 MB, peak 31.4 MB,
+  FinalHashAggregateStream[2]#2397(can spill: true) consumed 31.4 MB, peak 31.4 MB.
+Error: Failed to allocate additional 10.0 MB for ExternalSorterMerge[6] with 0.0 B already allocated for this reservation - 7.6 MB remain available for the total memory pool: greedy(used: 888.4 MB, pool_size: 896.0 MB)	primary_ms=4640	secondary_ms=348
+	SELECT * FROM "lodestar_indexer_deployment_daily"
+VIEW	lodestar_indexer_deployment_daily	rows=188719	ms=5315	differences=1
+VIEW	lodestar_indexer_ledger	rows=377603	ms=4231	differences=0
+DIFF	Refusal	primary=143 rows	secondary=refused executing: substrate error: Out of Memory Error: Additional allocation failed for ExternalSorterMerge[3] with top memory consumers (across reservations) as:
+Resources exhausted: Additional allocation failed for ExternalSorterMerge[3] with top memory consumers (across reservations) as:
+  ExternalSorter[4]#3189(can spill: true) consumed 255.1 MB, peak 255.1 MB,
+  ExternalSorter[4]#3133(can spill: true) consumed 222.3 MB, peak 222.3 MB,
+  ExternalSorter[0]#3125(can spill: true) consumed 49.8 MB, peak 49.8 MB,
+  ExternalSorter[0]#3181(can spill: true) consumed 44.9 MB, peak 44.9 MB,
+  ExternalSorter[7]#3139(can spill: true) consumed 26.8 MB, peak 26.8 MB.
+Error: Failed to allocate additional 1474.0 KB for ExternalSorterMerge[3] with 2.9 MB already allocated for this reservation - 1269.7 KB remain available for the total memory pool: greedy(used: 894.8 MB, pool_size: 896.0 MB)	primary_ms=2515	secondary_ms=110
+	SELECT * FROM "lodestar_indexer_pool"
+VIEW	lodestar_indexer_pool	rows=143	ms=2869	differences=1
+VIEW	lodestar_indexers	rows=184	ms=4722	differences=0
+DIFF	Refusal	primary=1 rows	secondary=refused executing: substrate error: Out of Memory Error: Additional allocation failed for ExternalSorterMerge[7] with top memory consumers (across reservations) as:
+shared subquery
+caused by
+Not enough memory to continue external sort. Consider increasing the memory limit config: 'datafusion.runtime.memory_limit', or decreasing the config: 'datafusion.execution.sort_spill_reservation_bytes'.
+caused by
+Resources exhausted: Additional allocation failed for ExternalSorterMerge[7] with top memory consumers (across reservations) as:
+  ExternalSorter[4]#5018(can spill: true) consumed 213.5 MB, peak 213.5 MB,
+  ExternalSorter[0]#5010(can spill: true) consumed 49.3 MB, peak 49.3 MB,
+  ExternalSorter[0]#5066(can spill: true) consumed 41.5 MB, peak 41.5 MB,
+  ExternalSorter[7]#5024(can spill: true) consumed 29.6 MB, peak 29.6 MB,
+  RepartitionExec[4]#5214(can spill: true) consumed 29.3 MB, peak 29.3 MB.
+Error: Failed to allocate additional 10.0 MB for ExternalSorterMerge[7] with 0.0 B already allocated for this reservation - 8.8 MB remain available for the total memory pool: greedy(used: 887.2 MB, pool_size: 896.0 MB)	primary_ms=4084	secondary_ms=835
+	SELECT * FROM "lodestar_network"
+VIEW	lodestar_network	rows=1	ms=5725	differences=1
+VIEW	lodestar_network_params	rows=1	ms=151	differences=0
+VIEW	lodestar_provisions	rows=95	ms=956	differences=0
+VIEW	open_allocations	rows=6812	ms=144	differences=0
+VIEW	port_queue	rows=3943	ms=189	differences=0
+test engine_burrmill::tests::shadow_replay_over_a_nest has been running for over 60 seconds
+DIFF	Unordered	primary=1 rows	secondary=1 rows; first differing row: {"id":"0xd083026442684a8617adb75ec6add0236023f5d1"} against {"id":"0x13758eb440e4c013f8231938c243cf74beaa4251"}	primary_ms=4826	secondary_ms=121
+	SELECT id FROM lodestar_delegators LIMIT 1
+DIFF	Unordered	primary=1 rows	secondary=1 rows; first differing row: {"id":"0x28284bebebf3fd21313d7f64b8771372014d3c7b"} against {"id":"0x1087186229523934f8bc2bdc33b53c538a0fd36c"}	primary_ms=19	secondary_ms=10
+	SELECT id FROM lodestar_curators LIMIT 1
+DIFF	Unordered	primary=1 rows	secondary=1 rows; first differing row: {"id":"0x44af137ae3771edeaf1662546faa3d44a1dedad7cfed8afa2964fc200b04873b"} against {"id":"0xf3b6b34863c3053f3b65a6aec7131ee210d32ef4142c2cbbbdc42f0b4460ed0f"}	primary_ms=1161	secondary_ms=110
+	SELECT id FROM lodestar_deployments LIMIT 1
+MARKERS	resolved=5/5
+DIFF	Refusal	primary=50 rows	secondary=refused executing: substrate error: Out of Memory Error: Additional allocation failed for HashJoinInput[6] with top memory consumers (across reservations) as:
+Resources exhausted: Additional allocation failed for HashJoinInput[6] with top memory consumers (across reservations) as:
+  ExternalSorterMerge[4]#6967(can spill: false) consumed 140.0 MB, peak 140.0 MB,
+  ExternalSorterMerge[4]#6911(can spill: false) consumed 133.7 MB, peak 133.7 MB,
+  RepartitionExec[5]#7419(can spill: true) consumed 104.8 MB, peak 104.8 MB,
+  HashJoinInput#7146(can spill: false) consumed 80.7 MB, peak 80.7 MB,
+  HashJoinInput#7143(can spill: false) consumed 78.1 MB, peak 78.1 MB.
+Error: Failed to allocate additional 1021.2 KB for HashJoinInput[6] with 29.0 MB already allocated for this reservation - 1018.7 KB remain available for the total memory pool: greedy(used: 895.0 MB, pool_size: 896.0 MB)	primary_ms=3638	secondary_ms=299
+	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR) AS locked_tokens, CAST(delegated_tokens AS VARCHAR) AS delegated_tokens, CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, allocation_count, indexing_reward_cut, query_fee_cut, last_delegation_parameter_update, CAST(rewards_earned AS VARCHAR) AS rewards_earned, CAST(query_fees_collected AS VARCHAR) AS query_fees_collected, CAST(delegator_shares AS VARCHAR) AS delegator_shares, url, geohash, created_at FROM lodestar_indexers i WHERE i.staked_tokens > 0 AND i.id <> '0xb43b2cccceada5292732a8c58ae134adefce09bb' ORDER BY i.staked_tokens DESC, i.id ASC LIMIT 50 OFFSET 0
+STMT	rows=50	ms=4453	differences=1	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+STMT	rows=47	ms=5001	differences=0	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+DIFF	Refusal	primary=1 rows	secondary=refused executing: substrate error: Out of Memory Error: Additional allocation failed for ExternalSorterMerge[4] with top memory consumers (across reservations) as:
+Resources exhausted: Additional allocation failed for ExternalSorterMerge[4] with top memory consumers (across reservations) as:
+  ExternalSorter[4]#9124(can spill: true) consumed 219.1 MB, peak 219.1 MB,
+  ExternalSorter[4]#9043(can spill: true) consumed 166.6 MB, peak 194.6 MB,
+  ExternalSorter[0]#9116(can spill: true) consumed 31.9 MB, peak 31.9 MB,
+  ExternalSorter[3]#9041(can spill: true) consumed 23.9 MB, peak 23.9 MB,
+  ExternalSorter[7]#9049(can spill: true) consumed 21.0 MB, peak 21.0 MB.
+Error: Failed to allocate additional 879.7 KB for ExternalSorterMerge[4] with 4.8 MB already allocated for this reservation - 511.5 KB remain available for the total memory pool: greedy(used: 895.5 MB, pool_size: 896.0 MB)	primary_ms=4126	secondary_ms=893
+	SELECT CAST(total_tokens_staked AS VARCHAR) AS total_tokens_staked, CAST(total_delegated_tokens AS VARCHAR) AS total_delegated_tokens, CAST(total_tokens_signalled AS VARCHAR) AS total_tokens_signalled, CAST(total_tokens_allocated AS VARCHAR) AS total_tokens_allocated, CAST(total_indexing_rewards AS VARCHAR) AS total_indexing_rewards, CAST(total_query_fees AS VARCHAR) AS total_query_fees, CAST(total_supply AS VARCHAR) AS total_supply, CAST(issuance_per_block AS VARCHAR) AS issuance_per_block, CAST(bridge_minted AS VARCHAR) AS bridge_minted, CAST(bridge_burned AS VARCHAR) AS bridge_burned, indexer_count, staked_indexers_count, delegator_count, active_delegator_count, curator_count, active_curator_count, subgraph_count, active_subgraph_count, current_epoch FROM lodestar_network
+STMT	rows=1	ms=5874	differences=1	SELECT CAST(total_tokens_staked AS VARCHAR) AS total_tokens_staked, CAST(total_delegated_t
+STMT	rows=1	ms=153	differences=0	SELECT delegation_ratio, curation_tax_percentage, protocol_payment_cut, max_thawing_period
+STMT	rows=30	ms=2935	differences=0	SELECT id, start_block, end_block, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, 
+STMT	rows=100	ms=71	differences=0	SELECT id, "eventType", indexer, delegator, tokens, CAST(ts AS VARCHAR) AS "timestamp", "t
+STMT	rows=0	ms=75	differences=0	SELECT id, "eventType", indexer, delegator, tokens, CAST(ts AS VARCHAR) AS "timestamp", "t
+STMT	rows=40	ms=95	differences=0	SELECT id, CAST(total_signalled_tokens AS VARCHAR) AS total_signalled_tokens, CAST(total_u
+STMT	rows=1	ms=86	differences=0	SELECT id, CAST(total_signalled_tokens AS VARCHAR) AS total_signalled_tokens, CAST(total_u
+STMT	rows=50	ms=958	differences=0	SELECT id, subgraph_deployment, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAS
+STMT	rows=1	ms=3244	differences=0	SELECT id, CAST(total_staked_tokens AS VARCHAR) AS total_staked_tokens, CAST(total_unstake
+STMT	ERROR	ms=543	WITH s AS (SELECT p.id, p.indexer, p.total_delegated_tokens, p.share_amount, p.locked_toke	failed to prepare query: Catalog Error: Table with name lodestar_delegator_positions does not exist!
+Did you mean "lodestar_delegators"?
+
+LINE 1: ..., i.query_fee_cut, i.allocation_count, i.url, i.geohash FROM lodestar_delegator_positions p LEFT JOIN lodestar_indexers...
+                                                                        ^: Error code 1: Unknown error code
+STMT	ERROR	ms=529	WITH s AS (SELECT p.id, p.indexer, p.total_delegated_tokens, p.share_amount, p.locked_toke	failed to prepare query: Catalog Error: Table with name lodestar_delegator_positions does not exist!
+Did you mean "lodestar_delegators"?
+
+LINE 1: ..., i.query_fee_cut, i.allocation_count, i.url, i.geohash FROM lodestar_delegator_positions p LEFT JOIN lodestar_indexers...
+                                                                        ^: Error code 1: Unknown error code
+STMT	rows=1	ms=1779	differences=0	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+STMT	rows=1	ms=46	differences=0	SELECT operator FROM (SELECT LOWER(operator) AS operator, allowed, ROW_NUMBER() OVER (PART
+STMT	rows=0	ms=79	differences=0	WITH events AS ( SELECT LOWER(delegator) AS delegator, 'in' AS kind, CAST(tokens AS HUGEIN
+STMT	rows=0	ms=817	differences=0	WITH events AS ( SELECT LOWER(delegator) AS delegator, 'in' AS kind, CAST(tokens AS HUGEIN
+STMT	rows=277	ms=1393	differences=0	SELECT a.id, CAST(a.allocated_tokens AS VARCHAR) AS allocated_tokens, a.created_at_epoch, 
+STMT	rows=50	ms=898	differences=0	SELECT id, CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, created_at_epoch, closed
+STMT	rows=3	ms=981	differences=0	SELECT c.cutoff, CAST(COALESCE((SELECT SUM(stake_delta) FROM lodestar_indexer_ledger l WHE
+STMT	rows=61	ms=1190	differences=0	SELECT indexer, day_start, CAST(total_rewards AS VARCHAR) AS total_rewards, CAST(indexer_r
+STMT	rows=61	ms=1194	differences=0	SELECT day_start, CAST(indexer_rewards AS VARCHAR) AS indexer_rewards, CAST(total_rewards 
+STMT	rows=611	ms=1052	differences=0	SELECT deployment, CAST(SUM(indexer_rewards) AS VARCHAR) AS indexer_rewards, CAST(SUM(tota
+STMT	rows=1	ms=131	differences=0	SELECT delegation_ratio FROM lodestar_network_params
+STMT	rows=2779	ms=1333	differences=0	SELECT LOWER(indexer) AS indexer, subgraph_deployment, CAST(SUM(allocated_tokens) AS VARCH
+STMT	rows=13754	ms=673	differences=0	SELECT LOWER(indexer) AS indexer, subgraph_deployment, CAST(SUM(allocated_tokens) AS VARCH
+STMT	rows=1	ms=886	differences=0	SELECT p.id, p.indexer, p.data_service, CAST(p.tokens_provisioned AS VARCHAR) AS tokens_pr
+STMT	rows=0	ms=4446	differences=0	SELECT p.id, p.indexer, p.data_service, CAST(p.tokens_provisioned AS VARCHAR) AS tokens_pr
+STMT	rows=0	ms=779	differences=0	SELECT data_service, CAST(SUM(tokens_provisioned) AS VARCHAR) AS total_tokens_provisioned,
+STMT	rows=1	ms=31	differences=0	SELECT result FROM max_thawing_period WHERE NOT reverted ORDER BY block_number DESC LIMIT 
+STMT	rows=0	ms=45	differences=0	SELECT LOWER(c.verifier) AS data_service, c."thawRequestId" AS id, c.shares, c."thawingUnt
+STMT	rows=50	ms=107	differences=0	WITH created AS (SELECT * FROM staking__thaw_request_created WHERE "requestType" = '0' AND
+STMT	rows=79	ms=751	differences=0	SELECT indexer, COUNT(DISTINCT data_service) AS n FROM lodestar_provisions WHERE tokens_pr
+STMT	rows=50	ms=1583	differences=0	WITH staked AS (SELECT subgraph_deployment, CAST(SUM(CAST(allocated_tokens AS HUGEINT)) AS
+STMT	rows=9	ms=1197	differences=0	WITH staked AS (SELECT subgraph_deployment, CAST(SUM(CAST(allocated_tokens AS HUGEINT)) AS
+STMT	rows=50	ms=88	differences=0	WITH mv AS (SELECT LOWER(payer) p, LOWER(collector) c, LOWER(receiver) r, CAST(tokens AS H
+STMT	rows=5	ms=83	differences=0	WITH mv AS (SELECT LOWER(payer) p, LOWER(collector) c, LOWER(receiver) r, CAST(tokens AS H
+STMT	rows=50	ms=120	differences=0	WITH ev AS (SELECT tx_hash, log_index, block_timestamp, LOWER(payer) AS payer, LOWER(recei
+STMT	rows=50	ms=148	differences=0	WITH ev AS (SELECT tx_hash, log_index, block_timestamp, LOWER(payer) AS payer, LOWER(recei
+STMT	rows=50	ms=63	differences=0	SELECT LOWER(payer) AS payer, LOWER(receiver) AS receiver, "collectionId" AS collection_id
+STMT	rows=50	ms=48	differences=0	SELECT LOWER(payer) AS payer, LOWER(receiver) AS receiver, "collectionId" AS collection_id
+STMT	rows=6	ms=54	differences=0	SELECT LOWER(payer) AS payer, COUNT(DISTINCT "collectionId") AS collections, CAST(SUM(CAST
+STMT	rows=2	ms=48	differences=0	SELECT LOWER(payer) AS payer, COUNT(DISTINCT "collectionId") AS collections, CAST(SUM(CAST
+STMT	rows=50	ms=1584	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=50	ms=1648	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=5576	ms=1591	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=1	ms=1564	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=10447	ms=1610	differences=0	SELECT id FROM lodestar_deployments WHERE signalled_tokens > 0 OR staked_tokens > 0
+STMT	rows=1	ms=628	differences=0	SELECT subgraph_deployment, CAST(MAX(signalled_tokens) AS VARCHAR) AS signalled_tokens, CA
+STMT	rows=0	ms=4406	differences=0	SELECT LOWER(a.indexer) AS indexer, i.url, CAST(a.allocated_tokens AS VARCHAR) AS allocate
+STMT	rows=0	ms=816	differences=0	SELECT id, curator, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(unsignalle
+STMT	rows=2	ms=43	differences=0	SELECT CAST(block_timestamp AS BIGINT) AS timestamp, 'MintSignal' AS type, CAST(CAST(token
+STMT	rows=11	ms=602	differences=0	SELECT CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, created_at, closed_at FROM l
+STMT	rows=50	ms=778	differences=0	SELECT LOWER(subgraph_deployment) AS id, CAST(SUM(query_fees_collected) AS VARCHAR) AS que
+STMT	rows=4193	ms=814	differences=0	SELECT LOWER(subgraph_deployment) AS id, CAST(SUM(query_fees_collected) AS VARCHAR) AS que
+STMT	rows=0	ms=4332	differences=0	SELECT a.indexer AS id, i.url FROM lodestar_allocations a JOIN lodestar_indexers i ON i.id
+STMT	rows=1	ms=1599	differences=0	SELECT url FROM lodestar_indexers WHERE id = '0x090f7382f9ea85c733cd501f4d87f16cb5b83ed3'
+STMT	rows=97	ms=5061	differences=0	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+STMT	rows=13754	ms=1484	differences=0	SELECT a.id, LOWER(a.indexer) AS indexer, CAST(a.allocated_tokens AS VARCHAR) AS allocated
+STMT	rows=37087	ms=175	differences=0	SELECT event_type, indexer, CAST(tokens AS VARCHAR) AS tokens FROM lodestar_delegations WH
+STMT	rows=441	ms=80	differences=0	WITH events AS (SELECT block_timestamp, CAST(tokens AS DOUBLE) / 1e18 AS tokens, 'inflow' 
+STMT	rows=0	ms=32	differences=0	WITH events AS (SELECT block_timestamp, CAST(tokens AS DOUBLE) / 1e18 AS tokens, 'inflow' 
+STMT	rows=115732	ms=907	differences=0	SELECT LOWER(indexer) AS indexer, CAST(indexing_delegator_rewards AS VARCHAR) AS indexing_
+DIFF	Refusal	primary=134 rows	secondary=refused executing: substrate error: Out of Memory Error: Additional allocation failed for ExternalSorterMerge[0] with top memory consumers (across reservations) as:
+Resources exhausted: Additional allocation failed for ExternalSorterMerge[0] with top memory consumers (across reservations) as:
+  ExternalSorter[4]#21302(can spill: true) consumed 269.9 MB, peak 269.9 MB,
+  ExternalSorter[4]#21246(can spill: true) consumed 221.9 MB, peak 221.9 MB,
+  ExternalSorter[0]#21238(can spill: true) consumed 44.1 MB, peak 46.1 MB,
+  ExternalSorter[0]#21294(can spill: true) consumed 39.2 MB, peak 39.2 MB,
+  ExternalSorter[7]#21308(can spill: true) consumed 29.8 MB, peak 29.8 MB.
+Error: Failed to allocate additional 1027.0 KB for ExternalSorterMerge[0] with 0.0 B already allocated for this reservation - 751.5 KB remain available for the total memory pool: greedy(used: 895.3 MB, pool_size: 896.0 MB)	primary_ms=2422	secondary_ms=103
+	SELECT indexer, CAST(SUM(pool_delta) AS VARCHAR) AS pool_tokens, CAST(SUM(shares_delta) AS VARCHAR) AS pool_shares FROM lodestar_indexer_ledger WHERE ts <= 1758000000 GROUP BY 1 HAVING SUM(shares_delta) > 0
+STMT	rows=134	ms=2735	differences=1	SELECT indexer, CAST(SUM(pool_delta) AS VARCHAR) AS pool_tokens, CAST(SUM(shares_delta) AS
+STMT	rows=50	ms=44	differences=0	SELECT tx_hash, log_index, block_number, block_timestamp, LOWER("serviceProvider") AS inde
+STMT	rows=10555	ms=38	differences=0	SELECT block_timestamp AS "createdAt" FROM "gns__subgraph_published" WHERE block_timestamp
+STMT	ERROR	ms=15	SELECT subgraph_id FROM deployment_subgraphs WHERE LOWER(deployment_id) = '0x44af137ae3771	failed to prepare query: Catalog Error: Table with name deployment_subgraphs does not exist!
+Did you mean "deployment_signal"?
+
+LINE 1: SELECT subgraph_id FROM deployment_subgraphs WHERE LOWER(deployment_id) = '0x44af13...
+                                ^: Error code 1: Unknown error code
+STMT	ERROR	ms=14	SELECT deployment_id, version_metadata, version_number, created_at FROM subgraph_versions 	failed to prepare query: Catalog Error: Table with name subgraph_versions does not exist!
+Did you mean "subgraph_service__allocation_closed"?
+
+LINE 1: ...ment_id, version_metadata, version_number, created_at FROM subgraph_versions WHERE subgraph_id = '1' ORDER BY version_...
+                                                                      ^: Error code 1: Unknown error code
+STMT	rows=1	ms=659	differences=0	SELECT LOWER(subgraph_deployment) AS subgraph_deployment, CAST(MAX(signalled_tokens) AS VA
+STMT	ERROR	ms=28	SELECT subgraph_metadata FROM subgraph_current WHERE NOT deprecated AND subgraph_metadata 	failed to prepare query: Catalog Error: Table with name subgraph_current does not exist!
+Did you mean "subgraph_service__allocation_resized"?
+
+LINE 1: SELECT subgraph_metadata FROM subgraph_current WHERE NOT deprecated AND subgraph_metadata...
+                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=20	SELECT * FROM dips_current_allocation	failed to prepare query: Catalog Error: Table with name dips_current_allocation does not exist!
+Did you mean "curation__signalled"?
+
+LINE 1: SELECT * FROM dips_current_allocation
+                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=17	SELECT * FROM dips_timeline ORDER BY block_number	failed to prepare query: Catalog Error: Table with name dips_timeline does not exist!
+Did you mean "pg_description"?
+
+LINE 1: SELECT * FROM dips_timeline ORDER BY block_number
+                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=18	SELECT d.target, d.block_number, d.block_timestamp, d.amount_dec FROM "issuance_allocator_	failed to prepare query: Catalog Error: Table with name issuance_allocator__issuance_distributed does not exist!
+Did you mean "staking_legacy__allocation_created"?
+
+LINE 1: ....target, d.block_number, d.block_timestamp, d.amount_dec FROM "issuance_allocator__issuance_distributed" d JOIN (SELECT...
+                                                                         ^: Error code 1: Unknown error code
+STMT	ERROR	ms=19	SELECT count(*) AS publishers FROM qos_publisher	failed to prepare query: Catalog Error: Table with name qos_publisher does not exist!
+Did you mean "gns__subgraph_published"?
+
+LINE 1: SELECT count(*) AS publishers FROM qos_publisher
+                                           ^: Error code 1: Unknown error code
+STMT	ERROR	ms=16	SELECT topic, newest_bucket_start, buckets, last_post_block, last_post_time FROM qos_fresh	failed to prepare query: Catalog Error: Table with name qos_freshness does not exist!
+Did you mean "lodestar_disputes"?
+
+LINE 1: ...ucket_start, buckets, last_post_block, last_post_time FROM qos_freshness
+                                                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=19	SELECT (SELECT sum(buckets_stored) FROM qos_day_resolution WHERE day = DATE '1970-01-01' +	failed to prepare query: Catalog Error: Table with name qos_day_resolution does not exist!
+Did you mean "lodestar_indexer_pool"?
+
+LINE 1: SELECT (SELECT sum(buckets_stored) FROM qos_day_resolution WHERE day = DATE '1970-01-01' + 20300...
+                                                ^: Error code 1: Unknown error code
+STMT	ERROR	ms=15	SELECT indexer, CAST(day AS VARCHAR) AS date, query_count, num_200, success_rate, latency_	failed to prepare query: Catalog Error: Table with name qos_indexer_daily does not exist!
+Did you mean "lodestar_indexer_daily"?
+
+LINE 1: ...tart, worst_bucket_success_rate, worst_bucket_queries FROM qos_indexer_daily WHERE day = DATE '1970-01-01' + 20300
+                                                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=15	SELECT indexer, seconds_behind_peers, share_queries_over_5min_behind, share_with_block_tim	failed to prepare query: Catalog Error: Table with name qos_indexer_seconds_behind does not exist!
+Did you mean "pg_index"?
+
+LINE 1: ..., share_queries_over_5min_behind, share_with_block_time FROM qos_indexer_seconds_behind WHERE day = DATE '1970-01-01...
+                                                                        ^: Error code 1: Unknown error code
+STMT	ERROR	ms=15	SELECT indexer, CAST(day AS VARCHAR) AS date, query_count, num_200, success_rate, latency_	failed to prepare query: Catalog Error: Table with name qos_indexer_daily does not exist!
+Did you mean "lodestar_indexer_daily"?
+
+LINE 1: ...tart, worst_bucket_success_rate, worst_bucket_queries FROM qos_indexer_daily WHERE indexer = '0x090f7382f9ea85c733cd50...
+                                                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=16	SELECT indexer, seconds_behind_peers, share_queries_over_5min_behind, share_with_block_tim	failed to prepare query: Catalog Error: Table with name qos_indexer_seconds_behind does not exist!
+Did you mean "pg_index"?
+
+LINE 1: ..., share_queries_over_5min_behind, share_with_block_time FROM qos_indexer_seconds_behind WHERE indexer = '0x090f7382f9ea8...
+                                                                        ^: Error code 1: Unknown error code
+STMT	ERROR	ms=15	SELECT CAST(day AS VARCHAR) AS date, string_agg(DISTINCT gateway, ',' ORDER BY gateway) AS	failed to prepare query: Catalog Error: Table with name qos_allocation_daily does not exist!
+Did you mean "open_allocations"?
+
+LINE 1: ...(DISTINCT gateway, ',' ORDER BY gateway) AS gateways FROM qos_allocation_daily WHERE indexer = '0x090f7382f9ea85c733c...
+                                                                     ^: Error code 1: Unknown error code
+SHADOW	views=22	records=12	unexplained=9
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1452 filtered out; finished in 149.59s
+
