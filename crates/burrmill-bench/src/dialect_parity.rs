@@ -237,6 +237,9 @@ const CORPUS: &[&str] = &[
     "SELECT [x * 2 FOR x IN [1, 2, 3]][1] AS a, [x * 2 FOR x IN [1, 2, 3]][-1] AS b, [x * 2 FOR x IN [1, 2, 3] IF x > 1][1] AS c",
     "SELECT list_reduce([CAST(strpos('0123456789abcdef', c) - 1 AS HUGEINT) FOR c IN string_split(substr('00ab10ff', -4), '')], lambda acc, d: acc * 16 + d) AS h",
     "SELECT [c FOR c IN string_split(\"value\", '') IF c <> '0'][1] AS c FROM transfer ORDER BY block_number, log_index",
+    // An aggregate aliased to its own source column, then repeated in ORDER BY: inside the
+    // aggregate, `value` is the base column, not the alias (the dashboard's tally statements).
+    "SELECT lower(\"to\") AS p, CAST(SUM(CAST(\"value\" AS HUGEINT)) AS VARCHAR) AS value FROM transfer GROUP BY 1 ORDER BY SUM(CAST(\"value\" AS HUGEINT)) DESC",
 ];
 
 /// Differences that stand, and why.

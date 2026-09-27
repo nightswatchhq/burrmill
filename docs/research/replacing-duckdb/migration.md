@@ -131,9 +131,19 @@ Burrmill session exists.
       (`docs/upstream/duckdb-cast-comparison-null-constant.md`), the no-ICU class.
 - [ ] Shadow never changes the served answer, its latency budget or its memory accounting: it runs
       after the DuckDB answer is sent, under its own permit, and is dropped if the guard is near.
-- [ ] Replay harness: the dashboard's real statements against a ThinkPad copy of the allocations
-      store (`~/1165-corpus`), the platform's against a pool copy.
-- [ ] Shadow on the ThinkPad copies first. Then Helsinki DIPS, then GNS, each for a release cycle.
+- [x] Replay harness (2026-09-27): `shadow_replay_over_a_nest` in nuthatch, ignored unless
+      `NUTHATCH_SHADOW_NEST` names a nest; installs the shadow as `dev` does and reads every
+      authored view whole through `query_guarded`, the production path from the text gates to the
+      collect. With `NUTHATCH_SHADOW_SQL` it also runs the dashboard's own statements: 81 of them,
+      generated from kittiwake's SQL functions by `crates/read/examples/dump_nest_sql.rs` (branch
+      `pete/dump-nest-sql`) with marker ids, kept as `docs/bench/dashboard-statements-2026-09-27.sql`
+      and resolved to real ids from the nest at run time. The platform's statements are still to
+      be captured.
+- [x] Shadow on the ThinkPad copy, first runs (2026-09-27, `docs/bench/shadow-replay-thinkpad-*`):
+      run a found 5 differences in 22 views, all one fault of the harness (the primary truncated at
+      the 64 MiB byte cap, the Burrmill session applied only the row cap); the cap moved into
+      `collect`'s contract and both-truncated compares nothing. Run b: **22 views, 0 differences**.
+- [ ] Then Helsinki DIPS, then GNS, each for a release cycle.
 - [ ] Concurrency sweep on the DataFusion path at 32 clients on the nest it will serve (plan risk).
 - [ ] Joins and cancellation: a per-query timeout that drops the stream at the 30 s guard, since
       DataFusion joins do not yield (#19358). Test that a cancelled join frees its memory.

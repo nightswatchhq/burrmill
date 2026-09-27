@@ -1,0 +1,139 @@
+VIEW	deployment_signal	rows=14654	ms=98	differences=0
+VIEW	epoch_boundaries	rows=269	ms=86	differences=0
+VIEW	lodestar_allocations	rows=117857	ms=2089	differences=0
+VIEW	lodestar_curator_signals	rows=15821	ms=882	differences=0
+VIEW	lodestar_curators	rows=1825	ms=70	differences=0
+VIEW	lodestar_delegations	rows=264829	ms=809	differences=0
+VIEW	lodestar_delegator_stakes	rows=146629	ms=8892	differences=0
+VIEW	lodestar_delegators	rows=309868	ms=8917	differences=0
+VIEW	lodestar_deployments	rows=24833	ms=1655	differences=0
+VIEW	lodestar_disputes	rows=8	ms=40	differences=0
+VIEW	lodestar_epochs	rows=269	ms=2716	differences=0
+VIEW	lodestar_escrow_transactions	rows=77941	ms=528	differences=0
+VIEW	lodestar_indexer_daily	rows=19733	ms=6683	differences=0
+VIEW	lodestar_indexer_deployment_daily	rows=188619	ms=7341	differences=0
+VIEW	lodestar_indexer_ledger	rows=377563	ms=4398	differences=0
+VIEW	lodestar_indexer_pool	rows=143	ms=3488	differences=0
+VIEW	lodestar_indexers	rows=184	ms=5128	differences=0
+VIEW	lodestar_network	rows=1	ms=6905	differences=0
+VIEW	lodestar_network_params	rows=1	ms=143	differences=0
+VIEW	lodestar_provisions	rows=95	ms=963	differences=0
+VIEW	open_allocations	rows=6812	ms=149	differences=0
+VIEW	port_queue	rows=3943	ms=202	differences=0
+DIFF	Rows	primary=1 rows	secondary=1 rows; first differing row: {"id":"0x0d5c05d93df317117900f43bb2057baf8fd70ff2"} against {"id":"0x57240b3d1dd9f22af555508d4126182ae6e0c6c6"}	primary_ms=5389	secondary_ms=154
+	SELECT id FROM lodestar_delegators LIMIT 1
+DIFF	Rows	primary=1 rows	secondary=1 rows; first differing row: {"id":"0xec9a7fb6cbc2e41926127929c2dce6e9c5d33bec"} against {"id":"0xd60c745477725acfb4192944eaba49baed22c03c"}	primary_ms=19	secondary_ms=10
+	SELECT id FROM lodestar_curators LIMIT 1
+DIFF	Rows	primary=1 rows	secondary=1 rows; first differing row: {"id":"0x17526856ed0a16c7a1035ebc7083670e5c2b2da0a5b0d8e3078be151d187a77a"} against {"id":"0x8f2136e1e984ed47edca1b6dbbdc18cc2509d984690d3f75d3da847d29b07187"}	primary_ms=1163	secondary_ms=110
+	SELECT id FROM lodestar_deployments LIMIT 1
+MARKERS	resolved=5/5
+STMT	rows=50	ms=5476	differences=0	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+STMT	rows=47	ms=5498	differences=0	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+STMT	rows=1	ms=6931	differences=0	SELECT CAST(total_tokens_staked AS VARCHAR) AS total_tokens_staked, CAST(total_delegated_t
+STMT	rows=1	ms=156	differences=0	SELECT delegation_ratio, curation_tax_percentage, protocol_payment_cut, max_thawing_period
+STMT	rows=30	ms=2911	differences=0	SELECT id, start_block, end_block, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, 
+STMT	rows=100	ms=62	differences=0	SELECT id, "eventType", indexer, delegator, tokens, CAST(ts AS VARCHAR) AS "timestamp", "t
+STMT	rows=0	ms=67	differences=0	SELECT id, "eventType", indexer, delegator, tokens, CAST(ts AS VARCHAR) AS "timestamp", "t
+STMT	rows=40	ms=84	differences=0	SELECT id, CAST(total_signalled_tokens AS VARCHAR) AS total_signalled_tokens, CAST(total_u
+STMT	rows=1	ms=89	differences=0	SELECT id, CAST(total_signalled_tokens AS VARCHAR) AS total_signalled_tokens, CAST(total_u
+STMT	rows=50	ms=1019	differences=0	SELECT id, subgraph_deployment, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAS
+STMT	rows=1	ms=3282	differences=0	SELECT id, CAST(total_staked_tokens AS VARCHAR) AS total_staked_tokens, CAST(total_unstake
+STMT	ERROR	ms=531	WITH s AS (SELECT p.id, p.indexer, p.total_delegated_tokens, p.share_amount, p.locked_toke	failed to prepare query: Catalog Error: Table with name lodestar_delegator_positions does not exist!
+                                                                        ^: Error code 1: Unknown error code
+STMT	ERROR	ms=503	WITH s AS (SELECT p.id, p.indexer, p.total_delegated_tokens, p.share_amount, p.locked_toke	failed to prepare query: Catalog Error: Table with name lodestar_delegator_positions does not exist!
+                                                                        ^: Error code 1: Unknown error code
+STMT	rows=1	ms=1758	differences=0	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+STMT	rows=1	ms=42	differences=0	SELECT operator FROM (SELECT LOWER(operator) AS operator, allowed, ROW_NUMBER() OVER (PART
+STMT	rows=0	ms=68	differences=0	WITH events AS ( SELECT LOWER(delegator) AS delegator, 'in' AS kind, CAST(tokens AS HUGEIN
+STMT	rows=0	ms=771	differences=0	WITH events AS ( SELECT LOWER(delegator) AS delegator, 'in' AS kind, CAST(tokens AS HUGEIN
+STMT	rows=277	ms=1254	differences=0	SELECT a.id, CAST(a.allocated_tokens AS VARCHAR) AS allocated_tokens, a.created_at_epoch, 
+STMT	rows=50	ms=775	differences=0	SELECT id, CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, created_at_epoch, closed
+STMT	rows=3	ms=1001	differences=0	SELECT c.cutoff, CAST(COALESCE((SELECT SUM(stake_delta) FROM lodestar_indexer_ledger l WHE
+STMT	rows=61	ms=1230	differences=0	SELECT indexer, day_start, CAST(total_rewards AS VARCHAR) AS total_rewards, CAST(indexer_r
+STMT	rows=61	ms=1190	differences=0	SELECT day_start, CAST(indexer_rewards AS VARCHAR) AS indexer_rewards, CAST(total_rewards 
+STMT	rows=611	ms=1048	differences=0	SELECT deployment, CAST(SUM(indexer_rewards) AS VARCHAR) AS indexer_rewards, CAST(SUM(tota
+STMT	rows=1	ms=128	differences=0	SELECT delegation_ratio FROM lodestar_network_params
+STMT	rows=2779	ms=1279	differences=0	SELECT LOWER(indexer) AS indexer, subgraph_deployment, CAST(SUM(allocated_tokens) AS VARCH
+STMT	rows=13754	ms=686	differences=0	SELECT LOWER(indexer) AS indexer, subgraph_deployment, CAST(SUM(allocated_tokens) AS VARCH
+STMT	rows=1	ms=846	differences=0	SELECT p.id, p.indexer, p.data_service, CAST(p.tokens_provisioned AS VARCHAR) AS tokens_pr
+STMT	rows=0	ms=4971	differences=0	SELECT p.id, p.indexer, p.data_service, CAST(p.tokens_provisioned AS VARCHAR) AS tokens_pr
+STMT	rows=0	ms=805	differences=0	SELECT data_service, CAST(SUM(tokens_provisioned) AS VARCHAR) AS total_tokens_provisioned,
+STMT	rows=1	ms=23	differences=0	SELECT result FROM max_thawing_period WHERE NOT reverted ORDER BY block_number DESC LIMIT 
+STMT	rows=0	ms=43	differences=0	SELECT LOWER(c.verifier) AS data_service, c."thawRequestId" AS id, c.shares, c."thawingUnt
+STMT	rows=50	ms=110	differences=0	WITH created AS (SELECT * FROM staking__thaw_request_created WHERE "requestType" = '0' AND
+STMT	rows=79	ms=707	differences=0	SELECT indexer, COUNT(DISTINCT data_service) AS n FROM lodestar_provisions WHERE tokens_pr
+STMT	rows=50	ms=1508	differences=0	WITH staked AS (SELECT subgraph_deployment, CAST(SUM(CAST(allocated_tokens AS HUGEINT)) AS
+STMT	rows=47	ms=1310	differences=0	WITH staked AS (SELECT subgraph_deployment, CAST(SUM(CAST(allocated_tokens AS HUGEINT)) AS
+STMT	rows=50	ms=86	differences=0	WITH mv AS (SELECT LOWER(payer) p, LOWER(collector) c, LOWER(receiver) r, CAST(tokens AS H
+STMT	rows=5	ms=84	differences=0	WITH mv AS (SELECT LOWER(payer) p, LOWER(collector) c, LOWER(receiver) r, CAST(tokens AS H
+STMT	rows=50	ms=133	differences=0	WITH ev AS (SELECT tx_hash, log_index, block_timestamp, LOWER(payer) AS payer, LOWER(recei
+STMT	rows=50	ms=155	differences=0	WITH ev AS (SELECT tx_hash, log_index, block_timestamp, LOWER(payer) AS payer, LOWER(recei
+DIFF	Refusal	primary=50 rows	secondary=refused executing: substrate error: Schema error: Schema contains duplicate unqualified field name "sum(burrmill_hugeint(tally__payment_collected.tokens))"	primary_ms=42	secondary_ms=1
+	SELECT LOWER(payer) AS payer, LOWER(receiver) AS receiver, "collectionId" AS collection_id, CAST(SUM(CAST(tokens AS HUGEINT)) AS VARCHAR) AS tokens FROM tally__payment_collected WHERE 1=1 GROUP BY 1, 2, 3 ORDER BY SUM(CAST(tokens AS HUGEINT)) DESC LIMIT 50
+STMT	rows=50	ms=66	differences=1	SELECT LOWER(payer) AS payer, LOWER(receiver) AS receiver, "collectionId" AS collection_id
+DIFF	Refusal	primary=50 rows	secondary=refused executing: substrate error: Schema error: Schema contains duplicate unqualified field name "sum(burrmill_hugeint(tally__payment_collected.tokens))"	primary_ms=12	secondary_ms=1
+	SELECT LOWER(payer) AS payer, LOWER(receiver) AS receiver, "collectionId" AS collection_id, CAST(SUM(CAST(tokens AS HUGEINT)) AS VARCHAR) AS tokens FROM tally__payment_collected WHERE 1=1 AND LOWER(receiver) = '0x090f7382f9ea85c733cd501f4d87f16cb5b83ed3' GROUP BY 1, 2, 3 ORDER BY SUM(CAST(tokens AS HUGEINT)) DESC LIMIT 50
+STMT	rows=50	ms=35	differences=1	SELECT LOWER(payer) AS payer, LOWER(receiver) AS receiver, "collectionId" AS collection_id
+DIFF	Refusal	primary=6 rows	secondary=refused executing: substrate error: Schema error: Schema contains duplicate unqualified field name "sum(burrmill_hugeint(tally__payment_collected.tokens))"	primary_ms=18	secondary_ms=1
+	SELECT LOWER(payer) AS payer, COUNT(DISTINCT "collectionId") AS collections, CAST(SUM(CAST(tokens AS HUGEINT)) AS VARCHAR) AS tokens FROM tally__payment_collected WHERE 1=1 GROUP BY 1 ORDER BY SUM(CAST(tokens AS HUGEINT)) DESC
+STMT	rows=6	ms=39	differences=1	SELECT LOWER(payer) AS payer, COUNT(DISTINCT "collectionId") AS collections, CAST(SUM(CAST
+DIFF	Refusal	primary=2 rows	secondary=refused executing: substrate error: Schema error: Schema contains duplicate unqualified field name "sum(burrmill_hugeint(tally__payment_collected.tokens))"	primary_ms=12	secondary_ms=1
+	SELECT LOWER(payer) AS payer, COUNT(DISTINCT "collectionId") AS collections, CAST(SUM(CAST(tokens AS HUGEINT)) AS VARCHAR) AS tokens FROM tally__payment_collected WHERE 1=1 AND LOWER(receiver) = '0x090f7382f9ea85c733cd501f4d87f16cb5b83ed3' GROUP BY 1 ORDER BY SUM(CAST(tokens AS HUGEINT)) DESC
+STMT	rows=2	ms=35	differences=1	SELECT LOWER(payer) AS payer, COUNT(DISTINCT "collectionId") AS collections, CAST(SUM(CAST
+STMT	rows=50	ms=1557	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=50	ms=1561	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=5576	ms=1621	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=1	ms=1630	differences=0	SELECT id, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(staked_tokens AS VA
+STMT	rows=10447	ms=1632	differences=0	SELECT id FROM lodestar_deployments WHERE signalled_tokens > 0 OR staked_tokens > 0
+STMT	rows=1	ms=640	differences=0	SELECT subgraph_deployment, CAST(MAX(signalled_tokens) AS VARCHAR) AS signalled_tokens, CA
+STMT	rows=2	ms=5343	differences=0	SELECT LOWER(a.indexer) AS indexer, i.url, CAST(a.allocated_tokens AS VARCHAR) AS allocate
+STMT	rows=2	ms=894	differences=0	SELECT id, curator, CAST(signalled_tokens AS VARCHAR) AS signalled_tokens, CAST(unsignalle
+STMT	rows=2	ms=45	differences=0	SELECT CAST(block_timestamp AS BIGINT) AS timestamp, 'MintSignal' AS type, CAST(CAST(token
+STMT	rows=50	ms=673	differences=0	SELECT CAST(allocated_tokens AS VARCHAR) AS allocated_tokens, created_at, closed_at FROM l
+STMT	rows=50	ms=793	differences=0	SELECT LOWER(subgraph_deployment) AS id, CAST(SUM(query_fees_collected) AS VARCHAR) AS que
+STMT	rows=4193	ms=850	differences=0	SELECT LOWER(subgraph_deployment) AS id, CAST(SUM(query_fees_collected) AS VARCHAR) AS que
+STMT	rows=2	ms=5377	differences=0	SELECT a.indexer AS id, i.url FROM lodestar_allocations a JOIN lodestar_indexers i ON i.id
+STMT	rows=1	ms=1635	differences=0	SELECT url FROM lodestar_indexers WHERE id = '0x090f7382f9ea85c733cd501f4d87f16cb5b83ed3'
+STMT	rows=97	ms=5541	differences=0	SELECT id, CAST(staked_tokens AS VARCHAR) AS staked_tokens, CAST(locked_tokens AS VARCHAR)
+STMT	rows=13754	ms=1461	differences=0	SELECT a.id, LOWER(a.indexer) AS indexer, CAST(a.allocated_tokens AS VARCHAR) AS allocated
+STMT	rows=37087	ms=169	differences=0	SELECT event_type, indexer, CAST(tokens AS VARCHAR) AS tokens FROM lodestar_delegations WH
+DIFF	Refusal	primary=441 rows	secondary=refused executing: substrate error: checked_arithmetic
+	WITH events AS (SELECT block_timestamp, CAST(tokens_dec AS DOUBLE) / 1e18 AS tokens, 'inflow' AS direction          FROM staking_legacy__stake_delegated          UNION ALL SELECT block_timestamp, CAST(tokens_dec AS DOUBLE) / 1e18, 'outflow'          FROM staking_legacy__stake_delegated_locked          UNION ALL SELECT block_timestamp, CAST(tokens_dec AS DOUBLE) / 1e18, 'inflow'          FROM staking__tokens_delegated          UNION ALL SELECT block_timestamp, CAST(tokens_dec AS DOUBLE) / 1e18, 'outflow'          FROM staking__tokens_undelegated)          SELECT strftime(to_timestamp(block_timestamp), '%Y-%m-%d') AS date,          SUM(CASE WHEN direction = 'inflow' THEN tokens ELSE 0 END) AS inflows,          SUM(CASE WHEN direction = 'outflow' THEN tokens ELSE 0 END) AS outflows          FROM events WHERE block_timestamp >= 1720000000 AND block_timestamp < 1758000000          GROUP BY 1 ORDER BY 1
+STMT	rows=441	ms=351	differences=1	WITH events AS (SELECT block_timestamp, CAST(tokens_dec AS DOUBLE) / 1e18 AS tokens, 'infl
+DIFF	Refusal	primary=0 rows	secondary=refused executing: substrate error: checked_arithmetic
+	WITH events AS (SELECT block_timestamp, CAST(tokens_dec AS DOUBLE) / 1e18 AS tokens, 'inflow' AS direction          FROM staking__tokens_delegated          UNION ALL SELECT block_timestamp, CAST(tokens_dec AS DOUBLE) / 1e18, 'outflow'          FROM staking__tokens_undelegated)          SELECT strftime(to_timestamp(block_timestamp), '%Y-%m-%d') AS date,          SUM(CASE WHEN direction = 'inflow' THEN tokens ELSE 0 END) AS inflows,          SUM(CASE WHEN direction = 'outflow' THEN tokens ELSE 0 END) AS outflows          FROM events WHERE block_timestamp >= 1720000000 AND block_timestamp < 1758000000          GROUP BY 1 ORDER BY 1
+STMT	rows=0	ms=27	differences=1	WITH events AS (SELECT block_timestamp, CAST(tokens_dec AS DOUBLE) / 1e18 AS tokens, 'infl
+STMT	rows=115732	ms=945	differences=0	SELECT LOWER(indexer) AS indexer, CAST(indexing_delegator_rewards AS VARCHAR) AS indexing_
+STMT	rows=134	ms=3176	differences=0	SELECT indexer, CAST(SUM(pool_delta) AS VARCHAR) AS pool_tokens, CAST(SUM(shares_delta) AS
+STMT	rows=50	ms=28	differences=0	SELECT tx_hash, log_index, block_number, block_timestamp, LOWER("serviceProvider") AS inde
+STMT	rows=10555	ms=42	differences=0	SELECT block_timestamp AS "createdAt" FROM "gns__subgraph_published" WHERE block_timestamp
+STMT	ERROR	ms=17	SELECT subgraph_id FROM deployment_subgraphs WHERE LOWER(deployment_id) = '0x17526856ed0a1	failed to prepare query: Catalog Error: Table with name deployment_subgraphs does not exist!
+                                ^: Error code 1: Unknown error code
+STMT	ERROR	ms=14	SELECT deployment_id, version_metadata, version_number, created_at FROM subgraph_versions 	failed to prepare query: Catalog Error: Table with name subgraph_versions does not exist!
+                                                                      ^: Error code 1: Unknown error code
+STMT	rows=1	ms=766	differences=0	SELECT LOWER(subgraph_deployment) AS subgraph_deployment, CAST(MAX(signalled_tokens) AS VA
+STMT	ERROR	ms=15	SELECT subgraph_metadata FROM subgraph_current WHERE NOT deprecated AND subgraph_metadata 	failed to prepare query: Catalog Error: Table with name subgraph_current does not exist!
+                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT * FROM dips_current_allocation	failed to prepare query: Catalog Error: Table with name dips_current_allocation does not exist!
+                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT * FROM dips_timeline ORDER BY block_number	failed to prepare query: Catalog Error: Table with name dips_timeline does not exist!
+                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT d.target, d.block_number, d.block_timestamp, d.amount_dec FROM "issuance_allocator_	failed to prepare query: Catalog Error: Table with name issuance_allocator__issuance_distributed does not exist!
+                                                                         ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT count(*) AS publishers FROM qos_publisher	failed to prepare query: Catalog Error: Table with name qos_publisher does not exist!
+                                           ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT topic, newest_bucket_start, buckets, last_post_block, last_post_time FROM qos_fresh	failed to prepare query: Catalog Error: Table with name qos_freshness does not exist!
+                                                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=13	SELECT (SELECT sum(buckets_stored) FROM qos_day_resolution WHERE day = DATE '1970-01-01' +	failed to prepare query: Catalog Error: Table with name qos_day_resolution does not exist!
+                                                ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT indexer, CAST(day AS VARCHAR) AS date, query_count, num_200, success_rate, latency_	failed to prepare query: Catalog Error: Table with name qos_indexer_daily does not exist!
+                                                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT indexer, seconds_behind_peers, share_queries_over_5min_behind, share_with_block_tim	failed to prepare query: Catalog Error: Table with name qos_indexer_seconds_behind does not exist!
+                                                                        ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT indexer, CAST(day AS VARCHAR) AS date, query_count, num_200, success_rate, latency_	failed to prepare query: Catalog Error: Table with name qos_indexer_daily does not exist!
+                                                                      ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT indexer, seconds_behind_peers, share_queries_over_5min_behind, share_with_block_tim	failed to prepare query: Catalog Error: Table with name qos_indexer_seconds_behind does not exist!
+                                                                        ^: Error code 1: Unknown error code
+STMT	ERROR	ms=12	SELECT CAST(day AS VARCHAR) AS date, string_agg(DISTINCT gateway, ',' ORDER BY gateway) AS	failed to prepare query: Catalog Error: Table with name qos_allocation_daily does not exist!
+                                                                     ^: Error code 1: Unknown error code
+SHADOW	views=22	differences=9

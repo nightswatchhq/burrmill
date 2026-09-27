@@ -16,12 +16,12 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, Decimal128Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder,
-    UInt8Builder, UInt16Builder, UInt32Builder, UInt64Builder,
+    Array, ArrayRef, AsArray, Decimal128Builder, Int8Builder, Int16Builder, Int32Builder,
+    Int64Builder, UInt8Builder, UInt16Builder, UInt32Builder, UInt64Builder,
 };
 use arrow::datatypes::{
-    DataType, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type,
+    DataType, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -126,7 +126,11 @@ impl sqlparser::dialect::Dialect for Duck {
             Ok(b) => (Box::new(expr.clone()), Box::new(b)),
             Err(e) => return Some(Err(e)),
         };
-        Some(Ok(if not { SqlExpr::IsNotDistinctFrom(a, b) } else { SqlExpr::IsDistinctFrom(a, b) }))
+        Some(Ok(if not {
+            SqlExpr::IsNotDistinctFrom(a, b)
+        } else {
+            SqlExpr::IsDistinctFrom(a, b)
+        }))
     }
 }
 
@@ -152,14 +156,21 @@ struct Names {
 
 impl Clone for Names {
     fn clone(&self) -> Self {
-        Names { exact: self.exact.clone(), folded: self.folded.clone(), tables: self.tables.clone() }
+        Names {
+            exact: self.exact.clone(),
+            folded: self.folded.clone(),
+            tables: self.tables.clone(),
+        }
     }
 }
 
 impl Names {
     fn add(&mut self, name: &str) {
         self.exact.insert(name.to_string());
-        self.folded.entry(name.to_lowercase()).or_default().insert(name.to_string());
+        self.folded
+            .entry(name.to_lowercase())
+            .or_default()
+            .insert(name.to_string());
     }
 }
 
@@ -174,7 +185,10 @@ impl Known {
             }
             n.tables.insert(name.to_lowercase(), columns);
         }
-        Known { base: Arc::new(n), extra: Names::default() }
+        Known {
+            base: Arc::new(n),
+            extra: Names::default(),
+        }
     }
 
     pub fn columns(&self, lowercased: &str) -> Option<Vec<String>> {
@@ -194,7 +208,11 @@ impl Known {
         let (a, b) = (self.base.folded.get(&lower), self.extra.folded.get(&lower));
         let mut names = a.into_iter().flatten().chain(b.into_iter().flatten());
         let first = names.next()?;
-        if names.all(|n| n == first) { Some(first.as_str()) } else { None }
+        if names.all(|n| n == first) {
+            Some(first.as_str())
+        } else {
+            None
+        }
     }
 }
 
@@ -235,6 +253,26 @@ impl Aliases<'_> {
         for c in &a.columns {
             self.0.add(&c.name.value);
         }
+    }
+}
+
+/// Every column name an expression mentions, lowercased and unqualified.
+struct Named<'a>(&'a mut std::collections::HashSet<String>);
+
+impl sq::Visitor for Named<'_> {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, e: &SqlExpr) -> ControlFlow<()> {
+        match e {
+            SqlExpr::Identifier(i) => {
+                self.0.insert(i.value.to_lowercase());
+            }
+            SqlExpr::CompoundIdentifier(v) => {
+                self.0.extend(v.last().map(|i| i.value.to_lowercase()));
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
     }
 }
 
@@ -287,19 +325,26 @@ fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
     });
     // `ORDER BY s.x` beside `... AS x`: DuckDB sorts by the source column, DataFusion adds it to
     // the projection and then refuses `s.x` beside `x` as ambiguous. The alias is suffixed instead.
-    let ordered: std::collections::HashSet<String> = match &q.order_by {
-        Some(sq::OrderBy {
-            kind: sq::OrderByKind::Expressions(items),
-            ..
-        }) => items
-            .iter()
-            .filter_map(|o| match &o.expr {
-                SqlExpr::CompoundIdentifier(v) => v.last().map(|i| i.value.to_lowercase()),
-                _ => None,
-            })
-            .collect(),
-        _ => Default::default(),
-    };
+    // The same inside an expression: `ORDER BY sum(CAST(x AS HUGEINT))` beside `... AS x` reads the
+    // source `x`, as DuckDB and Postgres do, where only a bare `ORDER BY x` means the alias.
+    let mut ordered: std::collections::HashSet<String> = Default::default();
+    if let Some(sq::OrderBy {
+        kind: sq::OrderByKind::Expressions(items),
+        ..
+    }) = &q.order_by
+    {
+        for o in items {
+            match &o.expr {
+                SqlExpr::Identifier(_) => {}
+                SqlExpr::CompoundIdentifier(v) => {
+                    ordered.extend(v.last().map(|i| i.value.to_lowercase()));
+                }
+                e => {
+                    let _ = sq::Visit::visit(e, &mut Named(&mut ordered));
+                }
+            }
+        }
+    }
     let mut seen = std::collections::HashSet::new();
     let mut pos = 0usize;
     for (i, item) in sel.projection.iter_mut().enumerate() {
@@ -383,7 +428,12 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
     }
     let mut ctes = std::collections::HashSet::new();
     let _ = sq::Visit::visit(s.as_ref(), &mut CteNames(&mut ctes));
-    let mut rw = Rewriter { refused: None, lambda: vec![], known, ctes };
+    let mut rw = Rewriter {
+        refused: None,
+        lambda: vec![],
+        known,
+        ctes,
+    };
     let _ = sq::VisitMut::visit(s.as_mut(), &mut rw);
     match rw.refused {
         Some(why) => Err(BurrmillError::NotAllowed(why)),
@@ -417,7 +467,12 @@ impl sq::Visitor for CteNames<'_> {
 fn output_width(b: &sq::SetExpr) -> Option<usize> {
     match b {
         sq::SetExpr::Select(s) => {
-            let wild = s.projection.iter().any(|i| matches!(i, sq::SelectItem::Wildcard(_) | sq::SelectItem::QualifiedWildcard(..)));
+            let wild = s.projection.iter().any(|i| {
+                matches!(
+                    i,
+                    sq::SelectItem::Wildcard(_) | sq::SelectItem::QualifiedWildcard(..)
+                )
+            });
             (!wild).then_some(s.projection.len())
         }
         sq::SetExpr::SetOperation { left, .. } => output_width(left),
@@ -437,15 +492,16 @@ fn nulls_last(v: &mut [sq::OrderByExpr]) {
 /// DuckDB refuses a string or non-integer number as an ordering key in a query or an aggregate
 /// (though not in a window): it would order nothing.
 fn literal_key(v: &[sq::OrderByExpr]) -> Option<String> {
-    v.iter().any(|o| match &o.expr {
-        SqlExpr::Value(v) => match &v.value {
-            sq::Value::SingleQuotedString(_) | sq::Value::DoubleQuotedString(_) => true,
-            sq::Value::Number(n, _) => n.parse::<i64>().is_err(),
+    v.iter()
+        .any(|o| match &o.expr {
+            SqlExpr::Value(v) => match &v.value {
+                sq::Value::SingleQuotedString(_) | sq::Value::DoubleQuotedString(_) => true,
+                sq::Value::Number(n, _) => n.parse::<i64>().is_err(),
+                _ => false,
+            },
             _ => false,
-        },
-        _ => false,
-    })
-    .then(|| "Binder Error: ORDER BY non-integer literal has no effect.".to_string())
+        })
+        .then(|| "Binder Error: ORDER BY non-integer literal has no effect.".to_string())
 }
 
 /// `arg_max(x, y)`: `x` from the row with the greatest `y`, rows with either NULL passed over, as
@@ -475,12 +531,18 @@ fn arg_extreme(f: &mut sq::Function, max: bool) {
         Some(w) => binop(SqlExpr::Nested(w), BinaryOperator::And, both),
         None => both,
     }));
-    l.args = vec![sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(x.clone()))];
-    l.clauses.push(sq::FunctionArgumentClause::OrderBy(vec![sq::OrderByExpr {
-        expr: y.clone(),
-        options: sq::OrderByOptions { asc: Some(!max), nulls_first: Some(false) },
-        with_fill: None,
-    }]));
+    l.args = vec![sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(
+        x.clone(),
+    ))];
+    l.clauses
+        .push(sq::FunctionArgumentClause::OrderBy(vec![sq::OrderByExpr {
+            expr: y.clone(),
+            options: sq::OrderByOptions {
+                asc: Some(!max),
+                nulls_first: Some(false),
+            },
+            with_fill: None,
+        }]));
     f.name = sq::ObjectName::from(vec![sq::Ident::new("first_value")]);
 }
 
@@ -503,7 +565,9 @@ fn rename_function(f: &mut sq::Function) {
     }
     let part = match lower.as_str() {
         "year" | "month" | "day" | "hour" | "minute" | "second" | "quarter" | "week" | "epoch"
-        | "millisecond" | "microsecond" | "isodow" | "decade" | "century" | "millennium" => lower.clone(),
+        | "millisecond" | "microsecond" | "isodow" | "decade" | "century" | "millennium" => {
+            lower.clone()
+        }
         "dayofweek" => "dow".into(),
         "dayofyear" => "doy".into(),
         "dayofmonth" => "day".into(),
@@ -672,7 +736,12 @@ impl VisitorMut for Rewriter {
             // expression, reads a comparison.
             if let sq::FunctionArguments::List(l) = &mut f.args {
                 for a in l.args.iter_mut() {
-                    if let sq::FunctionArg::Named { name, arg: sq::FunctionArgExpr::Expr(v), operator: sq::FunctionArgOperator::Equals } = a {
+                    if let sq::FunctionArg::Named {
+                        name,
+                        arg: sq::FunctionArgExpr::Expr(v),
+                        operator: sq::FunctionArgOperator::Equals,
+                    } = a
+                    {
                         // `f('x y' = v)` arrives with the string as the argument's name.
                         let left = if name.quote_style == Some('\'') {
                             SqlExpr::Value(sq::Value::SingleQuotedString(name.value.clone()).into())
@@ -686,17 +755,22 @@ impl VisitorMut for Rewriter {
             }
         }
         match e {
-            SqlExpr::Lambda(l) => self.lambda.extend(l.params.iter().map(|p| p.name.value.clone())),
+            SqlExpr::Lambda(l) => self
+                .lambda
+                .extend(l.params.iter().map(|p| p.name.value.clone())),
             // DuckDB types a literal by its spelling: `1e3` is DOUBLE, `0.5` DECIMAL(2,1) and `.5`
             // DECIMAL(1,1), digits as written, and past 38 digits DOUBLE. DataFusion drops the
             // leading zero, so the type is written out here, as a cast of the literal's own text
             // (text, so the walk that descends into the cast finds no number to wrap again).
-            SqlExpr::Value(v)
-                if matches!(&v.value, sq::Value::Number(n, _) if n.contains(['e', 'E', '.'])) =>
+            SqlExpr::Value(v) if matches!(&v.value, sq::Value::Number(n, _) if n.contains(['e', 'E', '.'])) =>
             {
-                let sq::Value::Number(n, _) = &v.value else { unreachable!() };
+                let sq::Value::Number(n, _) = &v.value else {
+                    unreachable!()
+                };
                 let data_type = match n.split_once('.') {
-                    Some((int, frac)) if !n.contains(['e', 'E']) && int.len() + frac.len() <= 38 => {
+                    Some((int, frac))
+                        if !n.contains(['e', 'E']) && int.len() + frac.len() <= 38 =>
+                    {
                         SqlType::Decimal(ExactNumberInfo::PrecisionAndScale(
                             (int.len() + frac.len()) as u64,
                             frac.len() as i64,
@@ -727,7 +801,10 @@ impl VisitorMut for Rewriter {
                         ))
                     })
                     .collect();
-                *e = SqlExpr::CompoundFieldAccess { root: Box::new(root), access_chain };
+                *e = SqlExpr::CompoundFieldAccess {
+                    root: Box::new(root),
+                    access_chain,
+                };
             }
             SqlExpr::BinaryOp {
                 left,
@@ -751,7 +828,12 @@ impl VisitorMut for Rewriter {
             }
             // `SUBSTRING(s FROM n FOR m)` is not a function call, so the rename above misses it,
             // and the unicode planner would bind DataFusion's substr.
-            SqlExpr::Substring { expr, substring_from, substring_for, .. } => {
+            SqlExpr::Substring {
+                expr,
+                substring_from,
+                substring_for,
+                ..
+            } => {
                 let mut args = vec![(**expr).clone()];
                 match (substring_from, substring_for) {
                     (Some(from), Some(for_)) => {
@@ -783,13 +865,23 @@ impl VisitorMut for Rewriter {
             SqlExpr::CompoundFieldAccess { access_chain, .. } => {
                 for a in access_chain.iter_mut() {
                     if let sq::AccessExpr::Dot(SqlExpr::Identifier(i)) = a {
-                        *a = sq::AccessExpr::Dot(SqlExpr::Value(sq::Value::SingleQuotedString(i.value.clone()).into()));
+                        *a = sq::AccessExpr::Dot(SqlExpr::Value(
+                            sq::Value::SingleQuotedString(i.value.clone()).into(),
+                        ));
                     }
                 }
             }
             // DuckDB's JSON operators: `->` is json_extract, `->>` json_extract_string.
-            SqlExpr::BinaryOp { left, op: op @ (BinaryOperator::Arrow | BinaryOperator::LongArrow), right } => {
-                let f = if matches!(op, BinaryOperator::Arrow) { "json_extract" } else { "json_extract_string" };
+            SqlExpr::BinaryOp {
+                left,
+                op: op @ (BinaryOperator::Arrow | BinaryOperator::LongArrow),
+                right,
+            } => {
+                let f = if matches!(op, BinaryOperator::Arrow) {
+                    "json_extract"
+                } else {
+                    "json_extract_string"
+                };
                 *e = call(f, vec![*left.clone(), *right.clone()]);
             }
             SqlExpr::BinaryOp { left, op, right } => {
@@ -838,7 +930,10 @@ impl ScalarUDFImpl for IntDiv {
             t.is_integer() || matches!(t, DataType::Decimal128(_, 0) | DataType::Null)
         };
         // Beside a DOUBLE or a scaled DECIMAL, DuckDB's `//` is ordinary division, in DOUBLE.
-        if (a.is_numeric() || a.is_null()) && (b.is_numeric() || b.is_null()) && (!exact(a) || !exact(b)) {
+        if (a.is_numeric() || a.is_null())
+            && (b.is_numeric() || b.is_null())
+            && (!exact(a) || !exact(b))
+        {
             return Ok(vec![DataType::Float64, DataType::Float64]);
         }
         if !exact(a) || !exact(b) {
@@ -848,7 +943,8 @@ impl ScalarUDFImpl for IntDiv {
         // where a signed type twice the unsigned width fits and HUGEINT past it (a literal having
         // been fitted to its partner already); the rest BIGINT.
         let unsigned = |t: &DataType| t.is_unsigned_integer() || t.is_null();
-        let mixed = (a.is_unsigned_integer() && b.is_signed_integer()) || (a.is_signed_integer() && b.is_unsigned_integer());
+        let mixed = (a.is_unsigned_integer() && b.is_signed_integer())
+            || (a.is_signed_integer() && b.is_unsigned_integer());
         let wide = matches!(a, DataType::Decimal128(..))
             || matches!(b, DataType::Decimal128(..))
             || (mixed && matches!(duck_union(a, b), Some(DataType::Decimal128(..))));
@@ -874,7 +970,10 @@ impl ScalarUDFImpl for IntDiv {
         let n = a.len();
         let out: ArrayRef = match a.data_type() {
             DataType::Float64 => {
-                let (a, b) = (a.as_primitive::<arrow::datatypes::Float64Type>(), b.as_primitive::<arrow::datatypes::Float64Type>());
+                let (a, b) = (
+                    a.as_primitive::<arrow::datatypes::Float64Type>(),
+                    b.as_primitive::<arrow::datatypes::Float64Type>(),
+                );
                 let mut o = arrow::array::Float64Builder::with_capacity(n);
                 for i in 0..n {
                     if a.is_null(i) || b.is_null(i) || b.value(i) == 0.0 {
@@ -886,7 +985,10 @@ impl ScalarUDFImpl for IntDiv {
                 std::sync::Arc::new(o.finish())
             }
             DataType::UInt64 => {
-                let (a, b) = (a.as_primitive::<UInt64Type>(), b.as_primitive::<UInt64Type>());
+                let (a, b) = (
+                    a.as_primitive::<UInt64Type>(),
+                    b.as_primitive::<UInt64Type>(),
+                );
                 let mut o = arrow::array::UInt64Builder::with_capacity(n);
                 for i in 0..n {
                     if a.is_null(i) || b.is_null(i) || b.value(i) == 0 {
@@ -962,7 +1064,9 @@ pub struct Xor {
 
 impl Xor {
     pub fn udf() -> Arc<ScalarUDF> {
-        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable) }))
+        Arc::new(ScalarUDF::from(Self {
+            sig: Signature::user_defined(Volatility::Immutable),
+        }))
     }
 }
 
@@ -977,13 +1081,19 @@ impl ScalarUDFImpl for Xor {
         let [a, b] = args else {
             return plan_err!("xor takes two integers");
         };
-        let exact = |t: &DataType| t.is_integer() || matches!(t, DataType::Decimal128(_, 0) | DataType::Null);
+        let exact = |t: &DataType| {
+            t.is_integer() || matches!(t, DataType::Decimal128(_, 0) | DataType::Null)
+        };
         if !exact(a) || !exact(b) {
             return plan_err!("xor takes two integers, not {a} and {b}");
         }
         // Literals are already fitted to a column partner, so equal inputs stay that width.
         let t = if a.is_null() {
-            if b.is_null() { DataType::Int32 } else { b.clone() }
+            if b.is_null() {
+                DataType::Int32
+            } else {
+                b.clone()
+            }
         } else if b.is_null() || a == b {
             a.clone()
         } else if matches!(a, DataType::Decimal128(..)) || matches!(b, DataType::Decimal128(..)) {
@@ -997,7 +1107,10 @@ impl ScalarUDFImpl for Xor {
         Ok(args[0].clone())
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
-        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let (a, b) = (&arrays[0], &arrays[1]);
         let n = a.len();
@@ -1026,7 +1139,10 @@ impl ScalarUDFImpl for Xor {
             DataType::UInt32 => xor_prim!(UInt32Type, UInt32Builder),
             DataType::UInt64 => xor_prim!(UInt64Type, UInt64Builder),
             DataType::Decimal128(_, _) => {
-                let (a, b) = (a.as_primitive::<Decimal128Type>(), b.as_primitive::<Decimal128Type>());
+                let (a, b) = (
+                    a.as_primitive::<Decimal128Type>(),
+                    b.as_primitive::<Decimal128Type>(),
+                );
                 let mut o = Decimal128Builder::with_capacity(n);
                 for i in 0..n {
                     if a.is_null(i) || b.is_null(i) {
@@ -1119,13 +1235,21 @@ fn try_as_duckdb(e: Expr) -> DFResult<Transformed<Expr>> {
         return Ok(Transformed::no(e));
     }
     Ok(Transformed::yes(match &f.args[0] {
-        Expr::Cast(Cast { expr, field }) => Expr::TryCast(TryCast::new(expr.clone(), field.data_type().clone())),
+        Expr::Cast(Cast { expr, field }) => {
+            Expr::TryCast(TryCast::new(expr.clone(), field.data_type().clone()))
+        }
         x @ (Expr::TryCast(_) | Expr::Column(_) | Expr::Literal(..)) => x.clone(),
-        Expr::ScalarFunction(inner) => Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
-            Arc::new(ScalarUDF::from(super::duckfns::TryCall { inner: Arc::clone(&inner.func) })),
-            inner.args.clone(),
-        )),
-        other => return plan_err!("TRY is supported here around a cast or a function call, not {other}"),
+        Expr::ScalarFunction(inner) => {
+            Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+                Arc::new(ScalarUDF::from(super::duckfns::TryCall {
+                    inner: Arc::clone(&inner.func),
+                })),
+                inner.args.clone(),
+            ))
+        }
+        other => {
+            return plan_err!("TRY is supported here around a cast or a function call, not {other}");
+        }
     }))
 }
 
@@ -1150,8 +1274,12 @@ fn case_nullability(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
     if e.nullable(schema)? || !branch_nullable {
         return Ok(Transformed::no(e));
     }
-    let f = Arc::new(ScalarUDF::from(super::duckfns::Nullable(Signature::user_defined(Volatility::Immutable))));
-    Ok(Transformed::yes(Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(f, vec![e]))))
+    let f = Arc::new(ScalarUDF::from(super::duckfns::Nullable(
+        Signature::user_defined(Volatility::Immutable),
+    )));
+    Ok(Transformed::yes(Expr::ScalarFunction(
+        datafusion_expr::expr::ScalarFunction::new_udf(f, vec![e]),
+    )))
 }
 
 /// A DATE, or one DataFusion's coercion has already cast to a timestamp.
@@ -1164,16 +1292,28 @@ fn is_date(e: &Expr, schema: &DFSchema) -> bool {
 }
 
 fn dates_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
-    let micros = |e: Expr| Expr::Cast(Cast::new(Box::new(e), DataType::Timestamp(TimeUnit::Microsecond, None)));
+    let micros = |e: Expr| {
+        Expr::Cast(Cast::new(
+            Box::new(e),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ))
+    };
     match e {
         Expr::ScalarFunction(ref f)
             if f.func.name() == "date_trunc"
-                && matches!(e.get_type(schema)?, DataType::Timestamp(TimeUnit::Nanosecond, None))
+                && matches!(
+                    e.get_type(schema)?,
+                    DataType::Timestamp(TimeUnit::Nanosecond, None)
+                )
                 && f.args.get(1).is_some_and(|a| is_date(a, schema)) =>
         {
             Ok(Transformed::yes(micros(e)))
         }
-        Expr::BinaryExpr(BinaryExpr { left, op: op @ (Operator::Plus | Operator::Minus), right }) => {
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: op @ (Operator::Plus | Operator::Minus),
+            right,
+        }) => {
             let (lt, rt) = (left.get_type(schema)?, right.get_type(schema)?);
             let date = |t: &DataType| matches!(t, DataType::Date32 | DataType::Date64);
             // `date + 3` arrives as `CAST(CAST(3 * 86400 AS Duration) AS Interval)`, and is a DATE in
@@ -1183,15 +1323,28 @@ fn dates_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
                 while let Expr::Cast(Cast { expr, .. }) = inner {
                     inner = expr;
                 }
-                matches!(t, DataType::Interval(_)) && !inner.get_type(schema).is_ok_and(|t| t.is_integer())
+                matches!(t, DataType::Interval(_))
+                    && !inner.get_type(schema).is_ok_and(|t| t.is_integer())
             };
             let (lt, rt) = (lt, rt);
             if date(&lt) && interval(&rt, &right) {
-                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(Box::new(micros(*left)), op, right))))
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(micros(*left)),
+                    op,
+                    right,
+                ))))
             } else if interval(&lt, &left) && date(&rt) && op == Operator::Plus {
-                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(left, op, Box::new(micros(*right))))))
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                    left,
+                    op,
+                    Box::new(micros(*right)),
+                ))))
             } else {
-                Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })))
+                Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op,
+                    right,
+                })))
             }
         }
         e => Ok(Transformed::no(e)),
@@ -1201,17 +1354,26 @@ fn dates_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
 /// A timestamp cast to text in DuckDB's form (`2024-01-01 00:00:00+00`, not arrow's ISO `T`/`Z`).
 fn timestamp_as_text(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
     let (inner, to) = match &e {
-        Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => (expr, field.data_type()),
+        Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => {
+            (expr, field.data_type())
+        }
         _ => return Ok(Transformed::no(e)),
     };
     if !is_text(to) || !matches!(inner.get_type(schema)?, DataType::Timestamp(..)) {
         return Ok(Transformed::no(e));
     }
-    let f = Arc::new(ScalarUDF::from(super::duckfns::TimestampText(Signature::user_defined(
-        Volatility::Immutable,
-    ))));
-    let text = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(f, vec![inner.as_ref().clone()]));
-    Ok(Transformed::yes(if *to == DataType::Utf8 { text } else { Expr::Cast(Cast::new(Box::new(text), to.clone())) }))
+    let f = Arc::new(ScalarUDF::from(super::duckfns::TimestampText(
+        Signature::user_defined(Volatility::Immutable),
+    )));
+    let text = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+        f,
+        vec![inner.as_ref().clone()],
+    ));
+    Ok(Transformed::yes(if *to == DataType::Utf8 {
+        text
+    } else {
+        Expr::Cast(Cast::new(Box::new(text), to.clone()))
+    }))
 }
 
 /// `to_timestamp` is TIMESTAMPTZ in DuckDB: microseconds, UTC. DataFusion's is nanoseconds with
@@ -1344,7 +1506,11 @@ fn union_floats(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
     let width = u.schema.fields().len();
     let doubles: Vec<bool> = (0..width)
         .map(|i| {
-            let types: Vec<&DataType> = u.inputs.iter().map(|x| x.schema().field(i).data_type()).collect();
+            let types: Vec<&DataType> = u
+                .inputs
+                .iter()
+                .map(|x| x.schema().field(i).data_type())
+                .collect();
             types.iter().all(|t| numeric(t) || t.is_null())
                 && types.iter().any(|t| t.is_floating())
                 && types.iter().any(|t| numeric(t) && **t != DataType::Float64)
@@ -1363,16 +1529,23 @@ fn union_floats(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
                     let (q, f) = s.qualified_field(i);
                     let c = Expr::Column(datafusion_common::Column::from((q, f)));
                     if doubles[i] && *f.data_type() != DataType::Float64 {
-                        Expr::Cast(Cast::new(Box::new(c), DataType::Float64)).alias_qualified(q.cloned(), f.name())
+                        Expr::Cast(Cast::new(Box::new(c), DataType::Float64))
+                            .alias_qualified(q.cloned(), f.name())
                     } else {
                         c
                     }
                 })
                 .collect();
-            Ok(Arc::new(LogicalPlanBuilder::from(x.as_ref().clone()).project(exprs)?.build()?))
+            Ok(Arc::new(
+                LogicalPlanBuilder::from(x.as_ref().clone())
+                    .project(exprs)?
+                    .build()?,
+            ))
         })
         .collect::<DFResult<Vec<_>>>()?;
-    Ok(Some(LogicalPlan::Union(datafusion_expr::logical_plan::Union::try_new_with_loose_types(inputs)?)))
+    Ok(Some(LogicalPlan::Union(
+        datafusion_expr::logical_plan::Union::try_new_with_loose_types(inputs)?,
+    )))
 }
 
 /// DuckDB's type for two integer columns meeting in a set operation, where literals do not adapt:
@@ -1442,7 +1615,12 @@ fn set_op_types(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
                 .or_else(|| duck_union(l, r))
                 .or_else(|| {
                     (numeric(l) && numeric(r))
-                        .then(|| datafusion_expr::type_coercion::binary::type_union_resolution(&[l.clone(), r.clone()]))
+                        .then(|| {
+                            datafusion_expr::type_coercion::binary::type_union_resolution(&[
+                                l.clone(),
+                                r.clone(),
+                            ])
+                        })
                         .flatten()
                 })
                 .filter(|t| t != l)
@@ -1459,7 +1637,8 @@ fn set_op_types(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
                 let (q, f) = s.qualified_field(i);
                 let c = Expr::Column(datafusion_common::Column::from((q, f)));
                 match &types[i] {
-                    Some(t) => Expr::Cast(Cast::new(Box::new(c), t.clone())).alias_qualified(q.cloned(), f.name()),
+                    Some(t) => Expr::Cast(Cast::new(Box::new(c), t.clone()))
+                        .alias_qualified(q.cloned(), f.name()),
                     None => c,
                 }
             })
@@ -1485,11 +1664,19 @@ fn set_op_types(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
     };
     let (left, right) = (side(&j.left)?, side(&j.right)?);
     let keys = |s: &DFSchema| -> Vec<datafusion_common::Column> {
-        s.fields().iter().map(|f| datafusion_common::Column::from_name(f.name())).collect()
+        s.fields()
+            .iter()
+            .map(|f| datafusion_common::Column::from_name(f.name()))
+            .collect()
     };
     let (lk, rk) = (keys(left.schema()), keys(right.schema()));
-    let joined = LogicalPlanBuilder::from(left)
-        .join_detailed(right, j.join_type, (lk, rk), None, NullEquality::NullEqualsNull)?;
+    let joined = LogicalPlanBuilder::from(left).join_detailed(
+        right,
+        j.join_type,
+        (lk, rk),
+        None,
+        NullEquality::NullEqualsNull,
+    )?;
     if !bag {
         return Ok(Some(joined.build()?));
     }
@@ -1525,9 +1712,11 @@ fn plainly_integer(e: &Expr, schema: &DFSchema) -> DFResult<bool> {
         Expr::Cast(c) => c.field.data_type().is_integer(),
         Expr::TryCast(c) => c.field.data_type().is_integer(),
         Expr::Negative(x) => plainly_integer(x, schema)?,
-        Expr::BinaryExpr(BinaryExpr { left, op: Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Modulo, right }) => {
-            plainly_integer(left, schema)? && plainly_integer(right, schema)?
-        }
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Modulo,
+            right,
+        }) => plainly_integer(left, schema)? && plainly_integer(right, schema)?,
         _ => false,
     })
 }
@@ -1537,7 +1726,9 @@ fn plainly_integer(e: &Expr, schema: &DFSchema) -> DFResult<bool> {
 /// (`=`, `<>` and `nullif` DuckDB binds as a cast that fails only on a row, so they are left.)
 fn temporal_beside_integer(t: &DataType, v: &ScalarValue) -> DFResult<()> {
     if t.is_temporal() && v.data_type().is_integer() {
-        return plan_err!("Cannot compare values of type {t} and type INTEGER_LITERAL - an explicit cast is required");
+        return plan_err!(
+            "Cannot compare values of type {t} and type INTEGER_LITERAL - an explicit cast is required"
+        );
     }
     Ok(())
 }
@@ -1560,8 +1751,12 @@ fn fit_literal(e: Expr, to: &DataType) -> Expr {
 /// DOUBLE. DataFusion agrees for integers, but mixed-sign integers become DECIMAL in its coercion,
 /// after this has run, and DECIMAL beside a float stays DECIMAL there.
 fn floats_win(exprs: &[&Expr], schema: &DFSchema) -> DFResult<bool> {
-    let types = exprs.iter().map(|e| e.get_type(schema)).collect::<DFResult<Vec<_>>>()?;
-    Ok(types.iter().any(|t| t.is_floating()) && types.iter().any(|t| t.is_numeric() && !t.is_floating()))
+    let types = exprs
+        .iter()
+        .map(|e| e.get_type(schema))
+        .collect::<DFResult<Vec<_>>>()?;
+    Ok(types.iter().any(|t| t.is_floating())
+        && types.iter().any(|t| t.is_numeric() && !t.is_floating()))
 }
 
 /// DuckDB's type for integer values meeting in one result, where they mix signedness and so
@@ -1588,25 +1783,39 @@ fn integer_union(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType
         }
         types.push(t);
     }
-    let huge = types.iter().any(|t| matches!(t, DataType::Decimal128(_, 0)));
+    let huge = types
+        .iter()
+        .any(|t| matches!(t, DataType::Decimal128(_, 0)));
     if huge {
-        return Ok((literal || types.iter().any(|t| t.is_integer()) || types.iter().any(|t| *t != types[0]))
-            .then_some(DataType::Decimal128(38, 0)));
+        return Ok((literal
+            || types.iter().any(|t| t.is_integer())
+            || types.iter().any(|t| *t != types[0]))
+        .then_some(DataType::Decimal128(38, 0)));
     }
-    let mixed = types.iter().any(|t| t.is_unsigned_integer()) && types.iter().any(|t| t.is_signed_integer());
+    let mixed = types.iter().any(|t| t.is_unsigned_integer())
+        && types.iter().any(|t| t.is_signed_integer());
     if !mixed {
         return Ok(None);
     }
-    Ok(types.iter().skip(1).try_fold(types[0].clone(), |a, b| duck_union(&a, b)))
+    Ok(types
+        .iter()
+        .skip(1)
+        .try_fold(types[0].clone(), |a, b| duck_union(&a, b)))
 }
 
 fn cast_to(e: Expr, t: &DataType, schema: &DFSchema) -> DFResult<Expr> {
-    Ok(if e.get_type(schema)? == *t { e } else { Expr::Cast(Cast::new(Box::new(e), t.clone())) })
+    Ok(if e.get_type(schema)? == *t {
+        e
+    } else {
+        Expr::Cast(Cast::new(Box::new(e), t.clone()))
+    })
 }
 
 fn as_double(e: Expr, schema: &DFSchema) -> DFResult<Expr> {
     Ok(match e.get_type(schema)? {
-        t if t.is_numeric() && t != DataType::Float64 => Expr::Cast(Cast::new(Box::new(e), DataType::Float64)),
+        t if t.is_numeric() && t != DataType::Float64 => {
+            Expr::Cast(Cast::new(Box::new(e), DataType::Float64))
+        }
         _ => e,
     })
 }
@@ -1619,10 +1828,16 @@ fn list_element_type(args: &[Expr], schema: &DFSchema) -> DFResult<Option<DataTy
     let refs: Vec<&Expr> = args.iter().collect();
     if let Some(t) = sole_integer(&refs, schema)? {
         let unfit = args.iter().any(|a| match a {
-            Expr::Literal(v, _) if v.data_type().is_integer() => !v.cast_to(&t).is_ok_and(|c| !c.is_null()),
+            Expr::Literal(v, _) if v.data_type().is_integer() => {
+                !v.cast_to(&t).is_ok_and(|c| !c.is_null())
+            }
             _ => false,
         });
-        return Ok(Some(if unfit { DataType::Decimal128(38, 0) } else { t }));
+        return Ok(Some(if unfit {
+            DataType::Decimal128(38, 0)
+        } else {
+            t
+        }));
     }
     integer_union(&refs, schema)
 }
@@ -1678,8 +1893,7 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             }
             Expr::AggregateFunction(f)
         }
-        Expr::WindowFunction(mut w)
-            if matches!(&w.fun, datafusion_expr::expr::WindowFunctionDefinition::AggregateUDF(f) if f.name() == "avg") =>
+        Expr::WindowFunction(mut w) if matches!(&w.fun, datafusion_expr::expr::WindowFunctionDefinition::AggregateUDF(f) if f.name() == "avg") =>
         {
             if exact_avg(&mut w.params.args)? {
                 return Ok(Transformed::yes(Expr::WindowFunction(w)));
@@ -1706,14 +1920,20 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             let (l, r) = match (left.as_ref(), right.as_ref()) {
                 (Expr::Literal(v, _), r) if !matches!(r, Expr::Literal(..)) => {
                     let rt = right.get_type(schema)?;
-                    if matches!(op, Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq) {
+                    if matches!(
+                        op,
+                        Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq
+                    ) {
                         temporal_beside_integer(&rt, v)?;
                     }
                     (fit_literal(*left, &rt), *right)
                 }
                 (l, Expr::Literal(v, _)) if !matches!(l, Expr::Literal(..)) => {
                     let lt = left.get_type(schema)?;
-                    if matches!(op, Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq) {
+                    if matches!(
+                        op,
+                        Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq
+                    ) {
                         temporal_beside_integer(&lt, v)?;
                     }
                     (*left, fit_literal(*right, &lt))
@@ -1726,7 +1946,8 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
         // for UBIGINT against a literal is DECIMAL(20,0).
         Expr::Between(mut b)
             if !matches!(*b.expr, Expr::Literal(..))
-                && (matches!(*b.low, Expr::Literal(..)) || matches!(*b.high, Expr::Literal(..))) =>
+                && (matches!(*b.low, Expr::Literal(..))
+                    || matches!(*b.high, Expr::Literal(..))) =>
         {
             let t = b.expr.get_type(schema)?;
             for bound in [b.low.as_ref(), b.high.as_ref()] {
@@ -1779,9 +2000,9 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
         // with the lambda.
         Expr::ScalarFunction(f)
             if f.func.name() == "array_element"
-                && f.args.first().is_some_and(|a| {
-                    matches!(a, Expr::ScalarFunction(m) if m.func.name() == "make_array")
-                }) =>
+                && f.args.first().is_some_and(
+                    |a| matches!(a, Expr::ScalarFunction(m) if m.func.name() == "make_array"),
+                ) =>
         {
             let args = match &f.args[0] {
                 Expr::ScalarFunction(m) => m.args.clone(),
@@ -1800,15 +2021,26 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             }
         }
         Expr::ScalarFunction(mut f)
-            if matches!(f.func.name(), "coalesce" | "greatest" | "least" | "nullif" | "burrmill_intdiv" | "xor") =>
+            if matches!(
+                f.func.name(),
+                "coalesce" | "greatest" | "least" | "nullif" | "burrmill_intdiv" | "xor"
+            ) =>
         {
             if matches!(f.func.name(), "greatest" | "least" | "coalesce")
-                && f.args.iter().any(|a| matches!(a, Expr::Literal(v, _) if v.data_type().is_integer()))
+                && f.args
+                    .iter()
+                    .any(|a| matches!(a, Expr::Literal(v, _) if v.data_type().is_integer()))
             {
                 for a in &f.args {
                     if !matches!(a, Expr::Literal(..)) {
                         let t = a.get_type(schema)?;
-                        for v in f.args.iter().filter_map(|x| if let Expr::Literal(v, _) = x { Some(v) } else { None }) {
+                        for v in f.args.iter().filter_map(|x| {
+                            if let Expr::Literal(v, _) = x {
+                                Some(v)
+                            } else {
+                                None
+                            }
+                        }) {
                             temporal_beside_integer(&t, v)?;
                         }
                     }
@@ -1817,13 +2049,21 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
             if !matches!(f.func.name(), "burrmill_intdiv" | "xor")
                 && floats_win(&f.args.iter().collect::<Vec<_>>(), schema)?
             {
-                f.args = f.args.into_iter().map(|a| as_double(a, schema)).collect::<DFResult<_>>()?;
+                f.args = f
+                    .args
+                    .into_iter()
+                    .map(|a| as_double(a, schema))
+                    .collect::<DFResult<_>>()?;
                 return Ok(Transformed::yes(Expr::ScalarFunction(f)));
             }
             if f.func.name() != "burrmill_intdiv"
                 && let Some(t) = integer_union(&f.args.iter().collect::<Vec<_>>(), schema)?
             {
-                f.args = f.args.into_iter().map(|a| cast_to(a, &t, schema)).collect::<DFResult<_>>()?;
+                f.args = f
+                    .args
+                    .into_iter()
+                    .map(|a| cast_to(a, &t, schema))
+                    .collect::<DFResult<_>>()?;
                 return Ok(Transformed::yes(Expr::ScalarFunction(f)));
             }
             let args: Vec<&Expr> = f.args.iter().collect();
@@ -1850,12 +2090,34 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
         {
             let (lt, rt) = (left.get_type(schema)?, right.get_type(schema)?);
             // A float beside a DECIMAL compares as DOUBLE in DuckDB; DataFusion goes to DECIMAL.
-            let decimal = |t: &DataType| matches!(t, DataType::Decimal128(..) | DataType::Decimal256(..));
-            let comparison = matches!(op, Operator::Eq | Operator::NotEq | Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq);
-            if comparison && (lt.is_floating() && decimal(&rt) || decimal(&lt) && rt.is_floating()) {
-                let l = if decimal(&lt) { Expr::Cast(Cast::new(left, DataType::Float64)) } else { *left };
-                let r = if decimal(&rt) { Expr::Cast(Cast::new(right, DataType::Float64)) } else { *right };
-                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(Box::new(l), op, Box::new(r)))));
+            let decimal =
+                |t: &DataType| matches!(t, DataType::Decimal128(..) | DataType::Decimal256(..));
+            let comparison = matches!(
+                op,
+                Operator::Eq
+                    | Operator::NotEq
+                    | Operator::Lt
+                    | Operator::Gt
+                    | Operator::LtEq
+                    | Operator::GtEq
+            );
+            if comparison && (lt.is_floating() && decimal(&rt) || decimal(&lt) && rt.is_floating())
+            {
+                let l = if decimal(&lt) {
+                    Expr::Cast(Cast::new(left, DataType::Float64))
+                } else {
+                    *left
+                };
+                let r = if decimal(&rt) {
+                    Expr::Cast(Cast::new(right, DataType::Float64))
+                } else {
+                    *right
+                };
+                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(l),
+                    op,
+                    Box::new(r),
+                ))));
             }
             let ordering = matches!(
                 op,
@@ -1919,7 +2181,11 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
         }
         Expr::InList(mut l) => {
             let t = l.expr.get_type(schema)?;
-            let types = l.list.iter().map(|x| x.get_type(schema)).collect::<DFResult<Vec<_>>>()?;
+            let types = l
+                .list
+                .iter()
+                .map(|x| x.get_type(schema))
+                .collect::<DFResult<Vec<_>>>()?;
             if t == DataType::Boolean {
                 if let Some(n) = types.iter().find(|x| numeric(x)) {
                     l.expr = Box::new(Expr::Cast(Cast::new(l.expr, n.clone())));
@@ -1931,7 +2197,11 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
                     .into_iter()
                     .zip(types)
                     .map(|(x, xt)| {
-                        if xt == DataType::Boolean { Expr::Cast(Cast::new(Box::new(x), t.clone())) } else { x }
+                        if xt == DataType::Boolean {
+                            Expr::Cast(Cast::new(Box::new(x), t.clone()))
+                        } else {
+                            x
+                        }
                     })
                     .collect();
                 return Ok(Transformed::yes(Expr::InList(l)));
@@ -1956,7 +2226,8 @@ impl datafusion_expr::planner::ExprPlanner for DuckPlanner {
         &self,
         mut e: datafusion_expr::planner::RawBinaryExpr,
         schema: &DFSchema,
-    ) -> DFResult<datafusion_expr::planner::PlannerResult<datafusion_expr::planner::RawBinaryExpr>> {
+    ) -> DFResult<datafusion_expr::planner::PlannerResult<datafusion_expr::planner::RawBinaryExpr>>
+    {
         use datafusion_expr::planner::PlannerResult;
         use sqlparser::ast::BinaryOperator as B;
         if !matches!(e.op, B::Eq | B::NotEq | B::Lt | B::Gt | B::LtEq | B::GtEq) {
@@ -1968,7 +2239,11 @@ impl datafusion_expr::planner::ExprPlanner for DuckPlanner {
         // Through BIGINT: arrow casts a boolean to integers and floats but not to DECIMAL.
         let as_number = |b: Expr, t: DataType| {
             let i = Expr::Cast(Cast::new(Box::new(b), DataType::Int64));
-            if t == DataType::Int64 { i } else { Expr::Cast(Cast::new(Box::new(i), t)) }
+            if t == DataType::Int64 {
+                i
+            } else {
+                Expr::Cast(Cast::new(Box::new(i), t))
+            }
         };
         if lt == DataType::Boolean && numeric(&rt) {
             e.left = as_number(e.left, rt);
@@ -2097,7 +2372,11 @@ fn round_before_int_cast(
 /// `burrmill_hugeint(CAST(x AS DECIMAL(38,0)))`, the marker the parse leaves on a HUGEINT cast:
 /// from a float the value is rounded half to even first, as DuckDB's `nearbyint` does, and either
 /// way the marker goes.
-fn hugeint_rounding(e: Expr, schema: &DFSchema, round: &Arc<ScalarUDF>) -> DFResult<Transformed<Expr>> {
+fn hugeint_rounding(
+    e: Expr,
+    schema: &DFSchema,
+    round: &Arc<ScalarUDF>,
+) -> DFResult<Transformed<Expr>> {
     let Expr::ScalarFunction(f) = &e else {
         return Ok(Transformed::no(e));
     };
@@ -2108,10 +2387,9 @@ fn hugeint_rounding(e: Expr, schema: &DFSchema, round: &Arc<ScalarUDF>) -> DFRes
         return plan_err!("burrmill_hugeint takes one argument");
     };
     let rounded = |inner: &Expr| {
-        Box::new(Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
-            Arc::clone(round),
-            vec![inner.clone()],
-        )))
+        Box::new(Expr::ScalarFunction(
+            datafusion_expr::expr::ScalarFunction::new_udf(Arc::clone(round), vec![inner.clone()]),
+        ))
     };
     Ok(Transformed::yes(match arg {
         Expr::Cast(Cast { expr, field }) if expr.get_type(schema)?.is_floating() => {
@@ -2132,7 +2410,9 @@ pub struct HugeintMark {
 
 impl HugeintMark {
     pub fn udf() -> Arc<ScalarUDF> {
-        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable) }))
+        Arc::new(ScalarUDF::from(Self {
+            sig: Signature::user_defined(Volatility::Immutable),
+        }))
     }
 }
 
@@ -2163,7 +2443,9 @@ pub struct FromHex {
 
 impl FromHex {
     pub fn udf() -> Arc<ScalarUDF> {
-        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable) }))
+        Arc::new(ScalarUDF::from(Self {
+            sig: Signature::user_defined(Volatility::Immutable),
+        }))
     }
 }
 
@@ -2237,7 +2519,10 @@ pub struct Decode {
 
 impl Decode {
     pub fn udf(inner: Arc<ScalarUDF>) -> Arc<ScalarUDF> {
-        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable), inner }))
+        Arc::new(ScalarUDF::from(Self {
+            sig: Signature::user_defined(Volatility::Immutable),
+            inner,
+        }))
     }
 }
 
