@@ -92,22 +92,12 @@ then `graft.rs`, `analytics_budget.rs`, `authored_entity_spike.rs`, `entities.rs
 Feature flag `shadow-burrmill`, off in release builds by default. Burrmill answers beside DuckDB;
 DuckDB is served. It carries two engines and two Arrows, so the period is short.
 
-**Decision owed before code (Chief): how nuthatch depends on burrmill.** The repository is private,
-and Cargo resolves an optional dependency whether or not its feature is on, so a `git` or `path`
-dependency in nuthatch's `Cargo.toml` breaks every checkout that cannot see burrmill, CI first.
-Three ways out, in the order I would take them:
-
-1. **Make burrmill public** and depend on it by `git` tag. Simplest, and the plan already expects
-   the repository to open with the release that ships it. The blog post says only "not public yet".
-2. **A deploy key or PAT in nuthatch's CI** with read access to burrmill, and a `git` dependency.
-   Keeps the repository private at the cost of a secret in CI and a `~/.cargo` config for every
-   contributor.
-3. **A shadow binary outside nuthatch's tree**: make `engine::{Engine, Session}` public, and build
-   `nuthatch-shadow`, a crate that depends on nuthatch and burrmill and installs Burrmill as the
-   second engine through a registration hook. Nuthatch's manifest never names burrmill, CI is
-   untouched, and the shadow build is the only thing that links both. More moving parts, and the
-   nests would run a different binary during the shadow period, which is what the period exists to
-   avoid.
+**The dependency.** An earlier version of this paragraph weighed three ways for nuthatch to depend
+on a private burrmill. The repository has been public throughout (`gh repo view` says so; the
+`isPrivate: false` was misread on 2026-09-26, and the blog post carried "not public yet" for a
+night before it was corrected). So it is a plain `git` dependency pinned to a revision, optional,
+behind the `shadow-burrmill` feature; Cargo resolves it on every checkout and compiles it on none
+that leave the feature off.
 
 The `ShadowSession` itself does not depend on the choice: a `Session` that forwards every catalogue
 call to both engines, serves the primary's rows, and runs the secondary afterwards under its own
