@@ -37,6 +37,8 @@ functions with ids resolved from the nest (`docs/bench/shadow-replay-thinkpad-20
   `FloatOrder` from now on: the same rows once every float is read to twelve significant digits.
 - **e.** 22 views and 65 statements: four records, three `Unordered` and one `FloatOrder`, **nothing
   unexplained** (`shadow-replay-thinkpad-2026-09-27e.txt`).
+- **f.** The same with Burrmill's cancel token as the shadow's interrupt handle and RSS in each
+  record: four records, nothing unexplained (`shadow-replay-thinkpad-2026-09-27f.txt`).
 
 The shadow runs inline and is skipped once the primary has used half the guard's budget, so a
 shadowed request pays for both engines; Gate 2's p99 is measured with it on. Burrmill's session has
