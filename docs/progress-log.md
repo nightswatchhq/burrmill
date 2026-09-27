@@ -35,6 +35,8 @@ functions with ids resolved from the nest (`docs/bench/shadow-replay-thinkpad-20
 - **d.** With both fixes: 22 views and 65 statements, one difference left, a `DOUBLE` sum differing
   in its sixteenth digit (`3428611.8956044842` against `…847`), summation order. Recorded as
   `FloatOrder` from now on: the same rows once every float is read to twelve significant digits.
+- **e.** 22 views and 65 statements: four records, three `Unordered` and one `FloatOrder`, **nothing
+  unexplained** (`shadow-replay-thinkpad-2026-09-27e.txt`).
 
 The shadow runs inline and is skipped once the primary has used half the guard's budget, so a
 shadowed request pays for both engines; Gate 2's p99 is measured with it on. Burrmill's session has
