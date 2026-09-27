@@ -83,13 +83,36 @@ then `graft.rs`, `analytics_budget.rs`, `authored_entity_spike.rs`, `entities.rs
 - [x] Suite green on 2026-09-27: `cargo test --locked` as CI runs it, 1,836 passed and 0 failed
       across ten test binaries; with `folds`, analytics and engine_duck 124/124; `cargo fmt --check`
       and `cargo clippy --all-targets -D warnings` clean on both feature sets. No test changed except
-      where it named a moved function. Uncommitted on `pete/engine-trait`.
+      where it named a moved function. Committed as `5df8a00` and pushed on `pete/engine-trait`;
+      the PR is Chief's to open.
 - [ ] Release as an ordinary nuthatch release; roll it as one. Nothing in it is new behaviour.
 
 ## Phase 2b: shadow mode
 
 Feature flag `shadow-burrmill`, off in release builds by default. Burrmill answers beside DuckDB;
 DuckDB is served. It carries two engines and two Arrows, so the period is short.
+
+**Decision owed before code (Chief): how nuthatch depends on burrmill.** The repository is private,
+and Cargo resolves an optional dependency whether or not its feature is on, so a `git` or `path`
+dependency in nuthatch's `Cargo.toml` breaks every checkout that cannot see burrmill, CI first.
+Three ways out, in the order I would take them:
+
+1. **Make burrmill public** and depend on it by `git` tag. Simplest, and the plan already expects
+   the repository to open with the release that ships it. The blog post says only "not public yet".
+2. **A deploy key or PAT in nuthatch's CI** with read access to burrmill, and a `git` dependency.
+   Keeps the repository private at the cost of a secret in CI and a `~/.cargo` config for every
+   contributor.
+3. **A shadow binary outside nuthatch's tree**: make `engine::{Engine, Session}` public, and build
+   `nuthatch-shadow`, a crate that depends on nuthatch and burrmill and installs Burrmill as the
+   second engine through a registration hook. Nuthatch's manifest never names burrmill, CI is
+   untouched, and the shadow build is the only thing that links both. More moving parts, and the
+   nests would run a different binary during the shadow period, which is what the period exists to
+   avoid.
+
+The `ShadowSession` itself does not depend on the choice: a `Session` that forwards every catalogue
+call to both engines, serves the primary's rows, and runs the secondary afterwards under its own
+permit. It can be built and tested with two DuckDB sessions and a planted difference before any
+Burrmill session exists.
 
 - [ ] Burrmill as a second trait implementation behind the flag, opening the same nest directory
       read-only.
