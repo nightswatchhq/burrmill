@@ -124,8 +124,15 @@ Burrmill session exists.
       nuthatch's own `seal_range`, stages hot rows, binds on both engines and runs three
       dashboard-shaped statements: no difference recorded. Clippy clean; the lockfile gained 64
       packages and changed no existing version.
-- [ ] Peak memory beside the timings in each record, and a file sink the operator can pull, not
-      only the log.
+- [x] Memory and a file (2026-09-27): each record carries the process RSS after each engine
+      answered (a process-wide figure; the pair's difference is the shadow's cost), and
+      `NUTHATCH_SHADOW_LOG=<path>` appends every record as a JSON line beside the log.
+- [x] Cancellation (2026-09-27): `burrmill::Engine::cancel_token`, checked between output batches
+      and inside every segment scan (`df/cancel.rs`), because a DataFusion aggregate over a join
+      yields nothing above the scan until it is done (apache/datafusion#19358): a cross-join sum
+      that ran 107 s past its cancel with the batch check alone stops within one scan batch with
+      it. The Burrmill session's `interrupt_handle` is that token, so the watchdog and shutdown
+      reach it as they reach DuckDB's.
 - [ ] Classifier for expected differences, so the log holds only the unexplained. Done so far
       (2026-09-27): both-truncated compares nothing; `Unordered` for a `LIMIT` with no `ORDER BY`;
       `FloatOrder` for doubles equal to twelve significant digits. Still to name: `cold_velocity`
@@ -152,8 +159,9 @@ Burrmill session exists.
       `collect`'s contract and both-truncated compares nothing. Run b: **22 views, 0 differences**.
 - [ ] Then Helsinki DIPS, then GNS, each for a release cycle.
 - [ ] Concurrency sweep on the DataFusion path at 32 clients on the nest it will serve (plan risk).
-- [ ] Joins and cancellation: a per-query timeout that drops the stream at the 30 s guard, since
-      DataFusion joins do not yield (#19358). Test that a cancelled join frees its memory.
+- [ ] Joins and cancellation: the scan-level token above is the mechanism; still owed is a test
+      that a cancelled join frees its memory, and the per-query timeout at the 30 s guard for the
+      cutover build (the shadow build has DuckDB's watchdog in front).
 
 **Gate 2** (all four, or no cutover):
 
