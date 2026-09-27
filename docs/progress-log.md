@@ -4,6 +4,45 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Shadow mode's first day — 2026-09-27
+
+Phase 2b in nuthatch (`pete/shadow-session`): `ShadowEngine` pairs a DuckDB and a Burrmill session
+per nest, forwards every catalogue call to both, serves DuckDB's rows and compares Burrmill's as a
+multiset. Burrmill's session is a `burrmill::Engine` opened empty, with tables registered as the
+policy code binds them: the new `Engine::register_facts` takes the same segment list, declared
+columns, hot rows and window DuckDB is given, and `register_rows` the label snapshots. Rows cross as
+nuthatch JSON via `df::encode`, never as arrow, because the two arrows differ (58 and 59).
+
+Replayed on the thinkpad's 1,925-segment copy through the production path (`query_guarded`), every
+authored view whole and then the dashboard's 81 statements generated from kittiwake's own SQL
+functions with ids resolved from the nest (`docs/bench/shadow-replay-thinkpad-2026-09-27{a,b,c,d}.txt`,
+`docs/bench/dashboard-statements-2026-09-27.sql`):
+
+- **a.** 5 differences in 22 views, all one fault of the harness: DuckDB's `collect` truncates at a
+  64 MiB byte cap, the Burrmill session applied only the row cap. The cap is now `collect`'s
+  contract, and once both engines have truncated nothing sound is left to compare.
+- **b.** 22 views, 0 differences.
+- **c.** Views clean; of 65 statements the nest can answer, 6 differed. Four were one Burrmill bug:
+  an aggregate aliased to its own source column and repeated in `ORDER BY`
+  (`... CAST(SUM(CAST(tokens AS HUGEINT)) AS VARCHAR) AS tokens ... ORDER BY SUM(CAST(tokens AS
+  HUGEINT))`) planned the `ORDER BY` against the alias and refused a duplicate field. A name inside
+  an `ORDER BY` expression is now the source column, as DuckDB and Postgres read it; only a bare
+  `ORDER BY x` means the alias. `dialect-parity` 210/210. Two were the daily-flow charts summing
+  `CAST(tokens_dec AS DOUBLE)`, which the checked rule refuses because `_dec` is NULL past 38 digits
+  and the sum would drop those rows silently; the statement now casts `tokens` itself (kittiwake
+  `pete/dump-nest-sql`). Three more were `SELECT id FROM x LIMIT 1` picking different rows, which
+  is the engine's choice: recorded as `Unordered`, not counted.
+- **d.** With both fixes: 22 views and 65 statements, one difference left, a `DOUBLE` sum differing
+  in its sixteenth digit (`3428611.8956044842` against `…847`), summation order. Recorded as
+  `FloatOrder` from now on: the same rows once every float is read to twelve significant digits.
+
+The shadow runs inline and is skipped once the primary has used half the guard's budget, so a
+shadowed request pays for both engines; Gate 2's p99 is measured with it on. Burrmill's session has
+no cancellation handle yet, and the fold table map is fixed when an engine opens, so a host-registered
+table's aggregates run as DataFusion plans them, to the same answer.
+
+---
+
 ## The nest re-run, with everything since 25 September in — 2026-09-27
 
 `engine-views` over `~/scratch/gan-portable` on the thinkpad (1,925 segments, the rewritten views),

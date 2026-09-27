@@ -126,9 +126,16 @@ Burrmill session exists.
       packages and changed no existing version.
 - [ ] Peak memory beside the timings in each record, and a file sink the operator can pull, not
       only the log.
-- [ ] Classifier for expected differences, so the log holds only the unexplained: `cold_velocity`
+- [ ] Classifier for expected differences, so the log holds only the unexplained. Done so far
+      (2026-09-27): both-truncated compares nothing; `Unordered` for a `LIMIT` with no `ORDER BY`;
+      `FloatOrder` for doubles equal to twelve significant digits. Still to name: `cold_velocity`
       DOUBLE, `/` semantics, DuckDB 1.5.x wraps (duckdb#24081), the cast-comparison bug
-      (`docs/upstream/duckdb-cast-comparison-null-constant.md`), the no-ICU class.
+      (`docs/upstream/duckdb-cast-comparison-null-constant.md`), the no-ICU class, and the checked
+      rule's designed refusals (a sum over a `TRY_CAST` value).
+- [x] What the first replays found and fixed (2026-09-27, log entry "Shadow mode's first day"): a
+      Burrmill `ORDER BY` alias bug (fixed, `dialect-parity` 210/210) and two dashboard statements
+      summing `tokens_dec` (kittiwake `pete/dump-nest-sql` casts `tokens` instead; to merge before
+      cutover). Run d: 22 views and 65 statements, no difference but one `FloatOrder`.
 - [ ] Shadow never changes the served answer, its latency budget or its memory accounting: it runs
       after the DuckDB answer is sent, under its own permit, and is dropped if the guard is near.
 - [x] Replay harness (2026-09-27): `shadow_replay_over_a_nest` in nuthatch, ignored unless
