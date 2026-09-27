@@ -81,6 +81,7 @@ impl Engine {
                     wide: Vec::new(),
                 },
                 self.threads,
+                self.cancel.clone(),
             )?)
         };
         self.session.register_table(&raw, Arc::clone(&raw_provider));

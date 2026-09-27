@@ -8,7 +8,6 @@ use std::sync::Arc;
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::view::ViewTable;
 use datafusion_catalog::{MemTable, Session, TableProvider};
-use datafusion_physical_plan::collect;
 use datafusion_sql::parser::Statement as DfStatement;
 use datafusion_sql::planner::SqlToRel;
 use sqlparser::ast::Statement as SqlStatement;
@@ -16,10 +15,8 @@ use sqlparser::ast::Statement as SqlStatement;
 use crate::error::{BurrmillError, Result};
 use crate::limits::Limits;
 
+mod cancel;
 mod catalog;
-pub mod encode;
-mod host;
-mod errors;
 mod checked;
 mod constants;
 mod correlate;
@@ -27,11 +24,14 @@ mod dialect;
 mod distinct;
 mod doubles;
 mod duckfns;
+pub mod encode;
+mod errors;
 mod fastcast;
 mod fold;
+mod host;
+mod lists;
 mod names;
 mod rangejoin;
-mod lists;
 mod rule;
 mod session;
 mod sharing;
@@ -40,12 +40,12 @@ mod subqueries;
 mod topn;
 mod wide;
 
-#[path = "generated/schema_equivalence.rs"]
-mod schema_equivalence;
 #[path = "generated/physical_planner.rs"]
 mod physical_planner;
+#[path = "generated/schema_equivalence.rs"]
+mod schema_equivalence;
 
-use catalog::{apply_schema_json, discover_tables, NestTable, SegmentTable};
+use catalog::{NestTable, SegmentTable, apply_schema_json, discover_tables};
 use session::MiniSession;
 
 /// Concrete engine: SQL in, RecordBatches out. Generics stay inside this crate.
@@ -57,6 +57,9 @@ pub struct Engine {
     /// First-come-first-served admission, as on the owned path (roadmap 5.3). Without it, 32
     /// clients sharing one runtime starved one of them outright (roadmap 6.8).
     gate: crate::gate::Gate,
+    /// Set from another thread to stop the statement in flight at its next batch; armed again when
+    /// the next statement starts, as DuckDB's interrupt handle behaves.
+    cancel: crate::CancelToken,
 }
 
 impl Engine {
@@ -95,23 +98,34 @@ impl Engine {
             .map_err(|e| BurrmillError::Substrate(e.to_string()))?;
         let mut fold_tables = std::collections::HashMap::new();
         for t in tables.iter().filter(|t| !t.files.is_empty()) {
-            let name = if t.wide.is_empty() { t.name.clone() } else { format!("{}__raw", t.name) };
+            let name = if t.wide.is_empty() {
+                t.name.clone()
+            } else {
+                format!("{}__raw", t.name)
+            };
             let files = t.files.iter().map(|(p, _)| p.clone());
-            fold_tables.insert(name.clone(), crate::segment::SealedSegments::from_files(name, files));
+            fold_tables.insert(
+                name.clone(),
+                crate::segment::SealedSegments::from_files(name, files),
+            );
         }
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads.max(1))
             .thread_name(|i| format!("burrmill-fold-{i}"))
             .build()
             .map_err(|e| BurrmillError::Substrate(e.to_string()))?;
-        let fold = fold::FoldTables { tables: Arc::new(fold_tables), pool: Arc::new(pool) };
+        let fold = fold::FoldTables {
+            tables: Arc::new(fold_tables),
+            pool: Arc::new(pool),
+        };
         let mut session = MiniSession::new(threads, fold).map_err(df_err)?;
         let groups = threads.max(1);
+        let cancel = crate::CancelToken::new();
         for t in &tables {
             let provider: Arc<dyn TableProvider> = if t.files.is_empty() {
                 Arc::new(MemTable::try_new(t.schema.clone(), vec![vec![]]).map_err(df_err)?)
             } else {
-                Arc::new(SegmentTable::new(t, groups)?)
+                Arc::new(SegmentTable::new(t, groups, cancel.clone())?)
             };
             if t.wide.is_empty() {
                 session.register_table(&t.name, provider);
@@ -143,6 +157,7 @@ impl Engine {
             session,
             threads: threads.max(1),
             gate,
+            cancel,
         })
     }
 
@@ -150,8 +165,10 @@ impl Engine {
     /// ones: `body` is the query after `AS`.
     pub fn register_view(&mut self, name: &str, body: &str) -> Result<()> {
         let logical = plan_query(&self.session, body)?;
-        self.session
-            .register_table(name, Arc::new(ViewTable::new(logical, Some(body.to_string()))));
+        self.session.register_table(
+            name,
+            Arc::new(ViewTable::new(logical, Some(body.to_string()))),
+        );
         self.session
             .build_information_schema(|n| n.ends_with("__raw"))
             .map_err(df_err)
@@ -176,15 +193,19 @@ impl Engine {
 
     /// Run a query. DDL, DML, COPY, and table functions are refused before they plan.
     pub fn sql(&self, sql: &str) -> Result<Vec<RecordBatch>> {
-        // Parsed first, so malformed SQL is a syntax error as DuckDB reports it, not a refusal.
-        let logical = plan_query(&self.session, sql)?;
-        refuse_non_query(sql)?;
-        let _pass = self.gate.enter();
-        self.rt.block_on(async {
-            let physical = self.session.create_physical_plan(&logical).await.map_err(df_err)?;
-            let batches = collect(physical, self.session.task_ctx()).await.map_err(df_err)?;
-            Ok(batches.into_iter().map(dialect::strip_dup_suffix).collect())
-        })
+        let mut out = Vec::new();
+        self.sql_for_each(sql, |b| {
+            out.push(b);
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// A handle that stops the statement in flight, from any thread, at its next batch boundary.
+    /// A DataFusion join does not yield inside itself (apache/datafusion#19358), so the delay is
+    /// bounded by one operator's work, not by one batch; the caller's deadline still stands.
+    pub fn cancel_token(&self) -> crate::CancelToken {
+        self.cancel.clone()
     }
 }
 
@@ -203,12 +224,27 @@ impl Engine {
         let logical = plan_query(&self.session, sql)?;
         refuse_non_query(sql)?;
         let _pass = self.gate.enter();
+        self.cancel.reset();
         self.rt.block_on(async {
-            let physical = self.session.create_physical_plan(&logical).await.map_err(df_err)?;
-            let mut stream = datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
+            let physical = self
+                .session
+                .create_physical_plan(&logical)
+                .await
                 .map_err(df_err)?;
+            let mut stream =
+                datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
+                    .map_err(df_err)?;
             while let Some(b) = stream.next().await {
-                f(dialect::strip_dup_suffix(b.map_err(df_err)?))?;
+                if self.cancel.is_cancelled() {
+                    return Err(BurrmillError::Cancelled);
+                }
+                let b = match b {
+                    Ok(b) => b,
+                    // A scan stopped by the token surfaces here as its error; say what it was.
+                    Err(_) if self.cancel.is_cancelled() => return Err(BurrmillError::Cancelled),
+                    Err(e) => return Err(df_err(e)),
+                };
+                f(dialect::strip_dup_suffix(b))?;
             }
             Ok(())
         })
@@ -227,12 +263,18 @@ fn plan_query(session: &MiniSession, sql: &str) -> Result<datafusion_expr::Logic
 /// DuckDB's default names on the unaliased columns, by position, and the private suffixes of
 /// `dialect` taken off wherever the plain name is unique. A name that stays repeated keeps its
 /// suffix until the result batches, which may repeat names where a plan may not.
-fn rename(plan: datafusion_expr::LogicalPlan, names: &[Option<String>]) -> Result<datafusion_expr::LogicalPlan> {
+fn rename(
+    plan: datafusion_expr::LogicalPlan,
+    names: &[Option<String>],
+) -> Result<datafusion_expr::LogicalPlan> {
     use datafusion_expr::{Expr, LogicalPlanBuilder};
     let schema = plan.schema().clone();
     let n = schema.fields().len();
     let by_position = names.len() == n;
-    let suffixed = schema.fields().iter().any(|f| f.name().contains(dialect::DUP) || f.name().ends_with(']'));
+    let suffixed = schema
+        .fields()
+        .iter()
+        .any(|f| f.name().contains(dialect::DUP) || f.name().ends_with(']'));
     if !suffixed && (!by_position || names.iter().all(Option::is_none)) {
         return Ok(plan);
     }
@@ -270,10 +312,17 @@ fn rename(plan: datafusion_expr::LogicalPlan, names: &[Option<String>]) -> Resul
     let exprs: Vec<Expr> = (0..n)
         .map(|i| {
             let col = Expr::Column(datafusion_common::Column::from(schema.qualified_field(i)));
-            if finals[i] == *schema.field(i).name() { col } else { col.alias(finals[i].as_str()) }
+            if finals[i] == *schema.field(i).name() {
+                col
+            } else {
+                col.alias(finals[i].as_str())
+            }
         })
         .collect();
-    LogicalPlanBuilder::from(plan).project(exprs).and_then(|b| b.build()).map_err(df_err)
+    LogicalPlanBuilder::from(plan)
+        .project(exprs)
+        .and_then(|b| b.build())
+        .map_err(df_err)
 }
 
 /// The first keyword, past whitespace, opening parentheses and comments: `(SELECT ...) UNION ...`
@@ -320,13 +369,13 @@ fn refuse_df_statement(stmt: &DfStatement) -> Result<()> {
         DfStatement::CreateExternalTable(_) => Err(BurrmillError::NotAllowed(
             "CREATE EXTERNAL TABLE is not in the grammar we expose".into(),
         )),
-        DfStatement::CopyTo(_) => {
-            Err(BurrmillError::NotAllowed("COPY is not in the grammar we expose".into()))
-        }
+        DfStatement::CopyTo(_) => Err(BurrmillError::NotAllowed(
+            "COPY is not in the grammar we expose".into(),
+        )),
         DfStatement::Explain(_) => Ok(()),
-        DfStatement::Reset(_) => {
-            Err(BurrmillError::NotAllowed("RESET is not in the grammar we expose".into()))
-        }
+        DfStatement::Reset(_) => Err(BurrmillError::NotAllowed(
+            "RESET is not in the grammar we expose".into(),
+        )),
     }
 }
 
@@ -335,7 +384,9 @@ fn refuse_df_statement(stmt: &DfStatement) -> Result<()> {
 fn refuse_wide_literals(stmt: &DfStatement) -> Result<()> {
     use sqlparser::ast::{Expr as SqlExpr, Value, visit_expressions};
     use std::ops::ControlFlow;
-    let DfStatement::Statement(s) = stmt else { return Ok(()) };
+    let DfStatement::Statement(s) = stmt else {
+        return Ok(());
+    };
     let found = visit_expressions(s.as_ref(), |e| {
         if let SqlExpr::Value(v) = e
             && let Value::Number(n, _) = &v.value

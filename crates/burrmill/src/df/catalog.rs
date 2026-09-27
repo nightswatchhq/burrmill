@@ -8,11 +8,11 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::{DFSchema, Result as DFResult};
+use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_datasource::PartitionedFile;
 use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::utils::conjunction;
@@ -94,12 +94,19 @@ pub fn apply_schema_json(tables: &mut Vec<NestTable>, schema_json: &Path) -> cra
     };
     let mut declared: HashMap<String, Vec<(String, String)>> = HashMap::new();
     for t in arr {
-        let Some(name) = t["table"].as_str() else { continue };
+        let Some(name) = t["table"].as_str() else {
+            continue;
+        };
         let cols = t["columns"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|c| Some((c["name"].as_str()?.to_string(), c["storage"].as_str()?.to_string())))
+            .filter_map(|c| {
+                Some((
+                    c["name"].as_str()?.to_string(),
+                    c["storage"].as_str()?.to_string(),
+                ))
+            })
             .collect();
         declared.insert(name.to_string(), cols);
     }
@@ -137,10 +144,16 @@ pub struct SegmentTable {
     schema: SchemaRef,
     files: Vec<PartitionedFile>,
     groups: usize,
+    /// The engine's token; every scan of this table stops at it.
+    cancel: crate::CancelToken,
 }
 
 impl SegmentTable {
-    pub fn new(table: &NestTable, groups: usize) -> crate::Result<Self> {
+    pub fn new(
+        table: &NestTable,
+        groups: usize,
+        cancel: crate::CancelToken,
+    ) -> crate::Result<Self> {
         let files = table
             .files
             .iter()
@@ -154,6 +167,7 @@ impl SegmentTable {
             schema: table.schema.clone(),
             files,
             groups: groups.max(1),
+            cancel,
         })
     }
 }
@@ -203,6 +217,9 @@ impl TableProvider for SegmentTable {
             .with_projection_indices(projection.cloned())?
             .with_limit(limit)
             .build();
-        Ok(DataSourceExec::from_data_source(cfg))
+        Ok(super::cancel::CancelExec::wrap(
+            DataSourceExec::from_data_source(cfg),
+            self.cancel.clone(),
+        ))
     }
 }

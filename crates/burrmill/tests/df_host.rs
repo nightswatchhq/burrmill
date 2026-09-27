@@ -138,6 +138,36 @@ fn a_window_bounds_the_rows_and_registration_replaces() {
     assert_eq!(got, vec![json!({"n": 0, "s": null})]);
 }
 
+/// A statement stopped from another thread ends as `Cancelled` at its next batch, and the engine
+/// answers the next statement as if nothing happened.
+#[test]
+fn a_cancel_from_another_thread_stops_the_statement_and_not_the_engine() {
+    // A cross join of a sealed table with itself, summed: nothing reaches the output until the
+    // join has run to the end, so only a cancel seen by the scan can stop it in time.
+    let tmp = tempfile::tempdir().unwrap();
+    let many: Vec<(u64, &str, &str)> = (0..8_000u64).map(|i| (i, "x", "1")).collect();
+    let seg = segment(tmp.path(), 1, &many);
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_facts("t", &declared(), vec![seg], &[], (None, None))
+        .unwrap();
+    let token = engine.cancel_token();
+    let stopper = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        token.cancel();
+    });
+    let started = std::time::Instant::now();
+    let r = engine.sql("SELECT sum(a.block_number * b.block_number) AS s FROM t a, t b");
+    stopper.join().unwrap();
+    assert!(
+        matches!(r, Err(burrmill::BurrmillError::Cancelled)),
+        "{:?}",
+        r.map(|_| ())
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
+}
+
 #[test]
 fn rows_become_a_text_table() {
     let mut engine = Engine::open_empty().unwrap();

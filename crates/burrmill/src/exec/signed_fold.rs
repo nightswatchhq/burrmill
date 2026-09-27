@@ -47,6 +47,10 @@ impl CancelToken {
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Relaxed)
     }
+    /// Arm again, for a token that outlives one statement (`Engine::cancel_token`).
+    pub fn reset(&self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
 }
 
 /// What the fold cost, so a caller can see it without attaching a profiler. Feeds `EXPLAIN ANALYZE`.
