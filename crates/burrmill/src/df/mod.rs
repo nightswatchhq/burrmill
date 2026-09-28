@@ -50,6 +50,17 @@ mod schema_equivalence;
 use catalog::{NestTable, SegmentTable, apply_schema_json, discover_tables};
 use session::MiniSession;
 
+/// What one engine may use, as a host gives DuckDB `max_memory`, `threads` and `temp_directory`.
+#[derive(Debug, Clone)]
+pub struct Budget {
+    /// Working memory of every statement and the footer cache together.
+    pub memory_bytes: usize,
+    /// Planning partitions, fold workers and the runtime's worker threads.
+    pub threads: usize,
+    /// Where operators that can spill may write, and how much. `None` refuses over the bound instead.
+    pub spill: Option<(std::path::PathBuf, u64)>,
+}
+
 /// Concrete engine: SQL in, RecordBatches out. Generics stay inside this crate.
 pub struct Engine {
     rt: tokio::runtime::Runtime,
@@ -96,9 +107,14 @@ impl Engine {
     fn from_tables(
         tables: Vec<NestTable>,
         threads: usize,
-        memory: Option<usize>,
+        budget: Option<Budget>,
     ) -> Result<Self> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        let threads = budget.as_ref().map_or(threads, |b| b.threads.max(1));
+        let mut rt = tokio::runtime::Builder::new_multi_thread();
+        if budget.is_some() {
+            rt.worker_threads(threads);
+        }
+        let rt = rt
             .enable_all()
             .build()
             .map_err(|e| BurrmillError::Substrate(e.to_string()))?;
@@ -124,7 +140,7 @@ impl Engine {
             tables: Arc::new(fold_tables),
             pool: Arc::new(pool),
         };
-        let mut session = MiniSession::new(threads, fold, memory).map_err(df_err)?;
+        let mut session = MiniSession::new(threads, fold, budget.as_ref()).map_err(df_err)?;
         let groups = threads.max(1);
         let cancel = crate::CancelToken::new();
         for t in &tables {

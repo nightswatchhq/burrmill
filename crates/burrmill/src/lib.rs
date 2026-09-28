@@ -66,7 +66,7 @@ pub use plan::{Plan, SignedFold};
 pub use seam::{HotRow, HotSnapshot, HotTip, MemoryTip};
 pub use segment::{Catalog, SealedSegments};
 #[cfg(feature = "datafusion")]
-pub use df::Engine;
+pub use df::{Budget, Engine};
 
 use std::path::Path;
 
