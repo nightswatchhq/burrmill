@@ -3,6 +3,7 @@
 //! Off unless the `datafusion` feature is enabled. The default `burrmill` graph stays free of it.
 
 use std::path::Path;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
@@ -39,6 +40,8 @@ mod rule;
 mod session;
 mod sharing;
 mod smallinputs;
+mod tables;
+pub use tables::duckdb_type;
 mod textfn;
 mod subqueries;
 mod topn;
@@ -75,6 +78,8 @@ pub struct Engine {
     /// Set from another thread to stop the statement in flight at its next batch; armed again when
     /// the next statement starts, as DuckDB's interrupt handle behaves.
     cancel: crate::CancelToken,
+    /// Inside a host transaction: what each name it has touched was bound to before it.
+    txn: Option<HashMap<String, Option<Arc<dyn datafusion_expr::TableSource>>>>,
 }
 
 impl Engine {
@@ -182,6 +187,7 @@ impl Engine {
             threads: threads.max(1),
             gate,
             cancel,
+            txn: None,
         })
     }
 

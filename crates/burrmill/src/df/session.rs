@@ -345,6 +345,20 @@ impl MiniSession {
         self.scalar.insert(f.name().to_string(), f);
     }
 
+    /// What `name` is bound to now, so a transaction can put it back.
+    pub fn table_source(&self, name: &str) -> Option<Arc<dyn TableSource>> {
+        self.tables.get(name).cloned()
+    }
+
+    /// Bind `name` to `source`, or unbind it.
+    pub fn set_table_source(&mut self, name: &str, source: Option<Arc<dyn TableSource>>) {
+        match source {
+            Some(s) => self.tables.insert(name.to_string(), s),
+            None => self.tables.remove(name),
+        };
+        *self.known.get_mut().expect("known names") = None;
+    }
+
     pub fn register_table(&mut self, name: &str, table: Arc<dyn TableProvider>) {
         self.tables
             .insert(name.to_string(), provider_as_source(table));

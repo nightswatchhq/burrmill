@@ -447,7 +447,10 @@ fn parquet_scans_count_reads_of_segments_and_refuse_what_rescans() {
         2
     );
     assert_eq!(n("SELECT name FROM labels").unwrap(), 0);
-    assert_eq!(n("SELECT who FROM t ORDER BY block_number LIMIT 1").unwrap(), 1);
+    assert_eq!(
+        n("SELECT who FROM t ORDER BY block_number LIMIT 1").unwrap(),
+        1
+    );
     assert_eq!(
         n("SELECT who, name FROM t JOIN labels USING (who)").unwrap(),
         1
@@ -457,4 +460,74 @@ fn parquet_scans_count_reads_of_segments_and_refuse_what_rescans() {
         n("WITH RECURSIVE r AS (SELECT 1 AS k UNION ALL SELECT k + 1 FROM r WHERE k < 3) SELECT * FROM r")
             .is_err()
     );
+}
+
+#[test]
+fn host_tables_hold_results_roll_back_and_round_trip_through_parquet() {
+    let tmp = tempfile::tempdir().unwrap();
+    let seg = segment(
+        tmp.path(),
+        1,
+        &[(1, "x", "1"), (2, "y", "2"), (3, "x", "3")],
+    );
+    let mut e = Engine::open_empty().unwrap();
+    e.register_facts("t", &declared(), vec![seg], &[], (None, None))
+        .unwrap();
+    let count = |e: &Engine, rel: &str| {
+        rows(e, &format!("SELECT count(*) AS n FROM {rel}"))[0]["n"].clone()
+    };
+
+    assert_eq!(
+        e.create_table_as("f", "SELECT who, count(*) AS n FROM t GROUP BY who")
+            .unwrap(),
+        2
+    );
+    e.begin().unwrap();
+    e.create_table_as("f", "SELECT * FROM f WHERE false")
+        .unwrap();
+    e.create_table_as("g", "SELECT 1 AS k").unwrap();
+    assert_eq!(count(&e, "f"), json!(0));
+    e.rollback().unwrap();
+    assert_eq!(count(&e, "f"), json!(2));
+    assert!(e.sql("SELECT * FROM g").is_err());
+    e.begin().unwrap();
+    e.create_table_as("f", "SELECT who, n + 1 AS n FROM f")
+        .unwrap();
+    e.commit().unwrap();
+    assert!(e.commit().is_err());
+    assert_eq!(rows(&e, "SELECT sum(n) AS s FROM f")[0]["s"], json!("5"));
+
+    let path = tmp.path().join("ck.parquet");
+    assert_eq!(
+        e.write_parquet("SELECT * FROM f ORDER BY ALL", &path)
+            .unwrap(),
+        2
+    );
+    assert_eq!(e.load_parquet("ck", &path).unwrap(), 2);
+    assert_eq!(
+        rows(&e, "SELECT * FROM ck ORDER BY who"),
+        rows(&e, "SELECT * FROM f ORDER BY who")
+    );
+    assert!(e.drop_relation("ck"));
+    assert!(!e.drop_relation("ck"));
+
+    assert_eq!(
+        e.describe(
+            "SELECT CAST(NULL AS UBIGINT) AS a, CAST(NULL AS INT) AS b, CAST(NULL AS VARCHAR) AS c, \
+             CAST(NULL AS DECIMAL(20,2)) AS d, CAST(NULL AS BOOLEAN) AS e, CAST(NULL AS BIGINT) AS f \
+             WHERE false"
+        )
+        .unwrap()
+        .into_iter()
+        .map(|(_, t)| t)
+        .collect::<Vec<_>>(),
+        vec!["UBIGINT", "INTEGER", "VARCHAR", "DECIMAL(20,2)", "BOOLEAN", "BIGINT"]
+    );
+
+    let ipc = e.sql_ipc("SELECT * FROM f ORDER BY who").unwrap();
+    let back: Vec<_> = arrow::ipc::reader::StreamReader::try_new(std::io::Cursor::new(ipc), None)
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(back.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
 }
