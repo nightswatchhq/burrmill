@@ -31,19 +31,31 @@ pub fn run(root: &str) -> anyhow::Result<()> {
     for v in &nest.views {
         let _ = conn.execute_batch(&v.text);
     }
-    let mut engine = burrmill::Engine::open_nest(Path::new(root))?;
-    for v in &nest.views {
-        let _ = engine.register_view(&v.name, &v.body);
-    }
+    // The engine blocks on a runtime of its own, so it cannot run on the bench's.
+    let root_owned = Path::new(root).to_path_buf();
+    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let burr: Vec<Result<u64, String>> = std::thread::spawn(move || -> anyhow::Result<_> {
+        let mut engine = burrmill::Engine::open_nest(&root_owned)?;
+        for (n, b) in &views {
+            let _ = engine.register_view(n, b);
+        }
+        let out = views
+            .iter()
+            .map(|(n, _)| engine.parquet_scans(&format!("SELECT * FROM \"{n}\"")).map_err(|e| e.to_string()))
+            .collect();
+        std::thread::spawn(move || drop(engine)).join().expect("drop");
+        Ok(out)
+    })
+    .join()
+    .expect("engine thread")?;
     let (mut same, mut stricter, mut looser, mut both) = (0, 0, 0, 0);
-    for v in &nest.views {
+    for (v, b) in nest.views.iter().zip(burr) {
         let sql = format!("SELECT * FROM \"{}\"", v.name);
         let d = conn
             .query_row(&format!("EXPLAIN (FORMAT JSON) {sql}"), [], |r| r.get::<_, String>(1))
             .map_err(|e| e.to_string())
             .and_then(|p| serde_json::from_str::<Value>(&p).map_err(|e| e.to_string()))
             .and_then(|p| duck_scans(&p));
-        let b = engine.parquet_scans(&sql).map_err(|e| e.to_string());
         let tag = match (&d, &b) {
             (Ok(x), Ok(y)) if x == y => { same += 1; "SAME    " }
             (Ok(x), Ok(y)) if y > x => { stricter += 1; "MORE    " }
