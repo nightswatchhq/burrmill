@@ -255,7 +255,7 @@ fn ordered_list_per_group_across_segments() {
 fn ordered_list_when_partial_aggregation_is_skipped() {
     let tmp = tempfile::tempdir().unwrap();
     // Pairs for the first 30,000 rows, singles after: 285,000 groups, enough to skip.
-    let who: Vec<String> = (0..300_000)
+    let who: Vec<String> = (0..300_000u64)
         .map(|i| format!("0x{:040x}", if i < 30_000 { i / 2 } else { i }))
         .collect();
     let data: Vec<(u64, &str, &str)> = who
@@ -345,4 +345,47 @@ fn last_value_ignore_nulls_carries_the_last_non_null() {
             json!(6)
         ]
     );
+fn a_sort_over_budget_spills_into_the_given_directory_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let who: Vec<String> = (0..1_000_000u64)
+        .map(|i| format!("0x{:040x}", (i * 7919) % 1_000_000))
+        .collect();
+    let data: Vec<(u64, &str, &str)> = who.iter().map(|w| (1, w.as_str(), "1")).collect();
+    let seg = segment(tmp.path(), 1, &data);
+    let sql = "SELECT who FROM t ORDER BY who";
+    let budget = |spill| burrmill::Budget {
+        memory_bytes: 64 << 20,
+        threads: 2,
+        spill,
+    };
+
+    let mut refused = Engine::open_empty_budgeted(budget(None)).unwrap();
+    refused
+        .register_facts("t", &declared(), vec![seg.clone()], &[], (None, None))
+        .unwrap();
+    assert!(refused.sql(sql).is_err());
+
+    let spill = tempfile::tempdir().unwrap();
+    let mut spilling =
+        Engine::open_empty_budgeted(budget(Some((spill.path().to_path_buf(), 1 << 30)))).unwrap();
+    spilling
+        .register_facts("t", &declared(), vec![seg], &[], (None, None))
+        .unwrap();
+    let mut seen = 0usize;
+    let mut last = String::new();
+    let mut wrote_there = false;
+    spilling
+        .sql_for_each(sql, |b| {
+            wrote_there |= std::fs::read_dir(spill.path()).unwrap().next().is_some();
+            for r in burrmill::df::encode::rows(&b).unwrap() {
+                let w = r["who"].as_str().unwrap().to_string();
+                assert!(w >= last);
+                last = w;
+                seen += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(seen, 1_000_000);
+    assert!(wrote_there, "nothing was spilled to the directory");
 }

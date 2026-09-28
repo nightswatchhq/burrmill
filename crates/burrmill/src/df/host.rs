@@ -48,7 +48,16 @@ impl Engine {
     /// `bytes` together, as DuckDB's `max_memory` holds a nest's session. A statement that needs
     /// more is refused; nothing spills.
     pub fn open_empty_within(bytes: usize) -> Result<Self> {
-        Self::from_tables(Vec::new(), Limits::default().max_threads, Some(bytes))
+        Self::open_empty_budgeted(super::Budget {
+            memory_bytes: bytes,
+            threads: Limits::default().max_threads,
+            spill: None,
+        })
+    }
+
+    /// As `open_empty`, held to `budget`.
+    pub fn open_empty_budgeted(budget: super::Budget) -> Result<Self> {
+        Self::from_tables(Vec::new(), budget.threads, Some(budget))
     }
 
     /// Define `name` over `files`, unioned by name with `hot` (unsealed rows as nuthatch keeps

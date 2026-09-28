@@ -76,27 +76,37 @@ impl std::fmt::Debug for MiniSession {
 }
 
 impl MiniSession {
-    pub fn new(threads: usize, fold: FoldTables, memory: Option<usize>) -> DFResult<Self> {
+    pub fn new(threads: usize, fold: FoldTables, budget: Option<&super::Budget>) -> DFResult<Self> {
         let mut config = SessionConfig::new()
             .with_target_partitions(threads.max(1))
             .with_collect_statistics(false);
         config.options_mut().sql_parser.enable_ident_normalization = false;
         // DuckDB types `1.5` as DECIMAL(2,1), and nuthatch prints a DECIMAL as a string.
         config.options_mut().sql_parser.parse_float_as_decimal = true;
-        let runtime = match memory {
+        // Each sorting partition reserves this up front to merge its spilled runs; DataFusion's
+        // 10 MB each is more than a small budget holds, and a sort that cannot reserve it refuses.
+        if let Some(b) = budget {
+            let share = b.memory_bytes / (8 * threads.max(1));
+            config.options_mut().execution.sort_spill_reservation_bytes =
+                share.clamp(256 << 10, 10 << 20);
+        }
+        let runtime = match budget {
             None => RuntimeEnvBuilder::new().with_cache_manager(
                 CacheManagerConfig::default().with_metadata_cache_limit(1024 * 1024 * 1024),
             ),
             // The footer cache sits outside the pool, so it takes an eighth of the bound rather
-            // than adding to it. No spilling: over the bound is a refusal, never a disk.
-            Some(bytes) => RuntimeEnvBuilder::new()
+            // than adding to it. Without a spill directory, over the bound is a refusal.
+            Some(b) => RuntimeEnvBuilder::new()
                 .with_cache_manager(
-                    CacheManagerConfig::default().with_metadata_cache_limit(bytes / 8),
+                    CacheManagerConfig::default().with_metadata_cache_limit(b.memory_bytes / 8),
                 )
-                .with_memory_limit(bytes - bytes / 8, 1.0)
-                .with_disk_manager_builder(
-                    DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
-                ),
+                .with_memory_limit(b.memory_bytes - b.memory_bytes / 8, 1.0)
+                .with_disk_manager_builder(match &b.spill {
+                    None => DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+                    Some((dir, cap)) => DiskManagerBuilder::default()
+                        .with_mode(DiskManagerMode::Directories(vec![dir.clone()]))
+                        .with_max_temp_directory_size(*cap),
+                }),
         }
         .build_arc()?;
         // Under every name DataFusion gives a function: `length` is `character_length`'s, and
