@@ -326,4 +326,23 @@ fn last_value_ignore_nulls_carries_the_last_non_null() {
             json!({"who": "b", "block_number": 6, "l": null}),
         ]
     );
+    // An exact type goes through the checked rule, which refuses aggregates it does not know.
+    let got = rows(
+        &engine,
+        "SELECT last_value(CASE WHEN block_number % 2 = 0 THEN block_number END IGNORE NULLS) \
+         OVER (ORDER BY block_number ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS l \
+         FROM t ORDER BY block_number",
+    );
+    let got: Vec<_> = got.iter().map(|r| r["l"].clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            json!(null),
+            json!(2),
+            json!(2),
+            json!(4),
+            json!(4),
+            json!(6)
+        ]
+    );
 }

@@ -90,6 +90,7 @@ const SAFE_AGGREGATES: &[&str] = &[
     "checked_sum",
     "checked_avg",
     "checked_sum_text",
+    "burrmill_last_non_null",
 ];
 const SAFE_WINDOWS: &[&str] = &[
     "row_number",
