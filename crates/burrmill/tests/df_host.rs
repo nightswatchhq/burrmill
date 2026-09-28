@@ -447,6 +447,7 @@ fn parquet_scans_count_reads_of_segments_and_refuse_what_rescans() {
         2
     );
     assert_eq!(n("SELECT name FROM labels").unwrap(), 0);
+    assert_eq!(n("SELECT who FROM t ORDER BY block_number LIMIT 1").unwrap(), 1);
     assert_eq!(
         n("SELECT who, name FROM t JOIN labels USING (who)").unwrap(),
         1

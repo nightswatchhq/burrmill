@@ -299,7 +299,8 @@ impl Engine {
 fn scans(p: &Arc<dyn datafusion_physical_plan::ExecutionPlan>) -> Result<u64> {
     use datafusion_datasource::file_scan_config::FileScanConfig;
     use datafusion_datasource::source::DataSourceExec;
-    let own = match p.name() {
+    // `SortExec(TopK)` is a sort with a fetch: the name carries a mode after the operator.
+    let own = match p.name().split('(').next().unwrap_or_default() {
         "DataSourceExec" => u64::from(
             p.downcast_ref::<DataSourceExec>()
                 .is_some_and(|d| d.data_source().downcast_ref::<FileScanConfig>().is_some()),
