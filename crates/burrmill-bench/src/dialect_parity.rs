@@ -146,6 +146,8 @@ const CORPUS: &[&str] = &[
     "SELECT \"from\", block_number FROM transfer QUALIFY row_number() OVER (PARTITION BY \"from\" ORDER BY block_number DESC, log_index DESC) = 1 ORDER BY 1",
     "SELECT block_number, sum(log_index) OVER w AS s FROM transfer WINDOW w AS (ORDER BY block_number, log_index) ORDER BY 1, 2",
     "SELECT \"from\", block_number, log_index, last_value(CASE WHEN log_index % 3 = 0 THEN block_number END IGNORE NULLS) OVER (PARTITION BY \"from\" ORDER BY block_number, log_index ROWS UNBOUNDED PRECEDING) AS l FROM transfer ORDER BY 1, 2, 3",
+    "SELECT block_number, log_index, log_index FROM transfer UNION ALL SELECT block_number, block_number, log_index FROM transfer ORDER BY 1, 2, 3",
+    "SELECT count(*), count(DISTINCT b) FROM (SELECT block_number AS a, log_index AS b FROM transfer UNION ALL SELECT block_number, block_number FROM transfer) s",
     "SELECT \"from\", block_number, log_index, first_value(CASE WHEN log_index % 3 = 1 THEN log_index END IGNORE NULLS) OVER (PARTITION BY \"from\" ORDER BY block_number, log_index) AS f FROM transfer ORDER BY 1, 2, 3",
     "SELECT range AS r FROM range(3) ORDER BY 1",
     "SELECT * FROM range(2, 11, 4) ORDER BY 1",

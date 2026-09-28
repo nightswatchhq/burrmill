@@ -320,15 +320,6 @@ pub const DUP: char = '\u{1}';
 /// DuckDB allows two result columns of one name (`SELECT *, value`); DataFusion's projection does
 /// not. Repeated top-level items get a private suffix here and lose it again on the result.
 fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
-    let sq::SetExpr::Select(sel) = q.body.as_mut() else {
-        return;
-    };
-    let wildcard = sel.projection.iter().any(|i| {
-        matches!(
-            i,
-            sq::SelectItem::Wildcard(_) | sq::SelectItem::QualifiedWildcard(..)
-        )
-    });
     // `ORDER BY s.x` beside `... AS x`: DuckDB sorts by the source column, DataFusion adds it to
     // the projection and then refuses `s.x` beside `x` as ambiguous. The alias is suffixed instead.
     // The same inside an expression: `ORDER BY sum(CAST(x AS HUGEINT))` beside `... AS x` reads the
@@ -351,6 +342,40 @@ fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
             }
         }
     }
+    dedupe_set(q.body.as_mut(), names, &ordered, true);
+}
+
+/// The leftmost branch names a set operation's output, so only it keeps `names` and the `ORDER BY`
+/// rule; a later branch's repeats are suffixed too, or its projection is refused, and never show.
+fn dedupe_set(
+    body: &mut sq::SetExpr,
+    names: &mut [Option<String>],
+    ordered: &std::collections::HashSet<String>,
+    leftmost: bool,
+) {
+    match body {
+        sq::SetExpr::Select(sel) if leftmost => dedupe_select(sel, names, ordered),
+        sq::SetExpr::Select(sel) => dedupe_select(sel, &mut [], &Default::default()),
+        sq::SetExpr::SetOperation { left, right, .. } => {
+            dedupe_set(left, names, ordered, leftmost);
+            dedupe_set(right, &mut [], &Default::default(), false);
+        }
+        sq::SetExpr::Query(q) => dedupe_set(q.body.as_mut(), names, ordered, leftmost),
+        _ => {}
+    }
+}
+
+fn dedupe_select(
+    sel: &mut sq::Select,
+    names: &mut [Option<String>],
+    ordered: &std::collections::HashSet<String>,
+) {
+    let wildcard = sel.projection.iter().any(|i| {
+        matches!(
+            i,
+            sq::SelectItem::Wildcard(_) | sq::SelectItem::QualifiedWildcard(..)
+        )
+    });
     let mut seen = std::collections::HashSet::new();
     let mut pos = 0usize;
     for (i, item) in sel.projection.iter_mut().enumerate() {

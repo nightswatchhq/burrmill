@@ -55,11 +55,11 @@ fn set_expr(b: &mut SetExpr, known: &Known, ctes: &mut Ctes, rename: bool) -> Op
     match b {
         SetExpr::Select(s) => select(s, known, ctes, rename),
         SetExpr::Query(q) => query(q, known, ctes, rename),
-        // The first branch names a set operation's columns; the others are walked for their own
-        // subqueries.
+        // The first branch names a set operation's columns. The others are renamed too where they
+        // repeat a name, which DataFusion refuses in any projection; by position, it never shows.
         SetExpr::SetOperation { left, right, .. } => {
             let names = set_expr(left, known, ctes, rename);
-            set_expr(right, known, ctes, false);
+            set_expr(right, known, ctes, rename);
             names
         }
         _ => None,

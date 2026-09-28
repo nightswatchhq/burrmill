@@ -531,3 +531,39 @@ fn host_tables_hold_results_roll_back_and_round_trip_through_parquet() {
         .unwrap();
     assert_eq!(back.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
 }
+
+#[test]
+fn a_repeated_name_in_any_branch_of_a_union_is_answered_as_duckdb_does() {
+    let tmp = tempfile::tempdir().unwrap();
+    let seg = segment(tmp.path(), 1, &[(1, "x", "5"), (2, "y", "7")]);
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_facts("t", &declared(), vec![seg], &[], (None, None))
+        .unwrap();
+    let names = |sql: &str| -> Vec<String> {
+        engine.sql(sql).unwrap()[0]
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    };
+    assert_eq!(
+        names(
+            "SELECT who, block_number, block_number FROM t UNION ALL SELECT who, block_number, block_number FROM t"
+        ),
+        vec!["who", "block_number", "block_number"]
+    );
+    assert_eq!(
+        names("SELECT who AS a, amount AS b FROM t UNION ALL SELECT who, who FROM t"),
+        vec!["a", "b"]
+    );
+    assert_eq!(
+        rows(
+            &engine,
+            "SELECT count(*) AS n, count(DISTINCT b) AS d FROM \
+             (SELECT who AS a, amount AS b FROM t UNION ALL SELECT who, who FROM t) s"
+        ),
+        vec![json!({"n": 4, "d": 4})]
+    );
+}
