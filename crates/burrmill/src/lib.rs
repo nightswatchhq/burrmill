@@ -58,6 +58,10 @@ pub mod segment;
 pub mod df;
 
 pub use error::{BurrmillError, Result};
+
+/// This build of the engine, for a host's reuse keys: it changes with any change to Burrmill's source
+/// or manifest, so an answer computed by one build is never taken for another's.
+pub const ENGINE: &str = concat!("burrmill ", env!("CARGO_PKG_VERSION"), "+", env!("BURRMILL_SOURCE_HASH"));
 pub use exec::agg::Rows;
 pub use exec::{CancelToken, FoldMetrics};
 pub use limits::Limits;

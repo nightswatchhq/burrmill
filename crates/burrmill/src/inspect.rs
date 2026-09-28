@@ -17,7 +17,10 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ops::ControlFlow;
 
-use sqlparser::ast::{ObjectName, ObjectNamePart, Query, Statement, TableFactor, Visit, Visitor};
+use sqlparser::ast::{
+    Expr, Ident, ObjectName, ObjectNamePart, Query, Statement, TableFactor, Visit, VisitMut,
+    Visitor, VisitorMut,
+};
 use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
 
@@ -262,6 +265,87 @@ impl Visitor for Scoped {
     }
 }
 
+/// The statement as a key for a host's reuse (nuthatch's graft): sqlparser's AST printed back, so
+/// whitespace and comments do not count, with table aliases renamed `__a0`, `__a1`, … in the order
+/// they are declared, and every qualified column reference through one renamed to match. Only
+/// declared aliases are touched, so a real table name is never renamed into another. `None` for
+/// anything but one parseable statement.
+pub fn canonical(sql: &str) -> Option<String> {
+    let expanded = crate::listcomp::expand(sql);
+    let mut stmts = Parser::parse_sql(&DuckDbDialect {}, &expanded).ok()?;
+    let [stmt] = stmts.as_mut_slice() else {
+        return None;
+    };
+    let mut found = Aliases(Vec::new());
+    let _ = Visit::visit(&*stmt, &mut found);
+    let _ = stmt.visit(&mut Rename(found.0));
+    Some(stmt.to_string())
+}
+
+fn table_alias(t: &TableFactor) -> Option<&sqlparser::ast::TableAlias> {
+    match t {
+        TableFactor::Table { alias, .. }
+        | TableFactor::Derived { alias, .. }
+        | TableFactor::Function { alias, .. }
+        | TableFactor::UNNEST { alias, .. } => alias.as_ref(),
+        _ => None,
+    }
+}
+
+struct Aliases(Vec<String>);
+
+impl Visitor for Aliases {
+    type Break = ();
+    fn pre_visit_table_factor(&mut self, t: &TableFactor) -> ControlFlow<()> {
+        if let Some(a) = table_alias(t)
+            && !a.name.value.is_empty()
+            && !self.0.contains(&a.name.value)
+        {
+            self.0.push(a.name.value.clone());
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+struct Rename(Vec<String>);
+
+impl Rename {
+    fn to(&self, name: &str) -> Option<String> {
+        self.0
+            .iter()
+            .position(|a| a == name)
+            .map(|i| format!("__a{i}"))
+    }
+}
+
+impl VisitorMut for Rename {
+    type Break = ();
+    fn pre_visit_table_factor(&mut self, t: &mut TableFactor) -> ControlFlow<()> {
+        let alias = match t {
+            TableFactor::Table { alias, .. }
+            | TableFactor::Derived { alias, .. }
+            | TableFactor::Function { alias, .. }
+            | TableFactor::UNNEST { alias, .. } => alias.as_mut(),
+            _ => None,
+        };
+        if let Some(a) = alias
+            && let Some(new) = self.to(&a.name.value)
+        {
+            a.name = Ident::new(new);
+        }
+        ControlFlow::Continue(())
+    }
+    fn pre_visit_expr(&mut self, e: &mut Expr) -> ControlFlow<()> {
+        if let Expr::CompoundIdentifier(parts) = e
+            && parts.len() > 1
+            && let Some(new) = self.to(&parts[0].value)
+        {
+            parts[0] = Ident::new(new);
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,6 +422,29 @@ mod tests {
             b("SELECT * FROM (WITH c AS (SELECT 1) SELECT * FROM c) s, c"),
             vec!["c"]
         );
+    }
+
+    #[test]
+    fn canonical_ignores_layout_and_alias_names_only() {
+        let c = |sql: &str| canonical(sql).unwrap();
+        assert_eq!(
+            c("SELECT a.x FROM t a -- one\nJOIN u b ON a.k = b.k"),
+            c("select   a2.x from t a2 join u b2 on a2.k = b2.k")
+        );
+        assert_ne!(c("SELECT t.x FROM t"), c("SELECT u.x FROM u"));
+        assert_ne!(c("SELECT x FROM t"), c("SELECT x FROM t WHERE true"));
+        assert_ne!(c("SELECT 5/2"), c("SELECT 5/2.0"));
+        assert_ne!(c("SELECT x FROM t"), c("SELECT DISTINCT x FROM t"));
+        // A real table name that happens to equal another query's alias is not renamed.
+        assert!(c("SELECT t.x FROM t").contains("t.x"));
+        assert!(canonical("SELEC 1").is_none());
+    }
+
+    #[test]
+    fn the_engine_names_this_build() {
+        let (name, hash) = crate::ENGINE.split_once('+').unwrap();
+        assert!(name.starts_with("burrmill "));
+        assert!(hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
