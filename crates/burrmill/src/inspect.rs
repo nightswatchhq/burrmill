@@ -14,10 +14,10 @@
 //! It is stricter where nuthatch's is open. An unparseable statement is an error, not a pass; so is
 //! more than one statement, and anything that is not a query.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::ControlFlow;
 
-use sqlparser::ast::{ObjectName, ObjectNamePart, Statement, TableFactor, Visit, Visitor};
+use sqlparser::ast::{ObjectName, ObjectNamePart, Query, Statement, TableFactor, Visit, Visitor};
 use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
 
@@ -189,6 +189,79 @@ pub fn refs(sql: &str) -> Option<Refs> {
     Some(c.0)
 }
 
+/// The physical tables a statement reads, lowercased: names bound by a `WITH` in scope are not
+/// tables. A CTE's definition sees its earlier siblings, and itself only when recursive, so
+/// `WITH t AS (SELECT * FROM t)` reads the table `t`; a qualified name is always a table. This is
+/// nuthatch's `walk_base_table_refs` over DuckDB's AST. `None` as for [`refs`].
+pub fn base_tables(sql: &str) -> Option<BTreeSet<String>> {
+    let expanded = crate::listcomp::expand(sql);
+    let stmts = Parser::parse_sql(&DuckDbDialect {}, &expanded).ok()?;
+    let [stmt @ Statement::Query(_)] = stmts.as_slice() else {
+        return None;
+    };
+    let mut w = Scoped {
+        scopes: Vec::new(),
+        cte: HashMap::new(),
+        out: BTreeSet::new(),
+    };
+    let _ = stmt.visit(&mut w);
+    Some(w.out)
+}
+
+struct Scoped {
+    scopes: Vec<BTreeSet<String>>,
+    /// What each CTE's own query sees, keyed by its address, registered by the query holding it.
+    cte: HashMap<*const Query, BTreeSet<String>>,
+    out: BTreeSet<String>,
+}
+
+impl Visitor for Scoped {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, q: &Query) -> ControlFlow<()> {
+        let outer = self
+            .cte
+            .remove(&(q as *const Query))
+            .unwrap_or_else(|| self.scopes.last().cloned().unwrap_or_default());
+        let mut body = outer.clone();
+        if let Some(with) = &q.with {
+            let mut seen = outer.clone();
+            for c in &with.cte_tables {
+                let name = c.alias.name.value.to_ascii_lowercase();
+                let mut sees = seen.clone();
+                if with.recursive {
+                    sees.insert(name.clone());
+                }
+                self.cte.insert(&*c.query as *const Query, sees);
+                seen.insert(name);
+            }
+            body = seen;
+        }
+        self.scopes.push(body);
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _q: &Query) -> ControlFlow<()> {
+        self.scopes.pop();
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_table_factor(&mut self, t: &TableFactor) -> ControlFlow<()> {
+        if let TableFactor::Table {
+            name, args: None, ..
+        } = t
+        {
+            let p = parts(name);
+            let table = p.last().cloned().unwrap_or_default().to_ascii_lowercase();
+            let bound = self.scopes.last().is_some_and(|s| s.contains(&table));
+            if p.len() > 1 || !bound {
+                self.out.insert(table);
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +315,29 @@ mod tests {
         );
         assert!(refs("SELECT 1; SELECT 2").is_none());
         assert!(refs("SELEC 1").is_none());
+    }
+
+    #[test]
+    fn base_tables_respect_cte_scope() {
+        let b = |sql: &str| base_tables(sql).unwrap().into_iter().collect::<Vec<_>>();
+        assert_eq!(b("WITH c AS (SELECT * FROM t) SELECT * FROM c"), vec!["t"]);
+        assert_eq!(b("WITH t AS (SELECT * FROM t) SELECT * FROM t"), vec!["t"]);
+        assert_eq!(
+            b("WITH a AS (SELECT * FROM b), b AS (SELECT * FROM x) SELECT * FROM a"),
+            vec!["b", "x"]
+        );
+        assert_eq!(
+            b("WITH RECURSIVE r AS (SELECT 1 UNION ALL SELECT * FROM r) SELECT * FROM r"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            b("WITH c AS (SELECT 1) SELECT * FROM main.c, (SELECT * FROM c) s"),
+            vec!["c"]
+        );
+        assert_eq!(
+            b("SELECT * FROM (WITH c AS (SELECT 1) SELECT * FROM c) s, c"),
+            vec!["c"]
+        );
     }
 
     #[test]

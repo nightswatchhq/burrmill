@@ -185,6 +185,70 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// nuthatch `walk_base_table_refs` (analytics.rs at 711ae88), verbatim.
+fn walk_base_table_refs(
+    value: &Value,
+    outer: &std::collections::BTreeSet<String>,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    match value {
+        Value::Object(map) => {
+            let mut scope = outer.clone();
+            let ctes = map
+                .get("cte_map")
+                .and_then(|v| v.get("map"))
+                .and_then(Value::as_array);
+            if let Some(ctes) = ctes {
+                // Definitions see earlier siblings, not later ones. A nonrecursive definition may
+                // read a physical table with its own name; only bind its name after visiting it.
+                for cte in ctes {
+                    let name = cte
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .map(str::to_ascii_lowercase);
+                    let recursive = cte
+                        .pointer("/value/query/node/type")
+                        .and_then(Value::as_str)
+                        == Some("RECURSIVE_CTE_NODE");
+                    if recursive {
+                        if let Some(name) = &name {
+                            scope.insert(name.clone());
+                        }
+                    }
+                    walk_base_table_refs(cte, &scope, out);
+                    if let Some(name) = name {
+                        scope.insert(name);
+                    }
+                }
+            }
+            if map.get("type").and_then(Value::as_str) == Some("BASE_TABLE") {
+                if let Some(name) = map.get("table_name").and_then(Value::as_str) {
+                    let qualified = ["schema_name", "catalog_name"].iter().any(|key| {
+                        map.get(*key)
+                            .and_then(Value::as_str)
+                            .is_some_and(|s| !s.is_empty())
+                    });
+                    let name = name.to_ascii_lowercase();
+                    if qualified || !scope.contains(&name) {
+                        out.insert(name);
+                    }
+                }
+            }
+            for (key, child) in map {
+                if key != "cte_map" || ctes.is_none() {
+                    walk_base_table_refs(child, &scope, out);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                walk_base_table_refs(value, outer, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// DuckDB's `BASE_TABLE` and `TABLE_FUNCTION` names, lowercased, as nuthatch's `table_refs_in` reads them.
 fn duck_refs(conn: &duckdb::Connection, sql: &str) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
     let literal = format!("'{}'", sql.replace('\'', "''"));
@@ -194,23 +258,32 @@ fn duck_refs(conn: &duckdb::Connection, sql: &str) -> Option<(BTreeSet<String>, 
         return None;
     }
     let (mut tables, mut functions) = (BTreeSet::new(), BTreeSet::new());
-    walk_table_refs(&v, &mut |kind, name| match kind {
-        "BASE_TABLE" => {
-            tables.insert(name.to_ascii_lowercase());
-        }
-        "TABLE_FUNCTION" => {
+    walk_base_table_refs(&v, &Default::default(), &mut tables);
+    walk_table_refs(&v, &mut |kind, name| {
+        if kind == "TABLE_FUNCTION" {
             functions.insert(name.to_ascii_lowercase());
         }
-        _ => {}
     });
     Some((tables, functions))
 }
+
+/// Where CTE scope decides what is a table.
+const SCOPES: &[&str] = &[
+    "WITH c AS (SELECT * FROM t) SELECT * FROM c",
+    "WITH t AS (SELECT * FROM t) SELECT * FROM t",
+    "WITH a AS (SELECT * FROM b), b AS (SELECT * FROM x) SELECT * FROM a",
+    "WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r",
+    "WITH c AS (SELECT 1) SELECT * FROM main.c, (SELECT * FROM c) s",
+    "SELECT * FROM (WITH c AS (SELECT 1) SELECT * FROM c) s, c",
+    "WITH c AS (SELECT 1) SELECT * FROM c WHERE EXISTS (WITH d AS (SELECT * FROM c) SELECT * FROM d, e)",
+    "SELECT * FROM t WHERE x IN (WITH t AS (SELECT 1 AS x) SELECT x FROM t)",
+];
 
 /// `refs-parity [nest]`: `burrmill::inspect::refs` against DuckDB's table and table-function nodes,
 /// over the reach corpus and, given a nest, every authored view body.
 pub fn run_refs(nest: Option<&str>) -> anyhow::Result<()> {
     let conn = duckdb::Connection::open_in_memory()?;
-    let mut statements: Vec<(String, String)> = CORPUS.iter().map(|s| ("corpus".to_string(), s.to_string())).collect();
+    let mut statements: Vec<(String, String)> = CORPUS.iter().chain(SCOPES).map(|s| ("corpus".to_string(), s.to_string())).collect();
     if let Some(root) = nest {
         let n = crate::df_views::load_nest(std::path::Path::new(root))?;
         statements.extend(n.views.iter().map(|v| (v.name.clone(), v.body.clone())));
@@ -218,7 +291,8 @@ pub fn run_refs(nest: Option<&str>) -> anyhow::Result<()> {
     let (mut same, mut differ) = (0, 0);
     for (from, sql) in &statements {
         let d = duck_refs(&conn, sql);
-        let b = burrmill::inspect::refs(sql).map(|r| (r.tables, r.functions));
+        let b = burrmill::inspect::refs(sql)
+            .and_then(|r| Some((burrmill::inspect::base_tables(sql)?, r.functions)));
         if d == b {
             same += 1;
         } else {
