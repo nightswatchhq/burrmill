@@ -70,11 +70,36 @@ left is the other class: `Memory Exhausted while SpillPool` from the repartition
 joins and final aggregates that cannot spill. The three 1 GB runs are also a finding: near the
 bound, which statements are refused depends on which partition reserves first.
 
+### What each view needs, 2026-09-28
+
+The refusal count swings with scheduling, so the measure is the smallest budget at which each view
+answers twice running (`burrmill-bench engine-analyze`, thinkpad copy). DuckDB answers every one at
+512 MB. Twelve views need 128-384 MB. The rest are one family, all reading
+`lodestar_indexer_ledger`:
+
+| view | 8 threads | 1 thread | 8 threads, spilling |
+|---|---:|---:|---:|
+| `lodestar_indexer_ledger` | 1,536 | 1,536 | 1,536 |
+| `lodestar_indexers` | 2,048 | 1,536 | 1,536 |
+| `lodestar_network` | 2,048 | 2,048 | 1,536 |
+| `lodestar_indexer_daily` | 2,048 | - | 2,048 |
+| `lodestar_indexer_deployment_daily` | 2,048 | 3,072 | 2,048 |
+| `lodestar_allocations` | 768 | 1,024 | 512 |
+| `lodestar_epochs` | 768 | 768 | 768 |
+
+Neither lever closes it. One thread plans no repartition at all and the ledger still needs 1.5 GB;
+spilling moves three views one step. At one thread and 1 GB the ledger's holders are two hash-join
+builds of ~108 MB (the key-carrying `ASOF` replacement joining back to `cuts` and
+`pool_shares_series`), two sort merges of 101 and 76 MB, and a sort-preserving merge of 84 MB, none
+spillable. Carrying values instead of keys (`LAST_VALUE(... IGNORE NULLS)`) removes the joins but
+still fails at 768 MB in the sort, and ran 37 s against DuckDB's 0.75: DataFusion re-scans the
+unbounded frame. The two engines also spell it differently (`LAST_VALUE(x IGNORE NULLS)` is DuckDB's
+and refused by Burrmill; `LAST_VALUE(x) IGNORE NULLS OVER` the reverse), a dialect gap to close.
+
 ### Owed
 
-- The non-spilling class: repartition buffers, hash-join builds and final aggregates across eight
-  partitions. A spill directory (nuthatch's own, as DuckDB's) takes 24 to 19; the rest is engine
-  work.
+- A decision on the ledger family: the DataFusion path holds every sort and join build of the plan
+  at once and recomputes the whole history per request; DuckDB streams it under 512 MB.
 - A decision on the budget: a larger Burrmill figure per permit means amending RFC-0047's 2 GiB
   split; or engine work on the non-spilling operators.
 - The hang, with symbols.
