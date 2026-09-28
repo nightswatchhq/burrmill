@@ -392,3 +392,38 @@ fn a_sort_over_budget_spills_into_the_given_directory_only() {
     assert_eq!(seen, 1_000_000);
     assert!(wrote_there, "nothing was spilled to the directory");
 }
+
+#[test]
+fn a_host_text_function_propagates_null_refuses_on_error_and_stays_behind_a_case_guard() {
+    let tmp = tempfile::tempdir().unwrap();
+    let seg = segment(tmp.path(), 1, &[(1, "0x", "7"), (2, "0x2a", "5")]);
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_facts("t", &declared(), vec![seg], &[], (None, None))
+        .unwrap();
+    let hex: burrmill::df::TextFunction = std::sync::Arc::new(|v: &[&str]| {
+        let h = v[0]
+            .strip_prefix("0x")
+            .filter(|h| !h.is_empty())
+            .ok_or("empty word")?;
+        u64::from_str_radix(h, 16)
+            .map(|n| n.to_string())
+            .map_err(|e| e.to_string())
+    });
+    let cat: burrmill::df::TextFunction = std::sync::Arc::new(|v: &[&str]| Ok(v.join("|")));
+    engine.register_text_function("t_hex", 1, hex);
+    engine.register_text_function("t_cat", 3, cat);
+
+    assert!(engine.sql("SELECT t_hex(who) FROM t").is_err());
+    assert_eq!(
+        rows(
+            &engine,
+            "SELECT CASE WHEN who = '0x' THEN '-' ELSE t_hex(who) END AS v, \
+             t_cat(who, amount, 'k') AS c, t_hex(NULL) AS n FROM t ORDER BY block_number"
+        ),
+        vec![
+            json!({"v": "-", "c": "0x|7|k", "n": null}),
+            json!({"v": "42", "c": "0x2a|5|k", "n": null}),
+        ]
+    );
+}

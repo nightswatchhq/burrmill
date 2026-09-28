@@ -18,6 +18,7 @@ use crate::limits::Limits;
 mod cancel;
 mod catalog;
 mod checked;
+pub use textfn::TextFunction;
 mod constants;
 mod correlate;
 mod dialect;
@@ -38,6 +39,7 @@ mod rule;
 mod session;
 mod sharing;
 mod smallinputs;
+mod textfn;
 mod subqueries;
 mod topn;
 mod wide;
@@ -202,6 +204,12 @@ impl Engine {
     /// be shown not to overflow, so hosts return text or check their own arithmetic.
     pub fn register_scalar_udf(&mut self, f: Arc<datafusion_expr::ScalarUDF>) {
         self.session.register_udf(f);
+    }
+
+    /// A host's text function under `name`: `arity` text arguments, one text result, NULL in any
+    /// argument gives NULL, and `f`'s error refuses the statement.
+    pub fn register_text_function(&mut self, name: &str, arity: usize, f: TextFunction) {
+        self.session.register_udf(textfn::TextFn::udf(name, arity, f));
     }
 
     /// Every scalar, aggregate and window function a statement can call, sorted.
