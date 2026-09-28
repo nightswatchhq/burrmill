@@ -157,6 +157,9 @@ Burrmill session exists.
       run a found 5 differences in 22 views, all one fault of the harness (the primary truncated at
       the 64 MiB byte cap, the Burrmill session applied only the row cap); the cap moved into
       `collect`'s contract and both-truncated compares nothing. Run b: **22 views, 0 differences**.
+- [x] Merged to nuthatch main as #1527 (`711ae88`, 2026-09-28), with Burrmill bounded by
+      `analytics.memory_limit` and the cursor budget counting both engines (Jules: ship, 88/100).
+      A shadow build therefore needs `NUTHATCH_SQL_MAX_CONCURRENCY=1` or a smaller memory limit.
 - [ ] Then Helsinki DIPS, then GNS, each for a release cycle.
 - [ ] Concurrency sweep on the DataFusion path at 32 clients on the nest it will serve (plan risk).
 - [ ] Joins and cancellation: the scan-level token above is the mechanism; still owed is a test
