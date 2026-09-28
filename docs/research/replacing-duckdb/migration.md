@@ -195,10 +195,16 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
 - [x] **Query execution** (`Session::collect` and friends): Burrmill in the shadow.
 - [x] **Sealed segment binding** (`bind_facts`, union by name, declared columns, window).
 - [x] **Hot rows** (`load_hot`), **offchain snapshots and labels** (`bind_snapshots`, `bind_labels`).
-- [ ] **Lockdown**: memory cap done (`open_empty_within`); threads, a spill directory under
-      nuthatch's `new_spill_dir`, and file confinement (Burrmill reads only files it is handed).
-- [ ] **Catalogue**: `view_definitions` (the integrity sweep's `expand_through_views`).
-- [ ] **Scalars**: the seven `nuthatch_*` functions (`analytics_scalars.rs`, `graph`) as DataFusion UDFs.
+- [x] **Lockdown** (2026-09-28): `open_empty_budgeted` takes memory, threads (the runtime's workers
+      too) and a spill directory from nuthatch's `new_spill_dir` capped by `max_temp_size`; the sort
+      merge reservation scales with the budget. File confinement holds by construction: Burrmill
+      reads only the files it is handed. nuthatch `pete/burrmill-budget`.
+- [x] **Catalogue** (2026-09-28): the Burrmill session records view definitions, and
+      `Session::table_refs` answers the sweep's and admission's walks from `inspect::base_tables`
+      (CTE scope as nuthatch's walk) and `inspect::refs`; `refs-parity` identical on all 31 authored
+      views of allocations, GNS and DIPS.
+- [x] **Scalars** (2026-09-28): `Engine::register_text_function`; `graph` builds register the seven
+      `nuthatch_*` functions on Burrmill over the same `evaluate`, compared against DuckDB in a test.
 - [ ] **EXPLAIN admission** (RFC-0048, `cold_scan_operators`): a walk over DataFusion's physical plan
       counting Parquet scans and refusing rescanning operators.
 - [ ] **Parser role** (the long pole): `/sql` allowlist walk, `table_refs_in`/`expand_through_views`,
@@ -206,6 +212,12 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
       `entity_lower`, `dune_views` all read DuckDB's `json_serialize_sql` shape. Port each to
       sqlparser's AST (`burrmill::inspect::reach` already does). Graft reuse keys and fold identities
       hash that output plus `SELECT version()`: a deliberate re-key, `CACHE_FORMAT_VERSION` bumped.
+      **Graft done** (2026-09-28, nuthatch `pete/parser-graft`): `Session::canonical_plan` and
+      `engine_version`, DuckDB's as before, Burrmill's from `inspect::canonical` and
+      `burrmill::ENGINE` (a hash of Burrmill's source and manifest). The key re-keys when the engine
+      changes, by the version field, with no hand-bumped constant. `duckdb_containment` pinned 6 → 5.
+      Left: entities, entity lowering, Dune, the fold binder, each ported to sqlparser's AST rather
+      than having Burrmill imitate DuckDB's JSON.
 - [ ] **Folds** (RFC-0059): transactions, `CREATE TABLE AS`, checkpoint Parquet write (`COPY`) and
       read, `query_arrow`, stable type spelling. Needs nuthatch's arrow (58) and Burrmill's (59)
       aligned first.
