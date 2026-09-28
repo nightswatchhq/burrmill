@@ -242,7 +242,11 @@ impl CheckedArithmetic {
             Expr::Negative(inner) if is_exact(&inner.get_type(schema)?) => Ok(Transformed::yes(
                 Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&self.neg), vec![*inner])),
             )),
-            Expr::WindowFunction(wf) => checked_window_sum(*wf, schema),
+            Expr::WindowFunction(wf) => match super::lastnonnull::rewrite(*wf) {
+                t if t.transformed => Ok(t),
+                Transformed { data: Expr::WindowFunction(wf), .. } => checked_window_sum(*wf, schema),
+                t => Ok(t),
+            },
             e => Ok(Transformed::no(e)),
         }
     }

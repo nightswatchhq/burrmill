@@ -289,3 +289,41 @@ fn ordered_list_when_partial_aggregation_is_skipped() {
         ]
     );
 }
+
+#[test]
+fn last_value_ignore_nulls_carries_the_last_non_null() {
+    let tmp = tempfile::tempdir().unwrap();
+    let seg = segment(
+        tmp.path(),
+        1,
+        &[
+            (1, "a", "0"),
+            (2, "a", "5"),
+            (3, "a", "0"),
+            (4, "a", "7"),
+            (5, "b", "0"),
+            (6, "b", "0"),
+        ],
+    );
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_facts("t", &declared(), vec![seg], &[], (None, None))
+        .unwrap();
+    let got = rows(
+        &engine,
+        "SELECT who, block_number, last_value(CASE WHEN amount <> '0' THEN amount END IGNORE NULLS) \
+         OVER (PARTITION BY who ORDER BY block_number ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS l \
+         FROM t ORDER BY who, block_number",
+    );
+    assert_eq!(
+        got,
+        vec![
+            json!({"who": "a", "block_number": 1, "l": null}),
+            json!({"who": "a", "block_number": 2, "l": "5"}),
+            json!({"who": "a", "block_number": 3, "l": "5"}),
+            json!({"who": "a", "block_number": 4, "l": "7"}),
+            json!({"who": "b", "block_number": 5, "l": null}),
+            json!({"who": "b", "block_number": 6, "l": null}),
+        ]
+    );
+}

@@ -29,6 +29,7 @@ mod errors;
 mod fastcast;
 mod fold;
 mod host;
+mod lastnonnull;
 mod lists;
 mod names;
 mod ordered_agg;
