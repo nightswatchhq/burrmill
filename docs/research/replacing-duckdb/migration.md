@@ -205,8 +205,16 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
       views of allocations, GNS and DIPS.
 - [x] **Scalars** (2026-09-28): `Engine::register_text_function`; `graph` builds register the seven
       `nuthatch_*` functions on Burrmill over the same `evaluate`, compared against DuckDB in a test.
-- [ ] **EXPLAIN admission** (RFC-0048, `cold_scan_operators`): a walk over DataFusion's physical plan
-      counting Parquet scans and refusing rescanning operators.
+- [x] **EXPLAIN admission** (RFC-0048, 2026-09-28): `Engine::parquet_scans` walks DataFusion's
+      physical plan, counts Parquet file scans (the owned fold counts one), allows the ordinary
+      operators by name and refuses nested-loop joins, recursive queries and anything unknown;
+      nuthatch `pete/burrmill-admission`. `scan-parity` against DuckDB's `EXPLAIN` walk: DIPS 2/2
+      identical, GNS 6/7 identical and one lower, allocations 9/22 identical, 4 lower, and **9 that
+      DuckDB cannot bound** (its plans rescan through `NESTED_LOOP_JOIN` and `LEFT_DELIM_JOIN`) which
+      Burrmill bounds, because DataFusion decorrelates them into hash joins. Never stricter. So a
+      named query over `lodestar_indexer_ledger`, `lodestar_indexers`, `lodestar_network`, the
+      delegator views or the daily views, refused as unboundable on DuckDB today, is admitted on
+      Burrmill with a bound from Burrmill's own plan: a behaviour change for the release notes.
 - [ ] **Parser role** (the long pole): `/sql` allowlist walk, `table_refs_in`/`expand_through_views`,
       FoldBinder, graft `canonical_plan`, entities (`plan_ast`, `validate_sql`, `aggregates_among`),
       `entity_lower`, `dune_views` all read DuckDB's `json_serialize_sql` shape. Port each to
