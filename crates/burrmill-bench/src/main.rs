@@ -122,6 +122,7 @@ async fn run() -> anyhow::Result<()> {
         Some("error-parity") => error_parity::run(),
         Some("dialect-parity") => dialect_parity::run(),
         Some("reach-parity") => reach_parity::run(),
+        Some("refs-parity") => reach_parity::run_refs(std::env::args().nth(2).as_deref()),
         Some("engine-analyze") => engine_views::analyze(
             &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,
             &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,

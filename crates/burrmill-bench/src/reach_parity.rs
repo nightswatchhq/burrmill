@@ -184,3 +184,48 @@ pub fn run() -> anyhow::Result<()> {
     anyhow::ensure!(looser == 0, "{looser} statements where Burrmill is not at least as strict");
     Ok(())
 }
+
+/// DuckDB's `BASE_TABLE` and `TABLE_FUNCTION` names, lowercased, as nuthatch's `table_refs_in` reads them.
+fn duck_refs(conn: &duckdb::Connection, sql: &str) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
+    let literal = format!("'{}'", sql.replace('\'', "''"));
+    let ast: String = conn.query_row(&format!("SELECT json_serialize_sql({literal})"), [], |r| r.get(0)).ok()?;
+    let v = serde_json::from_str::<Value>(&ast).ok()?;
+    if v.get("error").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let (mut tables, mut functions) = (BTreeSet::new(), BTreeSet::new());
+    walk_table_refs(&v, &mut |kind, name| match kind {
+        "BASE_TABLE" => {
+            tables.insert(name.to_ascii_lowercase());
+        }
+        "TABLE_FUNCTION" => {
+            functions.insert(name.to_ascii_lowercase());
+        }
+        _ => {}
+    });
+    Some((tables, functions))
+}
+
+/// `refs-parity [nest]`: `burrmill::inspect::refs` against DuckDB's table and table-function nodes,
+/// over the reach corpus and, given a nest, every authored view body.
+pub fn run_refs(nest: Option<&str>) -> anyhow::Result<()> {
+    let conn = duckdb::Connection::open_in_memory()?;
+    let mut statements: Vec<(String, String)> = CORPUS.iter().map(|s| ("corpus".to_string(), s.to_string())).collect();
+    if let Some(root) = nest {
+        let n = crate::df_views::load_nest(std::path::Path::new(root))?;
+        statements.extend(n.views.iter().map(|v| (v.name.clone(), v.body.clone())));
+    }
+    let (mut same, mut differ) = (0, 0);
+    for (from, sql) in &statements {
+        let d = duck_refs(&conn, sql);
+        let b = burrmill::inspect::refs(sql).map(|r| (r.tables, r.functions));
+        if d == b {
+            same += 1;
+        } else {
+            differ += 1;
+            println!("DIFF {from}: {}\n     duckdb   {d:?}\n     burrmill {b:?}", sql.chars().take(120).collect::<String>());
+        }
+    }
+    println!("REFS\tstatements={}\tsame={same}\tdiffering={differ}", statements.len());
+    Ok(())
+}

@@ -73,7 +73,11 @@ impl Visitor for Walk {
             return ControlFlow::Break(());
         }
         match t {
-            TableFactor::Table { name, args: Some(_), .. } => self.table_function(name),
+            TableFactor::Table {
+                name,
+                args: Some(_),
+                ..
+            } => self.table_function(name),
             TableFactor::Function { name, .. } => self.table_function(name),
             TableFactor::Table { name, .. } => {
                 let p = parts(name);
@@ -99,7 +103,11 @@ impl Visitor for Walk {
                 self.bad = Some(format!("`{other}` is not a table this surface serves"));
             }
         }
-        if self.bad.is_some() { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+        if self.bad.is_some() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
     }
 }
 
@@ -111,17 +119,74 @@ pub fn reach(sql: &str) -> Result<Reach> {
     let stmts = Parser::parse_sql(&DuckDbDialect {}, sql)
         .map_err(|e| BurrmillError::Parse(format!("Parser Error: {e}")))?;
     let [stmt] = stmts.as_slice() else {
-        return Err(refused(format!("{} statements where one is allowed", stmts.len())));
+        return Err(refused(format!(
+            "{} statements where one is allowed",
+            stmts.len()
+        )));
     };
     if !matches!(stmt, Statement::Query(_)) {
         return Err(refused("only SELECT/WITH queries are allowed".into()));
     }
-    let mut w = Walk { reach: Reach::default(), bad: None };
+    let mut w = Walk {
+        reach: Reach::default(),
+        bad: None,
+    };
     let _ = stmt.visit(&mut w);
     match w.bad {
         Some(why) => Err(refused(why)),
         None => Ok(w.reach),
     }
+}
+
+/// The base tables (CTE names included) and table functions a statement names, lowercased, with no
+/// policy applied: what a host asks of DuckDB's `json_serialize_sql` for `BASE_TABLE` and
+/// `TABLE_FUNCTION` nodes. `None` for an unparseable statement or anything but one query.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Refs {
+    pub tables: BTreeSet<String>,
+    pub functions: BTreeSet<String>,
+}
+
+struct Collect(Refs);
+
+impl Visitor for Collect {
+    type Break = ();
+
+    fn pre_visit_table_factor(&mut self, t: &TableFactor) -> ControlFlow<()> {
+        let last = |n: &ObjectName| {
+            parts(n)
+                .last()
+                .cloned()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        };
+        match t {
+            TableFactor::Table {
+                name,
+                args: Some(_),
+                ..
+            }
+            | TableFactor::Function { name, .. } => {
+                self.0.functions.insert(last(name));
+            }
+            TableFactor::Table { name, .. } => {
+                self.0.tables.insert(last(name));
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+pub fn refs(sql: &str) -> Option<Refs> {
+    let expanded = crate::listcomp::expand(sql);
+    let stmts = Parser::parse_sql(&DuckDbDialect {}, &expanded).ok()?;
+    let [stmt @ Statement::Query(_)] = stmts.as_slice() else {
+        return None;
+    };
+    let mut c = Collect(Refs::default());
+    let _ = stmt.visit(&mut c);
+    Some(c.0)
 }
 
 #[cfg(test)]
@@ -167,8 +232,25 @@ mod tests {
     }
 
     #[test]
+    fn refs_report_without_refusing() {
+        let r =
+            refs("WITH c AS (SELECT * FROM T) SELECT * FROM c, read_csv('/x'), range(3)").unwrap();
+        assert_eq!(r.tables.into_iter().collect::<Vec<_>>(), vec!["c", "t"]);
+        assert_eq!(
+            r.functions.into_iter().collect::<Vec<_>>(),
+            vec!["range", "read_csv"]
+        );
+        assert!(refs("SELECT 1; SELECT 2").is_none());
+        assert!(refs("SELEC 1").is_none());
+    }
+
+    #[test]
     fn a_schema_other_than_main_surveys() {
-        assert!(reach("SELECT * FROM information_schema.tables").unwrap().surveys);
+        assert!(
+            reach("SELECT * FROM information_schema.tables")
+                .unwrap()
+                .surveys
+        );
         assert!(!reach("SELECT * FROM main.t").unwrap().surveys);
     }
 }
