@@ -160,7 +160,8 @@ Burrmill session exists.
 - [x] Merged to nuthatch main as #1527 (`711ae88`, 2026-09-28), with Burrmill bounded by
       `analytics.memory_limit` and the cursor budget counting both engines (Jules: ship, 88/100).
       A shadow build therefore needs `NUTHATCH_SQL_MAX_CONCURRENCY=1` or a smaller memory limit.
-- [ ] Then Helsinki DIPS, then GNS, each for a release cycle.
+- [ ] Then Helsinki DIPS, then GNS, each for a release cycle. Sealed data measured 2026-09-28:
+      every view identical and within 64 MB on both (progress log, "DIPS and GNS fit").
 - [ ] Concurrency sweep on the DataFusion path at 32 clients on the nest it will serve (plan risk).
 - [ ] Joins and cancellation: the scan-level token above is the mechanism; still owed is a test
       that a cancelled join frees its memory, and the per-query timeout at the 30 s guard for the

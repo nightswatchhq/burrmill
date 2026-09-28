@@ -96,6 +96,14 @@ still fails at 768 MB in the sort, and ran 37 s against DuckDB's 0.75: DataFusio
 unbounded frame. The two engines also spell it differently (`LAST_VALUE(x IGNORE NULLS)` is DuckDB's
 and refused by Burrmill; `LAST_VALUE(x) IGNORE NULLS OVER` the reverse), a dialect gap to close.
 
+### DIPS and GNS fit, 2026-09-28
+
+Their sealed segments copied from Helsinki (DIPS 308 KB, GNS 18 MB; the live store left alone):
+`engine-views` 2/2 and 7/7 identical to DuckDB, and every view answers at 32 MB, two GNS views at
+64, against DuckDB's 512 and the units' `MemoryHigh` of 1 GB and 1.5 GB. The ledger family is the
+allocations nest's alone. Not covered: the unsealed tip and Lodestar's own statements to these
+nests, which is what a live shadow is for.
+
 ### Owed
 
 - A decision on the ledger family: the DataFusion path holds every sort and join build of the plan
