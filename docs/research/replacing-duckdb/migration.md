@@ -162,6 +162,10 @@ Burrmill session exists.
       A shadow build therefore needs `NUTHATCH_SQL_MAX_CONCURRENCY=1` or a smaller memory limit.
 - [ ] Then Helsinki DIPS, then GNS, each for a release cycle. Sealed data measured 2026-09-28:
       every view identical and within 64 MB on both (progress log, "DIPS and GNS fit").
+      **DIPS on `3.12.1-shadow.1` since 2026-09-28 12:11 UTC** (nuthatch main `711ae88`), one SQL
+      permit, `MemoryHigh=2G`; two faults in the prepared roll fixed first (two permits breach the
+      two-engine budget; `ProtectSystem=strict` made the log read-only). The log's first record is a
+      planted `printf` refusal, not traffic; it also names a real gap: Burrmill has no `printf`.
 - [ ] Concurrency sweep on the DataFusion path at 32 clients on the nest it will serve (plan risk).
 - [ ] Joins and cancellation: the scan-level token above is the mechanism; still owed is a test
       that a cancelled join frees its memory, and the per-query timeout at the 30 s guard for the
