@@ -228,9 +228,14 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
       to sqlparser's AST rather than having Burrmill imitate DuckDB's JSON. **Dune is not ported**:
       Chief, 2026-09-28, Dune support will be deprecated, so `dune_views.rs` and `nuthatch emit dune`
       leave with DuckDB instead.
-- [ ] **Folds** (RFC-0059): transactions, `CREATE TABLE AS`, checkpoint Parquet write (`COPY`) and
-      read, `query_arrow`, stable type spelling. Needs nuthatch's arrow (58) and Burrmill's (59)
-      aligned first.
+- [x] **Folds** (RFC-0059, 2026-09-28): Burrmill host tables (`create_table_as`, `drop_relation`,
+      `begin`/`commit`/`rollback`, `write_parquet`/`load_parquet`, `describe` in DuckDB's type names,
+      `sql_ipc`); nuthatch `pete/burrmill-folds` maps the fold runtime's statements onto them, moves
+      checkpoint write and resume behind `Session`, and reads `query_arrow` through IPC, so the arrow
+      versions need not meet. All 53 fold tests pass with Burrmill as the engine (a test-only
+      override). They caught two faults: graft's static refusals read DuckDB's JSON and went silent
+      on Burrmill (now `graft::refusals_in_sql` over sqlparser, identical on 23 cases), and a
+      `HUGEINT` carry passed as `DECIMAL(38,0)` (now refused by its declared name).
 - [ ] **DuckDB-dialect SQL nuthatch generates**: `HUGEINT`/`UBIGINT`/`TRY_CAST` (analytics, recipes,
       views, webhooks), GraphQL's `struct_pack`/`to_json(list())`, port emit's output, the
       `FORBIDDEN_FNS` denylist and error-text matching (`sql_errors.rs`). Each checked on Burrmill.
