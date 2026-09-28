@@ -281,6 +281,47 @@ impl Engine {
     }
 }
 
+impl Engine {
+    /// Parquet scans in the statement's physical plan, for a host's admission bound (nuthatch
+    /// RFC-0048). An operator not listed refuses, and so does any that can run its input more than
+    /// once: a nested-loop join, and a recursive query, which has no static scan count at all.
+    pub fn parquet_scans(&self, sql: &str) -> Result<u64> {
+        let logical = plan_query(&self.session, sql)?;
+        refuse_non_query(sql)?;
+        let physical = self
+            .rt
+            .block_on(self.session.create_physical_plan(&logical))
+            .map_err(df_err)?;
+        scans(&physical)
+    }
+}
+
+fn scans(p: &Arc<dyn datafusion_physical_plan::ExecutionPlan>) -> Result<u64> {
+    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_datasource::source::DataSourceExec;
+    let own = match p.name() {
+        "DataSourceExec" => u64::from(
+            p.downcast_ref::<DataSourceExec>()
+                .is_some_and(|d| d.data_source().downcast_ref::<FileScanConfig>().is_some()),
+        ),
+        "OwnedSignedFoldExec" => 1,
+        "ProjectionExec" | "FilterExec" | "HashJoinExec" | "SortMergeJoinExec" | "CrossJoinExec"
+        | "AggregateExec" | "SortExec" | "SortPreservingMergeExec" | "GlobalLimitExec"
+        | "LocalLimitExec" | "UnionExec" | "InterleaveExec" | "BoundedWindowAggExec"
+        | "WindowAggExec" | "CoalesceBatchesExec" | "CoalescePartitionsExec" | "RepartitionExec"
+        | "UnnestExec" | "EmptyExec" | "PlaceholderRowExec" | "ScalarSubqueryExec"
+        | "CancelExec" | "RangeJoinExec" | "SharedExec" => 0,
+        other => {
+            return Err(BurrmillError::NotAllowed(format!(
+                "cannot bound physical plan operator {other:?}"
+            )));
+        }
+    };
+    p.children()
+        .into_iter()
+        .try_fold(own, |n, c| Ok(n.saturating_add(scans(c)?)))
+}
+
 fn plan_query(session: &MiniSession, sql: &str) -> Result<datafusion_expr::LogicalPlan> {
     let (stmt, names) = dialect::parse(sql, &session.known_names())?;
     refuse_df_statement(&stmt)?;

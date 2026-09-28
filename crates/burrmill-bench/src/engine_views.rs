@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::df_views::{load_nest, Nest};
 
-fn duck(nest: &Nest) -> anyhow::Result<duckdb::Connection> {
+pub(crate) fn duck(nest: &Nest) -> anyhow::Result<duckdb::Connection> {
     let conn = duckdb::Connection::open_in_memory()?;
     conn.execute_batch(&format!(
         "SET threads TO {};",

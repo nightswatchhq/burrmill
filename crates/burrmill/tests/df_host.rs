@@ -427,3 +427,33 @@ fn a_host_text_function_propagates_null_refuses_on_error_and_stays_behind_a_case
         ]
     );
 }
+
+#[test]
+fn parquet_scans_count_reads_of_segments_and_refuse_what_rescans() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = segment(tmp.path(), 1, &[(1, "x", "1"), (2, "y", "2")]);
+    let b = segment(tmp.path(), 2, &[(3, "x", "3")]);
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_facts("t", &declared(), vec![a, b], &[], (None, None))
+        .unwrap();
+    engine
+        .register_rows("labels", &[json!({"who": "x", "name": "ex"})])
+        .unwrap();
+    let n = |sql: &str| engine.parquet_scans(sql);
+    assert_eq!(n("SELECT who FROM t").unwrap(), 1);
+    assert_eq!(
+        n("SELECT count(*) FROM t a JOIN t b ON a.who = b.who").unwrap(),
+        2
+    );
+    assert_eq!(n("SELECT name FROM labels").unwrap(), 0);
+    assert_eq!(
+        n("SELECT who, name FROM t JOIN labels USING (who)").unwrap(),
+        1
+    );
+    assert!(n("SELECT count(*) FROM t a JOIN t b ON a.block_number < b.block_number").is_err());
+    assert!(
+        n("WITH RECURSIVE r AS (SELECT 1 AS k UNION ALL SELECT k + 1 FROM r WHERE k < 3) SELECT * FROM r")
+            .is_err()
+    );
+}
