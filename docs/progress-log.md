@@ -92,9 +92,12 @@ spilling moves three views one step. At one thread and 1 GB the ledger's holders
 builds of ~108 MB (the key-carrying `ASOF` replacement joining back to `cuts` and
 `pool_shares_series`), two sort merges of 101 and 76 MB, and a sort-preserving merge of 84 MB, none
 spillable. Carrying values instead of keys (`LAST_VALUE(... IGNORE NULLS)`) removes the joins but
-still fails at 768 MB in the sort, and ran 37 s against DuckDB's 0.75: DataFusion re-scans the
-unbounded frame. The two engines also spell it differently (`LAST_VALUE(x IGNORE NULLS)` is DuckDB's
-and refused by Burrmill; `LAST_VALUE(x) IGNORE NULLS OVER` the reverse), a dialect gap to close.
+still fails at 768 MB in the sort, and ran 37 s against DuckDB's 0.75. Not the window function: an
+earlier line here blamed a re-scan of the unbounded frame, and measuring it alone on
+`rewards__rewards_assigned` says otherwise (Burrmill 416 ms dense, 116 sparse, 421 on `HUGEINT`,
+against DuckDB's 36-44; `max` 50). What else in that rewrite costs 37 s is not found; it was dropped.
+The in-argument spelling DuckDB uses, `last_value(x IGNORE NULLS)`, which graph-network-nest's views
+use, is now read (`dialect-parity` 212/212).
 
 ### DIPS and GNS fit, 2026-09-28
 

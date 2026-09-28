@@ -107,6 +107,12 @@ impl sqlparser::dialect::Dialect for Duck {
         supports_comma_separated_trim,
     );
 
+    /// `last_value(x IGNORE NULLS)`, as DuckDB spells it; sqlparser's DuckDB dialect only reads it
+    /// after the call.
+    fn supports_window_function_null_treatment_arg(&self) -> bool {
+        true
+    }
+
     fn parse_infix(
         &self,
         parser: &mut sqlparser::parser::Parser,
