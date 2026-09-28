@@ -224,8 +224,10 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
       `engine_version`, DuckDB's as before, Burrmill's from `inspect::canonical` and
       `burrmill::ENGINE` (a hash of Burrmill's source and manifest). The key re-keys when the engine
       changes, by the version field, with no hand-bumped constant. `duckdb_containment` pinned 6 → 5.
-      Left: entities, entity lowering, Dune, the fold binder, each ported to sqlparser's AST rather
-      than having Burrmill imitate DuckDB's JSON.
+      Fold binder done (2026-09-28, `pete/parser-folds`). Left: entities and entity lowering, ported
+      to sqlparser's AST rather than having Burrmill imitate DuckDB's JSON. **Dune is not ported**:
+      Chief, 2026-09-28, Dune support will be deprecated, so `dune_views.rs` and `nuthatch emit dune`
+      leave with DuckDB instead.
 - [ ] **Folds** (RFC-0059): transactions, `CREATE TABLE AS`, checkpoint Parquet write (`COPY`) and
       read, `query_arrow`, stable type spelling. Needs nuthatch's arrow (58) and Burrmill's (59)
       aligned first.
