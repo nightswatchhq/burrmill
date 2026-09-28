@@ -185,6 +185,44 @@ Burrmill session exists.
       since 2026-09-27: the shadow runs both walks on every statement and counts `ParserLooser`;
       run g over the 22 views and 81 dashboard statements had none of either kind.
 
+## Everything DuckDB does, and what replaces it (2026-09-28)
+
+Chief, 2026-09-28: "burrmill takes over EVERYTHING and we remove duckdb". No DuckDB behind a
+feature either, folds and the parser role included; DuckDB may stay only as a dev-dependency oracle
+until phase 3b takes it out of `Cargo.toml` too. Inventory from nuthatch main `711ae88`; `duckdb` is
+an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vscalar`.
+
+- [x] **Query execution** (`Session::collect` and friends): Burrmill in the shadow.
+- [x] **Sealed segment binding** (`bind_facts`, union by name, declared columns, window).
+- [x] **Hot rows** (`load_hot`), **offchain snapshots and labels** (`bind_snapshots`, `bind_labels`).
+- [ ] **Lockdown**: memory cap done (`open_empty_within`); threads, a spill directory under
+      nuthatch's `new_spill_dir`, and file confinement (Burrmill reads only files it is handed).
+- [ ] **Catalogue**: `view_definitions` (the integrity sweep's `expand_through_views`).
+- [ ] **Scalars**: the seven `nuthatch_*` functions (`analytics_scalars.rs`, `graph`) as DataFusion UDFs.
+- [ ] **EXPLAIN admission** (RFC-0048, `cold_scan_operators`): a walk over DataFusion's physical plan
+      counting Parquet scans and refusing rescanning operators.
+- [ ] **Parser role** (the long pole): `/sql` allowlist walk, `table_refs_in`/`expand_through_views`,
+      FoldBinder, graft `canonical_plan`, entities (`plan_ast`, `validate_sql`, `aggregates_among`),
+      `entity_lower`, `dune_views` all read DuckDB's `json_serialize_sql` shape. Port each to
+      sqlparser's AST (`burrmill::inspect::reach` already does). Graft reuse keys and fold identities
+      hash that output plus `SELECT version()`: a deliberate re-key, `CACHE_FORMAT_VERSION` bumped.
+- [ ] **Folds** (RFC-0059): transactions, `CREATE TABLE AS`, checkpoint Parquet write (`COPY`) and
+      read, `query_arrow`, stable type spelling. Needs nuthatch's arrow (58) and Burrmill's (59)
+      aligned first.
+- [ ] **DuckDB-dialect SQL nuthatch generates**: `HUGEINT`/`UBIGINT`/`TRY_CAST` (analytics, recipes,
+      views, webhooks), GraphQL's `struct_pack`/`to_json(list())`, port emit's output, the
+      `FORBIDDEN_FNS` denylist and error-text matching (`sql_errors.rs`). Each checked on Burrmill.
+- [ ] **Allocations nest memory**: ordered scans, the chain-order window rule, spilling and the view
+      rewrites (`ledger-windows.md`) landed; `lodestar_delegator_stakes` still at 1 GB.
+- [ ] **Tests**: ~45 DuckDB-oracle tests in `src/` and `tests/` moved or retired; the Trino contract
+      compared against Burrmill; `duckdb_containment.rs` shrunk to zero and deleted.
+- [ ] **Packaging**: `authored_entity_spike.rs` deleted, `tools/*` DuckDB deps, CI BOM scripts.
+
+Order: small items and the arrow alignment, the parser role, folds, EXPLAIN admission, allocations
+memory. DIPS and GNS can cut over once the parser role and admission are Burrmill's; they need
+neither folds nor the ledger work. Estimate on 2026-09-28: about six weeks of work to DuckDB out of
+`Cargo.toml`, gated in calendar by one clean shadow release cycle per nest.
+
 ## Phase 3a: cutover
 
 - [ ] Burrmill the default engine; DuckDB a dev-dependency oracle only, gone from the shipped binary.
