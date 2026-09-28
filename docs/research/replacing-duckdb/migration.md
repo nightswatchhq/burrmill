@@ -224,8 +224,15 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
       `engine_version`, DuckDB's as before, Burrmill's from `inspect::canonical` and
       `burrmill::ENGINE` (a hash of Burrmill's source and manifest). The key re-keys when the engine
       changes, by the version field, with no hand-bumped constant. `duckdb_containment` pinned 6 → 5.
-      Fold binder done (2026-09-28, `pete/parser-folds`). Left: entities and entity lowering, ported
-      to sqlparser's AST rather than having Burrmill imitate DuckDB's JSON. **Dune is not ported**:
+      Fold binder done (2026-09-28, `pete/parser-folds`). **Entities and entity lowering done**
+      (2026-09-28, `pete/parser-entities-port`, merged into `pete/burrmill-folds`): gate and lowering
+      on sqlparser, the DuckDB versions kept as test oracles, identical on 335 inputs; eight
+      constructs sqlparser cannot read are now refused (`1_000`, `E'x'`, `ISNULL`, `**`,
+      `GROUP BY #1`, `GLOB`, `TABLE t`, `ASOF JOIN`, the last one lowered wrongly as an inner join
+      before). **The parser role is off DuckDB** in every production path; graft's remaining DuckDB
+      code is test-only. A live bug the port found and kept for parity: entity lowering ignores an
+      aggregate's `FILTER (WHERE …)`, so `SUM(b) FILTER (WHERE b > 0)` is maintained as `SUM(b)`;
+      the gate should refuse it, as a separate fix. **Dune is not ported**:
       Chief, 2026-09-28, Dune support will be deprecated, so `dune_views.rs` and `nuthatch emit dune`
       leave with DuckDB instead.
 - [x] **Folds** (RFC-0059, 2026-09-28): Burrmill host tables (`create_table_as`, `drop_relation`,
@@ -249,6 +256,11 @@ Order: small items and the arrow alignment, the parser role, folds, EXPLAIN admi
 memory. DIPS and GNS can cut over once the parser role and admission are Burrmill's; they need
 neither folds nor the ledger work. Estimate on 2026-09-28: about six weeks of work to DuckDB out of
 `Cargo.toml`, gated in calendar by one clean shadow release cycle per nest.
+
+**Found on the way, not caused by this work:** with `graph` and `shadow-burrmill` together, which
+CI never builds, two tests fail on nuthatch `main` since #1527: `e2e_trino_contract` (the five views
+listed in another order) and `authoring_eval_board` (sealing slower than its 120 s wait). DIPS runs
+the plain shadow build, not `graph`.
 
 ## Phase 3a: cutover
 
