@@ -44,6 +44,12 @@ the off-chain entity, `MAX`/`MIN` in the eval harness, `wide_values` in the Trin
 answers from the rows that fit. Which one nuthatch wants after cutover is Chief's decision; the
 tests follow it.
 
+**Since, the same day:** Chief decided refuse, and the checked rule now refuses only at a row
+whose cast dropped a value (progress log). The off-chain entity and the eval harness pass; the
+bigint test and the Trino fixture say "the ones that fit" and pass on both engines. Left: the two
+that fail on DuckDB too, and the Trino contract's `sender_kinds`, where Burrmill is right and
+nuthatch's DuckDB 1.5.4 path is not.
+
 Also found, not chased: a hot JSON row missing a numeric field reads as 0 on Burrmill where
 DuckDB's `read_json` gives NULL. And `serve::tests::a_statement_reading_outside_the_nest_is_refused_and_never_remembered`
 counts the process-wide memo across an `.await`, so a parallel test that remembers an answer fails

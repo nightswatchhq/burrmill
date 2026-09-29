@@ -4,6 +4,39 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Two decisions, and the checked rule refusing only what did not fit — 2026-09-29
+
+Chief decided both open questions. **Allocations memory:** raise the figure (about 2 GB of
+`analytics.memory_limit`, the nest's MemoryHigh above RFC-0047's 2 GiB split), no spilling work.
+**Aggregates over an overflowed `_dec`:** refuse, as Burrmill does, rather than answer from the
+values that fit, as DuckDB does.
+
+The second was asked as "when a value did not fit", and that was half of what Burrmill did. `SUM`
+and `AVG` of a `TRY_CAST` were already exact and refused only on data; `MAX`, `MIN`, `count` and a
+`SUM` of any expression over one were refused as plans, whatever the data. Now each tainted input
+to such an aggregate is guarded, `CASE WHEN c IS NULL AND source IS NOT NULL THEN error(...) ELSE c
+END`, its source exposed from the plan as the exact sums already do, so the statement refuses at a
+row whose cast dropped a value and answers otherwise. Untraceable sources, `FILTER` over a tainted
+value and window aggregates still refuse as plans. `df_checked` 14/14 with the old refusal test
+rewritten both ways; suite 17/17; `dialect-parity` 241/241; `fuzz` 2,000 cases, 0 differing, 0
+looser; views 22/22.
+
+In nuthatch it takes the off-chain entity sum and the eval harness's `MAX`/`MIN` from refused to
+passing: their data fits. The bigint test and the Trino fixture's `wide_values` aggregated over rows
+built not to fit; both now say "the ones that fit" (`FILTER (WHERE NOT value_overflow)`, `CASE WHEN
+NOT value_overflow THEN value_dec END`), the same answer on DuckDB, and the idiom the release note
+gives authors.
+
+**A wrong answer on nuthatch's DuckDB path, found by the switch.** The Trino contract's
+`sender_kinds` over the drifted fixture: blocks 10-1509 are 1,000 rows with no `sender` and 500 with
+one, by the fixture's construction. Burrmill says so. Both of nuthatch's DuckDB paths, the nest view
+and the translation run through `CREATE TABLE ... read_parquet(..., union_by_name=true)`, say 1,500
+and 0, so the test passed by two DuckDB readings agreeing. DuckDB 1.5.5 (the bench's) answers 1,000
+and 500 over the same two segment files and the same query shape; nuthatch pins 1.5.4. Not isolated
+between the version and the `CREATE TABLE ... REPLACE` step.
+
+---
+
 ## Nuthatch's suite on Burrmill: 164 failures to 6 — 2026-09-29
 
 The ~1,400 nuthatch tests that query through `analytics` run on whatever `engine()` returns, which
