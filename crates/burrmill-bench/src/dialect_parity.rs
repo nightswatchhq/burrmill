@@ -156,6 +156,8 @@ const CORPUS: &[&str] = &[
     "SELECT CASE WHEN true THEN extract(minute FROM to_timestamp(ts)) ELSE (w - ts) END AS x FROM (VALUES (CAST(1700000040 AS UBIGINT), CAST(3 AS BIGINT))) t(ts, w) EXCEPT ALL SELECT abs(a) FROM (VALUES (CAST(1 AS BIGINT))) u(a) ORDER BY 1",
     "SELECT \"from\", arg_max(block_number, block_timestamp * 10 + log_index) AS a, arg_min(\"to\", block_timestamp * 10 + log_index) AS b, max_by(value, block_timestamp * 10 + log_index) AS c, min_by(value, block_timestamp * 10 + log_index) FILTER (WHERE value <> '4') AS d FROM transfer GROUP BY 1 ORDER BY 1",
     "SELECT arg_max(x, y) AS a, arg_min(x, y) AS b FROM (VALUES (1, 5), (NULL, 9), (3, NULL), (4, 6)) t(x, y)",
+    "SELECT \"from\", last(value ORDER BY block_number, log_index) AS a, first(value ORDER BY block_number, log_index) AS b, last(\"to\" ORDER BY block_number, log_index) FILTER (WHERE value <> '4') AS c FROM transfer GROUP BY 1 ORDER BY 1",
+    "SELECT last(x ORDER BY y) AS a, first(x ORDER BY y) AS b, last(x ORDER BY y) FILTER (WHERE x IS NOT NULL) AS c FROM (VALUES (1, 5), (NULL, 9), (3, 2), (4, 6)) t(x, y)",
     "SELECT json_extract_string('{\"a\": {\"b\": 7}, \"c\": [1, 2]}', '$.a.b') AS a, json_extract('{\"a\": {\"b\": 7}}', '$.a') AS b, json_extract_string('{\"c\": [1, 2]}', '$.c[1]') AS c, json_extract_string('{\"a\": 1}', '$.zz') AS d",
     "SELECT '{\"a\": 1, \"b\": \"x\"}'->>'b' AS a, '{\"a\": {\"k\": 2}}'->'a' AS b, '{\"a\": {\"k\": 2}}'->>'$.a.k' AS c",
     "SELECT json_type('{\"a\": 1}') AS a, json_type('[1]') AS b, json_type('1.5') AS c, json_type('\"x\"') AS d, json_type('1') AS e, json_type('-1') AS f, json_type('0') AS g",

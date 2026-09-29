@@ -578,7 +578,8 @@ fn arg_extreme(f: &mut sq::Function, max: bool) {
 }
 
 /// DuckDB's names for functions DataFusion has under another: the date-part shorthands
-/// (`year(t)` is `date_part('year', t)`) and `regexp_matches`, which is `regexp_like`.
+/// (`year(t)` is `date_part('year', t)`), `regexp_matches`, which is `regexp_like`, and the
+/// aggregates `first` and `last`, which are `first_value` and `last_value`, NULLs included.
 fn rename_function(f: &mut sq::Function) {
     let [sq::ObjectNamePart::Identifier(name)] = f.name.0.as_slice() else {
         return;
@@ -609,6 +610,10 @@ fn rename_function(f: &mut sq::Function) {
         "weekofyear" => "week".into(),
         "regexp_matches" => {
             f.name = sq::ObjectName::from(vec![sq::Ident::new("regexp_like")]);
+            return;
+        }
+        "first" | "last" => {
+            f.name = sq::ObjectName::from(vec![sq::Ident::new(format!("{lower}_value"))]);
             return;
         }
         _ => return,

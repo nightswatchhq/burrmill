@@ -63,3 +63,19 @@ fn error_raises_only_where_it_is_reached() {
         .unwrap();
     assert_eq!(got.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
 }
+
+/// DuckDB's `first` and `last` aggregates, as nuthatch's port emitter folds an overlay: the value in
+/// the given order, a NULL included, with `FILTER` to pass one over.
+#[test]
+fn first_and_last_are_duckdbs_aggregates() {
+    let engine = Engine::open_empty().unwrap();
+    let got = engine
+        .sql(
+            "SELECT last(x ORDER BY y) AS a, first(x ORDER BY y) AS b, \
+             last(x ORDER BY y) FILTER (WHERE x IS NOT NULL) AS c \
+             FROM (VALUES (1, 5), (NULL, 9), (3, 2), (4, 6)) t(x, y)",
+        )
+        .unwrap();
+    let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
+    assert_eq!(rows, vec![serde_json::json!({"a": null, "b": 3, "c": 4})]);
+}
