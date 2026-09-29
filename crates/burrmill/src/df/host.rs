@@ -73,6 +73,23 @@ impl Engine {
         hot: &[Value],
         window: (Option<u64>, Option<u64>),
     ) -> Result<()> {
+        // Every footer, as DuckDB's `read_parquet` binds them all, so a file that is not Parquet
+        // refuses the definition here and a host can define the table from what remains.
+        for (path, len) in &files {
+            if self.bound_segments.contains(&(path.clone(), *len)) {
+                continue;
+            }
+            let bound = std::fs::File::open(path).map_err(|e| e.to_string()).and_then(|f| {
+                ArrowReaderMetadata::load(&f, ArrowReaderOptions::new()).map_err(|e| e.to_string())
+            });
+            if let Err(e) = bound {
+                return Err(crate::BurrmillError::Substrate(format!(
+                    "segment {} will not bind: {e}",
+                    path.display()
+                )));
+            }
+            self.bound_segments.insert((path.clone(), *len));
+        }
         let raw = format!("{name}__raw");
         let raw_schema: SchemaRef = if files.is_empty() {
             Arc::new(Schema::new(

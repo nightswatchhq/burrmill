@@ -83,6 +83,8 @@ pub struct Engine {
     cancel: crate::CancelToken,
     /// Inside a host transaction: what each name it has touched was bound to before it.
     txn: Option<HashMap<String, Option<Arc<dyn datafusion_expr::TableSource>>>>,
+    /// Segments whose footer `register_facts` has read. Sealed segments never change, so once.
+    bound_segments: std::collections::HashSet<(std::path::PathBuf, u64)>,
 }
 
 impl Engine {
@@ -192,6 +194,7 @@ impl Engine {
             gate,
             cancel,
             txn: None,
+            bound_segments: Default::default(),
         })
     }
 

@@ -723,3 +723,25 @@ fn a_historical_window_refuses_an_unstamped_row() {
         .unwrap();
     assert_eq!(rows(&engine, "SELECT count(*) AS n FROM t"), vec![json!({"n": 1})]);
 }
+
+/// Every segment's footer is read when the table is defined, as DuckDB's `read_parquet` binds them
+/// all: a file that is not Parquet refuses the definition, naming itself, so a host can drop it
+/// and define the table from what remains, not find out when a query reads it.
+#[test]
+fn a_segment_that_will_not_bind_refuses_the_definition() {
+    let tmp = tempfile::tempdir().unwrap();
+    let good = segment(tmp.path(), 1, &[(1, "0xa", "5")]);
+    let bad = tmp.path().join("t-bad.parquet");
+    std::fs::write(&bad, b"not parquet, not even close").unwrap();
+    let bad_len = std::fs::metadata(&bad).unwrap().len();
+    let mut engine = Engine::open_empty().unwrap();
+    let err = engine
+        .register_facts("t", &declared(), vec![good.clone(), (bad.clone(), bad_len)], &[], (None, None))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("t-bad.parquet"), "{err}");
+    engine
+        .register_facts("t", &declared(), vec![good], &[], (None, None))
+        .unwrap();
+    assert_eq!(rows(&engine, "SELECT count(*) AS n FROM t"), vec![json!({"n": 1})]);
+}
