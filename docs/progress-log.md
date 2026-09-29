@@ -49,7 +49,9 @@ The lost wakeup is its own bug, and it is chance, not state: repeated, the pair
 the 21st, on `lodestar_delegator_stakes` itself, before any refusal. Every operator in
 `lodestar_delegators`'s plan is stock DataFusion (sorts, repartitions, a partitioned hash join,
 aggregates), so the suspect is a spilling operator under `FairSpillPool`, upstream. Nuthatch runs
-the greedy pool.
+the greedy pool. Four full fair-pool replays alongside the pair loop, one machine: three parked
+(twice on `lodestar_delegator_stakes`, once after `lodestar_disputes`), one completed. Not one view,
+and far likelier with the machine shared.
 
 A first attempt at the rerun built DuckDB with debug info, which drops `NDEBUG`, and both runs died
 on `D_ASSERT(new_remaining_size != 0)` in `temporary_memory_manager.cpp:28` after
