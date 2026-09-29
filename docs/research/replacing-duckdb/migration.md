@@ -288,6 +288,13 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
       as 64-bit two's complement; `dialect-parity` 239/239.
 - [ ] **Allocations nest memory**: ordered scans, the chain-order window rule, spilling and the view
       rewrites (`ledger-windows.md`) landed; `lodestar_delegator_stakes` still at 1 GB.
+      **Decided 2026-09-29 (Chief): raise the figure, no spilling work.** `analytics.memory_limit`
+      about 2 GB for the allocations nest and its MemoryHigh above RFC-0047's shipped 2 GiB split, so
+      an RFC-0047 amendment; the figure from the replay's per-view minimums, set with that nest's roll.
+- [x] **Aggregates over an overflowed `_dec`** (decided 2026-09-29, Chief): refused on Burrmill, as
+      its checked rule does, not answered from the values that fit as DuckDB does. A release-note
+      item. The four tests that pinned DuckDB's answer are the cutover's to update
+      (`test-inventory.md`).
 - [ ] **Tests**: ~45 DuckDB-oracle tests in `src/` and `tests/` moved or retired; the Trino contract
       compared against Burrmill; `duckdb_containment.rs` shrunk to zero and deleted.
 - [ ] **Packaging**: `authored_entity_spike.rs` deleted, `tools/*` DuckDB deps, CI BOM scripts.
