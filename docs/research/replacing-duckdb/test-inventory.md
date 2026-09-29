@@ -45,7 +45,9 @@ answers from the rows that fit. Which one nuthatch wants after cutover is Chief'
 tests follow it.
 
 Also found, not chased: a hot JSON row missing a numeric field reads as 0 on Burrmill where
-DuckDB's `read_json` gives NULL.
+DuckDB's `read_json` gives NULL. And `serve::tests::a_statement_reading_outside_the_nest_is_refused_and_never_remembered`
+counts the process-wide memo across an `.await`, so a parallel test that remembers an answer fails
+it (5 against 3 once in a full run, 3/3 alone); the refusal it guards held.
 
 ## The 69 that touch DuckDB directly
 
