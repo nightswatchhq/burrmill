@@ -34,8 +34,12 @@ pub fn all() -> Vec<Arc<ScalarUDF>> {
         )),
         // Volatile, or the simplifier folds `error('x')` at planning and fails every statement
         // that merely contains it.
-        udf(Error(Signature::user_defined(Volatility::Volatile))),
+        error_udf(),
     ]
+}
+
+pub(super) fn error_udf() -> Arc<ScalarUDF> {
+    udf(Error(Signature::user_defined(Volatility::Volatile)))
 }
 
 /// `error(text)`: fails the statement with `text` wherever a row reaches it. Typed NULL, as DuckDB

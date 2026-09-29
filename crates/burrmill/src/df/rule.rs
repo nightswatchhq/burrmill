@@ -7,7 +7,8 @@
 //! `TRY_CAST` to an exact type is lossy: a value that does not fit becomes NULL, and an aggregate
 //! then drops the row without a word. Every column derived from one is tainted. `SUM`/`AVG` of the
 //! `TRY_CAST` itself, or of a column that is one, is rewritten to sum the source value exactly; any
-//! other aggregate over a tainted value is refused.
+//! other aggregate over a tainted value refuses at the first row whose cast dropped a value (Chief,
+//! 2026-09-29), and one whose source cannot be traced is refused as a plan.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -279,48 +280,125 @@ impl CheckedArithmetic {
                 .args
                 .iter()
                 .any(|x| expr_lossy(x, &schema, &taint));
-            if !matches!(func, "sum" | "avg") {
-                if tainted {
-                    return plan_err!(
-                        "refusing plan: {func} over a TRY_CAST value drops the rows that did not \
-                         fit; only SUM and AVG of it are made exact"
-                    );
-                }
-                exprs.push(e.clone());
-                continue;
-            }
-            if af.params.distinct {
+            let sums = matches!(func, "sum" | "avg");
+            if sums && af.params.distinct {
                 return plan_err!("refusing plan: {func}(DISTINCT ...) has no checked form");
             }
-            let arg = &af.params.args[0];
-            let (arg, arg_ty) = if tainted {
-                let Some((new_input, wide, target)) = self.exact_source(&input, arg)? else {
+            let exact = match tainted && sums {
+                true => self.exact_source(&input, &af.params.args[0])?,
+                false => None,
+            };
+            let mut params = af.params.clone();
+            if tainted && exact.is_none() {
+                let Some((new_input, args)) = self.guarded(&input, &params.args, func)? else {
                     return plan_err!(
                         "refusing plan: {func} over a TRY_CAST value would drop the rows that did \
-                         not fit, and its source cannot be summed exactly here; sum the source \
-                         column with a CAST, or checked_sum_text"
+                         not fit, and where the value came from cannot be traced here"
                     );
                 };
                 input = new_input;
-                (wide, target)
-            } else {
-                let t = arg.get_type(input.schema())?;
-                if !is_exact(&t) {
-                    exprs.push(e.clone());
-                    continue;
+                params.args = args;
+            }
+            let rebuilt = |params| Expr::AggregateFunction(AggregateFunction { func: Arc::clone(&af.func), params }).alias(&name);
+            if !sums {
+                exprs.push(if tainted { rebuilt(params) } else { e.clone() });
+                continue;
+            }
+            let (arg, arg_ty) = match exact {
+                Some((new_input, wide, target)) => {
+                    input = new_input;
+                    (wide, target)
                 }
-                (arg.clone(), t)
+                None => {
+                    let t = params.args[0].get_type(input.schema())?;
+                    if !is_exact(&t) {
+                        exprs.push(if tainted { rebuilt(params) } else { e.clone() });
+                        continue;
+                    }
+                    (params.args[0].clone(), t)
+                }
             };
             let udaf = match func {
                 "sum" => CheckedAgg::udaf(Mode::Sum, sum_type(&arg_ty)),
                 _ => CheckedAgg::udaf(Mode::Avg, Some(DataType::Float64)),
             };
-            let mut params = af.params.clone();
             params.args = vec![arg];
             let checked = Expr::AggregateFunction(AggregateFunction { func: udaf, params });
             exprs.push(checked.alias(name));
         }
         Aggregate::try_new(Arc::new(input), a.group_expr.clone(), exprs)
+    }
+
+    /// `args` with every lossy value in them refusing at a row whose cast dropped one: a `TRY_CAST`
+    /// against its own source, a tainted column against its source exposed from `input`. `None` if
+    /// a tainted column cannot be followed to its `TRY_CAST`.
+    fn guarded(
+        &self,
+        input: &LogicalPlan,
+        args: &[Expr],
+        func: &str,
+    ) -> Result<Option<(LogicalPlan, Vec<Expr>)>> {
+        let mut input = input.clone();
+        let mut sources: Vec<(Column, Expr)> = Vec::new();
+        for a in args {
+            let (schema, taint) = (input.schema().clone(), lossy(&input));
+            let mut tainted = Vec::new();
+            a.apply(|x| {
+                if let Expr::Column(c) = x
+                    && schema.index_of_column(c).is_ok_and(|i| taint[i])
+                    && !tainted.contains(c)
+                {
+                    tainted.push(c.clone());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            for c in tainted {
+                if sources.iter().any(|(s, _)| *s == c) {
+                    continue;
+                }
+                let idx = input.schema().index_of_column(&c)?;
+                let name = format!("__burrmill_exact_{}", self.fresh.fetch_add(1, Ordering::Relaxed));
+                let Some((p, source, _)) = self.expose(&input, idx, &name)? else {
+                    return Ok(None);
+                };
+                input = p;
+                sources.push((c, Expr::Column(source)));
+            }
+        }
+        let error = super::duckfns::error_udf();
+        let guard = |value: Expr, source: Expr| {
+            let refuse = Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(&error),
+                vec![datafusion_expr::lit(format!(
+                    "{func} over a TRY_CAST value: a value did not fit and would be left out, so \
+                     it is refused"
+                ))],
+            ));
+            Expr::Case(datafusion_expr::Case::new(
+                None,
+                vec![(Box::new(value.clone().is_null().and(source.is_not_null())), Box::new(refuse))],
+                Some(Box::new(value)),
+            ))
+        };
+        let args = args
+            .iter()
+            .map(|a| {
+                a.clone()
+                    .transform_up(|x| match x {
+                        Expr::TryCast(TryCast { ref expr, ref field }) if is_exact(field.data_type()) => {
+                            let source = expr.as_ref().clone();
+                            Ok(Transformed::yes(guard(x, source)))
+                        }
+                        Expr::Column(ref c) => match sources.iter().find(|(s, _)| s == c) {
+                            Some((_, source)) => Ok(Transformed::yes(guard(x.clone(), source.clone()))),
+                            None => Ok(Transformed::no(x)),
+                        },
+                        x => Ok(Transformed::no(x)),
+                    })
+                    .map(|t| t.data)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some((input, args)))
     }
 
     /// For a tainted `SUM`/`AVG` argument: the plan with the exact source exposed, the source as

@@ -378,13 +378,21 @@ fn dec_companion_through_subqueries_and_joins() {
     );
 }
 
+/// Any other aggregate over a `_dec` value answers while every value fits, and refuses once one did
+/// not, as DuckDB would have left that row out (Chief, 2026-09-29). Window aggregates still refuse.
 #[test]
-fn other_reads_of_dec_companions_in_aggregates_are_refused() {
+fn other_reads_of_dec_companions_in_aggregates_refuse_only_what_did_not_fit() {
     let (_t, e) = transfers(&[&[("a", "5"), ("b", "7")]]);
-    refused(&e, "SELECT MAX(value_dec) FROM transfer");
-    refused(&e, "SELECT SUM(value_dec * 2) FROM transfer");
-    refused(&e, "SELECT SUM(value_dec / 1e18) FROM transfer");
+    assert_eq!(one(&e, "SELECT MAX(value_dec) FROM transfer"), "7");
+    assert_eq!(one(&e, "SELECT MIN(TRY_CAST(value AS DECIMAL(38,0))) FROM transfer"), "5");
+    assert_eq!(one(&e, "SELECT count(value_dec) FROM transfer"), "2");
+    assert_eq!(one(&e, "SELECT SUM(value_dec * 2) FROM transfer"), "24");
+    assert_eq!(
+        rows(&e, "SELECT l.name, MAX(t.value_dec * 3) FROM transfer t JOIN label l ON t.party = l.party GROUP BY l.name ORDER BY l.name"),
+        vec![vec!["alice".to_string(), "15".into()], vec!["bob".to_string(), "21".into()]]
+    );
     refused(&e, "SELECT SUM(value_dec) OVER () FROM transfer");
+
     // Reading the column itself is not an aggregate dropping rows: NULL is visible.
     assert_eq!(
         rows(
@@ -402,6 +410,19 @@ fn other_reads_of_dec_companions_in_aggregates_are_refused() {
         one(&e, "SELECT count(*) FROM transfer WHERE value_dec > 6"),
         "1"
     );
+
+    let (_t, e) = transfers(&[&[("a", "5"), ("b", U256_MAX)]]);
+    for sql in [
+        "SELECT MAX(value_dec) FROM transfer",
+        "SELECT MIN(TRY_CAST(value AS DECIMAL(38,0))) FROM transfer",
+        "SELECT count(value_dec) FROM transfer",
+        "SELECT SUM(value_dec * 2) FROM transfer",
+    ] {
+        let m = refused(&e, sql);
+        assert!(m.contains("did not fit"), "{sql}: {m}");
+    }
+    // A party whose own values all fit is still answered when grouped away from the one that did not.
+    assert_eq!(one(&e, "SELECT MAX(value_dec) FROM transfer WHERE party = 'a'"), "5");
 }
 
 // The signed fold nuthatch writes: credits and negated debits of a TRY_CAST, through UNION ALL.
