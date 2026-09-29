@@ -4,6 +4,23 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Nuthatch's suite on Burrmill: 164 failures to 6 — 2026-09-29
+
+The ~1,400 nuthatch tests that query through `analytics` run on whatever `engine()` returns, which
+is DuckDB; only the folds (about 240) ran on both. Flipping the default for a whole
+`cargo test --no-fail-fast` (a scratch-only probe) is the honest count of what cutover would break:
+164 on the first run, 6 after six fixes, four in Burrmill and two in nuthatch. The clusters, the
+remaining six and the classification of the 69 tests that touch DuckDB directly are in
+`docs/research/replacing-duckdb/test-inventory.md`.
+
+Two of the fixes were wrong answers, not refusals: a historical window dropped unstamped rows where
+DuckDB refuses, and a segment that was not Parquet went unnoticed until a query read it, so the
+table failed outright instead of coming back reduced and flagged. A third was a security gap in
+the tests: the `/sql` allowlist's cases (`read_xlsx`, `postgres_scan`, paths in table position) had
+never run against Burrmill's walk. They do now, and pass.
+
+---
+
 ## The watchdog could not stop Burrmill, and the hang is a lost wakeup — 2026-09-29
 
 **The watchdog.** The cutover build has no DuckDB in front, so nuthatch's `/sql` guard must stop
