@@ -151,14 +151,21 @@ impl Engine {
                 )
             })
             .collect();
-        let bound = match window {
-            (None, None) => String::new(),
-            (Some(a), None) => format!(" WHERE block_number > {a}"),
-            (None, Some(t)) => format!(" WHERE block_number <= {t}"),
-            (Some(a), Some(t)) => {
-                format!(" WHERE block_number > {a} AND block_number <= {t}")
-            }
+        let range = match window {
+            (None, None) => None,
+            (Some(a), None) => Some(format!("block_number > {a}")),
+            (None, Some(t)) => Some(format!("block_number <= {t}")),
+            (Some(a), Some(t)) => Some(format!("block_number > {a} AND block_number <= {t}")),
         };
+        // A row with no block number cannot be placed in the window: refused, as DuckDB refuses it,
+        // not dropped by the comparison. The range stays a plain conjunct so segments still prune.
+        let bound = range.map_or(String::new(), |r| {
+            format!(
+                " WHERE (block_number IS NULL OR ({r})) AND CASE WHEN block_number IS NULL THEN \
+                 error('historical query requires block-stamped facts: unstamped archived row') \
+                 ELSE true END"
+            )
+        });
         let sql = format!("SELECT *{dec} FROM (SELECT *{stubs} FROM \"{source}\"){bound}");
         let logical = plan_query(&self.session, &sql)?;
         self.session

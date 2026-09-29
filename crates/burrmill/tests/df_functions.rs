@@ -44,3 +44,22 @@ fn nothing_registered_reaches_outside_the_query() {
 }
 
 
+
+/// `error(text)` as DuckDB has it: the statement fails with the text wherever a row reaches it, and
+/// a `CASE` that does not take its branch never does.
+#[test]
+fn error_raises_only_where_it_is_reached() {
+    let engine = Engine::open_empty().unwrap();
+    let err = engine.sql("SELECT error('the tripwire') AS e").map(|_| ()).unwrap_err().to_string();
+    assert!(err.contains("the tripwire"), "{err}");
+    let err = engine
+        .sql("SELECT CASE WHEN x > 1 THEN error('two is too many') ELSE x END AS y FROM (VALUES (1), (2)) t(x)")
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("two is too many"), "{err}");
+    let got = engine
+        .sql("SELECT CASE WHEN x > 5 THEN error('never') ELSE x END AS y FROM (VALUES (1), (2)) t(x)")
+        .unwrap();
+    assert_eq!(got.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+}

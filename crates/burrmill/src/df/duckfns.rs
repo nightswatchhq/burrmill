@@ -32,7 +32,41 @@ pub fn all() -> Vec<Arc<ScalarUDF>> {
             Signature::user_defined(Volatility::Immutable),
             vec!["str_split".into(), "string_to_array".into()],
         )),
+        // Volatile, or the simplifier folds `error('x')` at planning and fails every statement
+        // that merely contains it.
+        udf(Error(Signature::user_defined(Volatility::Volatile))),
     ]
+}
+
+/// `error(text)`: fails the statement with `text` wherever a row reaches it. Typed NULL, as DuckDB
+/// types it, so it sits in any `CASE` branch.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Error(Signature);
+
+impl ScalarUDFImpl for Error {
+    fn name(&self) -> &str {
+        "error"
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        match args {
+            [_] => Ok(vec![DataType::Utf8]),
+            _ => plan_err!("error takes one argument"),
+        }
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Null)
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.number_rows == 0 {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Null));
+        }
+        let text = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let text = text.as_string::<i32>();
+        exec_err!("{}", if text.is_null(0) { "" } else { text.value(0) })
+    }
 }
 
 fn scalar_out(scalar: bool, out: ArrayRef) -> Result<ColumnarValue> {

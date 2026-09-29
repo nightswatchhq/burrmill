@@ -70,7 +70,8 @@ pub struct Budget {
 
 /// Concrete engine: SQL in, RecordBatches out. Generics stay inside this crate.
 pub struct Engine {
-    rt: tokio::runtime::Runtime,
+    /// Taken only by `Drop`.
+    rt: Option<tokio::runtime::Runtime>,
     session: MiniSession,
     /// Partitions for a table the host registers later (`host.rs`); the ones opened here use it too.
     threads: usize,
@@ -185,7 +186,7 @@ impl Engine {
             .map_err(df_err)?;
         let gate = crate::gate::Gate::new(crate::default_width(threads.max(1)));
         Ok(Self {
-            rt,
+            rt: Some(rt),
             session,
             threads: threads.max(1),
             gate,
@@ -263,47 +264,83 @@ impl Engine {
         sql: &str,
         mut f: impl FnMut(RecordBatch) -> Result<()>,
     ) -> Result<()> {
-        use futures::StreamExt;
         // Parsed first, so malformed SQL is a syntax error as DuckDB reports it, not a refusal.
         let logical = plan_query(&self.session, sql)?;
         refuse_non_query(sql)?;
         let _pass = self.gate.enter();
         self.cancel.reset();
-        self.rt.block_on(async {
-            let physical = self
-                .session
-                .create_physical_plan(&logical)
-                .await
-                .map_err(df_err)?;
-            let mut stream =
-                datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
-                    .map_err(df_err)?;
-            // A plan with no nest scan (`range`, a recursive CTE) never meets `CancelExec`, so the
-            // token is also raced here; dropping the stream aborts the partition tasks under it.
-            let mut stopped = std::pin::pin!(async {
-                while !self.cancel.is_cancelled() {
-                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-                }
+        if tokio::runtime::Handle::try_current().is_err() {
+            return self.runtime().block_on(self.stream(logical, &mut f));
+        }
+        // A host's runtime drives this thread and tokio will not block it, so the statement runs on
+        // a thread of its own; its batches come back here, and `f` stays on the caller's thread.
+        std::thread::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let run = s.spawn(move || {
+                let mut send = |b| tx.send(b).map_err(|_| BurrmillError::Cancelled);
+                self.runtime().block_on(self.stream(logical, &mut send))
             });
-            loop {
-                let b = match futures::future::select(stream.next(), stopped.as_mut()).await {
-                    futures::future::Either::Left((Some(b), _)) => b,
-                    futures::future::Either::Left((None, _)) => break,
-                    futures::future::Either::Right(_) => return Err(BurrmillError::Cancelled),
-                };
-                if self.cancel.is_cancelled() {
-                    return Err(BurrmillError::Cancelled);
-                }
-                let b = match b {
-                    Ok(b) => b,
-                    // A scan stopped by the token surfaces here as its error; say what it was.
-                    Err(_) if self.cancel.is_cancelled() => return Err(BurrmillError::Cancelled),
-                    Err(e) => return Err(df_err(e)),
-                };
-                f(dialect::strip_dup_suffix(b))?;
-            }
-            Ok(())
+            // Refused by `f`: `rx` goes with the loop, the next send fails and the statement ends.
+            let taken = rx.into_iter().try_for_each(&mut f);
+            let run = run.join().unwrap_or_else(|p| std::panic::resume_unwind(p));
+            taken.and(run)
         })
+    }
+
+    async fn stream(
+        &self,
+        logical: datafusion_expr::LogicalPlan,
+        f: &mut impl FnMut(RecordBatch) -> Result<()>,
+    ) -> Result<()> {
+        use futures::StreamExt;
+        let physical = self
+            .session
+            .create_physical_plan(&logical)
+            .await
+            .map_err(df_err)?;
+        let mut stream =
+            datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
+                .map_err(df_err)?;
+        // A plan with no nest scan (`range`, a recursive CTE) never meets `CancelExec`, so the
+        // token is also raced here; dropping the stream aborts the partition tasks under it.
+        let mut stopped = std::pin::pin!(async {
+            while !self.cancel.is_cancelled() {
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            }
+        });
+        loop {
+            let b = match futures::future::select(stream.next(), stopped.as_mut()).await {
+                futures::future::Either::Left((Some(b), _)) => b,
+                futures::future::Either::Left((None, _)) => break,
+                futures::future::Either::Right(_) => return Err(BurrmillError::Cancelled),
+            };
+            if self.cancel.is_cancelled() {
+                return Err(BurrmillError::Cancelled);
+            }
+            let b = match b {
+                Ok(b) => b,
+                // A scan stopped by the token surfaces here as its error; say what it was.
+                Err(_) if self.cancel.is_cancelled() => return Err(BurrmillError::Cancelled),
+                Err(e) => return Err(df_err(e)),
+            };
+            f(dialect::strip_dup_suffix(b))?;
+        }
+        Ok(())
+    }
+
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.rt.as_ref().expect("taken only by drop")
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        // From a thread a host's runtime drives, tokio refuses to wait for our workers to stop.
+        if let Some(rt) = self.rt.take()
+            && tokio::runtime::Handle::try_current().is_ok()
+        {
+            rt.shutdown_background();
+        }
     }
 }
 
@@ -314,9 +351,12 @@ impl Engine {
     pub fn parquet_scans(&self, sql: &str) -> Result<u64> {
         let logical = plan_query(&self.session, sql)?;
         refuse_non_query(sql)?;
-        let physical = self
-            .rt
-            .block_on(self.session.create_physical_plan(&logical))
+        let plan = || self.runtime().block_on(self.session.create_physical_plan(&logical));
+        let physical = if tokio::runtime::Handle::try_current().is_err() {
+            plan()
+        } else {
+            std::thread::scope(|s| s.spawn(plan).join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+        }
             .map_err(df_err)?;
         scans(&physical)
     }

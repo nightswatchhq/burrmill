@@ -666,3 +666,60 @@ fn a_repeated_name_in_any_branch_of_a_union_is_answered_as_duckdb_does() {
         vec![json!({"n": 4, "d": 4})]
     );
 }
+
+/// A host's engine API is synchronous and callable from anywhere, as DuckDB's is: from a thread
+/// already driving the host's own runtime, the engine answers, counts scans and is dropped.
+#[test]
+fn the_engine_answers_and_drops_inside_a_hosts_runtime() {
+    let host = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    host.block_on(async {
+        let engine = Engine::open_empty().unwrap();
+        assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
+        assert_eq!(engine.parquet_scans("SELECT 1 AS one").unwrap(), 0);
+        drop(engine);
+    });
+}
+
+/// A historical window cannot place a row with no block number, so, as on DuckDB, it refuses the
+/// statement rather than leaving the row out of the answer. Such rows are sealed, from before
+/// segments were stamped.
+#[test]
+fn a_historical_window_refuses_an_unstamped_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("block_number", DataType::UInt64, true),
+        Field::new("who", DataType::Utf8, false),
+        Field::new("amount", DataType::Utf8, false),
+    ]));
+    let write = |name: &str, stamps: Vec<Option<u64>>| {
+        let n = stamps.len();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(stamps)),
+                Arc::new(StringArray::from(vec!["0xa"; n])),
+                Arc::new(StringArray::from(vec!["5"; n])),
+            ],
+        )
+        .unwrap();
+        let path = tmp.path().join(name);
+        let mut w = parquet::arrow::ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema.clone(), None).unwrap();
+        w.write(&batch).unwrap();
+        w.close().unwrap();
+        let len = std::fs::metadata(&path).unwrap().len();
+        (path, len)
+    };
+    let mut engine = Engine::open_empty().unwrap();
+    let unstamped = write("unstamped.parquet", vec![None, Some(12)]);
+    engine
+        .register_facts("t", &declared(), vec![unstamped], &[], (Some(10), Some(20)))
+        .unwrap();
+    let err = engine.sql("SELECT count(*) AS n FROM t").map(|_| ()).unwrap_err().to_string();
+    assert!(err.contains("unstamped archived row"), "{err}");
+
+    let stamped = write("stamped.parquet", vec![Some(5), Some(12)]);
+    engine
+        .register_facts("t", &declared(), vec![stamped], &[], (Some(10), Some(20)))
+        .unwrap();
+    assert_eq!(rows(&engine, "SELECT count(*) AS n FROM t"), vec![json!({"n": 1})]);
+}
