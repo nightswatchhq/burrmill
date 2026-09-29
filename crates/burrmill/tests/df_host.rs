@@ -168,6 +168,58 @@ fn a_cancel_from_another_thread_stops_the_statement_and_not_the_engine() {
     assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
 }
 
+/// A statement cancelled while it holds memory gives all of it back: a grouped cross join, stopped
+/// once its hash table holds 64 MB of a bounded pool, leaves the pool at zero. Not at once: the
+/// partition tasks unwind a few milliseconds after the caller has its error, and by then the join
+/// has grown for a whole input batch past the cancel (hundreds of MB here).
+#[test]
+fn a_cancelled_join_returns_its_memory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let many: Vec<(u64, &str, &str)> = (0..8_000u64).map(|i| (i, "x", "1")).collect();
+    let seg = segment(tmp.path(), 1, &many);
+    let mut engine = Engine::open_empty_budgeted(burrmill::Budget {
+        memory_bytes: 1 << 30,
+        threads: 4,
+        spill: None,
+    })
+    .unwrap();
+    engine
+        .register_facts("t", &declared(), vec![seg], &[], (None, None))
+        .unwrap();
+    let token = engine.cancel_token();
+    let (r, peak) = std::thread::scope(|s| {
+        let watcher = s.spawn(|| {
+            let started = std::time::Instant::now();
+            let mut peak = 0;
+            while started.elapsed() < std::time::Duration::from_secs(30) {
+                peak = peak.max(engine.memory_reserved());
+                if peak >= 64 << 20 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            token.cancel();
+            peak
+        });
+        let r = engine.sql(
+            "SELECT a.block_number AS x, b.block_number AS y, count(*) AS n FROM t a, t b GROUP BY 1, 2",
+        );
+        (r, watcher.join().unwrap())
+    });
+    assert!(peak >= 64 << 20, "the join never held 64 MB, so this proves nothing: {peak}");
+    assert!(
+        matches!(r, Err(burrmill::BurrmillError::Cancelled)),
+        "{:?}",
+        r.map(|_| ())
+    );
+    let returned = std::time::Instant::now();
+    while engine.memory_reserved() > 0 && returned.elapsed() < std::time::Duration::from_secs(1) {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(engine.memory_reserved(), 0, "a cancelled statement kept its reservation");
+    assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
+}
+
 #[test]
 fn rows_become_a_text_table() {
     let mut engine = Engine::open_empty().unwrap();

@@ -245,6 +245,11 @@ impl Engine {
     pub fn cancel_token(&self) -> crate::CancelToken {
         self.cancel.clone()
     }
+
+    /// Bytes the statements in flight hold against the engine's memory pool.
+    pub fn memory_reserved(&self) -> usize {
+        self.session.runtime_env().memory_pool.reserved()
+    }
 }
 
 impl Engine {
