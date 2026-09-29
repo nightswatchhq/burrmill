@@ -168,6 +168,46 @@ fn a_cancel_from_another_thread_stops_the_statement_and_not_the_engine() {
     assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
 }
 
+/// A statement that reads no nest table stops too: nuthatch's `/sql` watchdog is the only timeout
+/// once DuckDB is gone, and `range` and a recursive CTE have no scan of ours to see the token.
+fn stops_on_cancel(runaway: &str) {
+    let engine = Engine::open_empty().unwrap();
+    let token = engine.cancel_token();
+    let stopper = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        token.cancel();
+    });
+    let started = std::time::Instant::now();
+    let r = engine.sql(runaway);
+    let took = started.elapsed();
+    stopper.join().unwrap();
+    assert!(
+        matches!(r, Err(burrmill::BurrmillError::Cancelled)),
+        "{:?}",
+        r.map(|_| ())
+    );
+    assert!(
+        took < std::time::Duration::from_secs(2),
+        "stopped after {took:?}"
+    );
+    assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
+}
+
+#[test]
+fn a_cancel_stops_a_recursive_cte() {
+    stops_on_cancel(
+        "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 1000000000) \
+         SELECT count(*) AS n FROM t",
+    );
+}
+
+#[test]
+fn a_cancel_stops_a_join_of_ranges() {
+    stops_on_cancel(
+        "SELECT count(*) AS n FROM range(1000000) a, range(1000000) b WHERE a.range + b.range = -1",
+    );
+}
+
 /// A statement cancelled while it holds memory gives all of it back: a grouped cross join, stopped
 /// once its hash table holds 64 MB of a bounded pool, leaves the pool at zero. Not at once: the
 /// partition tasks unwind a few milliseconds after the caller has its error, and by then the join
@@ -206,7 +246,10 @@ fn a_cancelled_join_returns_its_memory() {
         );
         (r, watcher.join().unwrap())
     });
-    assert!(peak >= 64 << 20, "the join never held 64 MB, so this proves nothing: {peak}");
+    assert!(
+        peak >= 64 << 20,
+        "the join never held 64 MB, so this proves nothing: {peak}"
+    );
     assert!(
         matches!(r, Err(burrmill::BurrmillError::Cancelled)),
         "{:?}",
@@ -216,7 +259,11 @@ fn a_cancelled_join_returns_its_memory() {
     while engine.memory_reserved() > 0 && returned.elapsed() < std::time::Duration::from_secs(1) {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    assert_eq!(engine.memory_reserved(), 0, "a cancelled statement kept its reservation");
+    assert_eq!(
+        engine.memory_reserved(),
+        0,
+        "a cancelled statement kept its reservation"
+    );
     assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
 }
 

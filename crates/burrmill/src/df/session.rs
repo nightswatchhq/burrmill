@@ -76,7 +76,12 @@ impl std::fmt::Debug for MiniSession {
 }
 
 impl MiniSession {
-    pub fn new(threads: usize, fold: FoldTables, budget: Option<&super::Budget>) -> DFResult<Self> {
+    pub fn new(
+        threads: usize,
+        fold: FoldTables,
+        budget: Option<&super::Budget>,
+        cancel: crate::CancelToken,
+    ) -> DFResult<Self> {
         let mut config = SessionConfig::new()
             .with_target_partitions(threads.max(1))
             .with_collect_statistics(false);
@@ -264,6 +269,7 @@ impl MiniSession {
                 .chain([
                     Arc::new(super::rangejoin::RangeJoin) as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
                     Arc::new(super::smallinputs::SmallInputs),
+                    Arc::new(super::cancel::Cancellable(cancel)),
                 ])
                 .collect(),
             execution_props: ExecutionProps::new(),

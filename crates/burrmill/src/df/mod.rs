@@ -149,9 +149,10 @@ impl Engine {
             tables: Arc::new(fold_tables),
             pool: Arc::new(pool),
         };
-        let mut session = MiniSession::new(threads, fold, budget.as_ref()).map_err(df_err)?;
-        let groups = threads.max(1);
         let cancel = crate::CancelToken::new();
+        let mut session =
+            MiniSession::new(threads, fold, budget.as_ref(), cancel.clone()).map_err(df_err)?;
+        let groups = threads.max(1);
         for t in &tables {
             let provider: Arc<dyn TableProvider> = if t.files.is_empty() {
                 Arc::new(MemTable::try_new(t.schema.clone(), vec![vec![]]).map_err(df_err)?)
@@ -277,7 +278,19 @@ impl Engine {
             let mut stream =
                 datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
                     .map_err(df_err)?;
-            while let Some(b) = stream.next().await {
+            // A plan with no nest scan (`range`, a recursive CTE) never meets `CancelExec`, so the
+            // token is also raced here; dropping the stream aborts the partition tasks under it.
+            let mut stopped = std::pin::pin!(async {
+                while !self.cancel.is_cancelled() {
+                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                }
+            });
+            loop {
+                let b = match futures::future::select(stream.next(), stopped.as_mut()).await {
+                    futures::future::Either::Left((Some(b), _)) => b,
+                    futures::future::Either::Left((None, _)) => break,
+                    futures::future::Either::Right(_) => return Err(BurrmillError::Cancelled),
+                };
                 if self.cancel.is_cancelled() {
                     return Err(BurrmillError::Cancelled);
                 }
