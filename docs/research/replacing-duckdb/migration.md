@@ -246,6 +246,26 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
 - [ ] **DuckDB-dialect SQL nuthatch generates**: `HUGEINT`/`UBIGINT`/`TRY_CAST` (analytics, recipes,
       views, webhooks), GraphQL's `struct_pack`/`to_json(list())`, port emit's output, the
       `FORBIDDEN_FNS` denylist and error-text matching (`sql_errors.rs`). Each checked on Burrmill.
+      **Measured 2026-09-29** (nuthatch `pete/burrmill-dialect`, test
+      `duckdb_and_burrmill_agree_on_the_sql_nuthatch_generates`: the four restart folds, four
+      recipes, a webhook predicate and six GraphQL shapes through the shadow). Found and fixed:
+      the restart folds and the balance recipes summed `TRY_CAST(v AS HUGEINT)`, which Burrmill's
+      checked rule refuses or sums exactly, so one transfer past i128 stopped a restart re-seeding
+      the balance, exposure and velocity views; they now write the drop as
+      `CASE WHEN TRY_CAST(v AS HUGEINT) IS NOT NULL THEN CAST(v AS HUGEINT) END`, the same answer
+      on DuckDB (rows and `COUNT(*)` unchanged). Port emit's entity totals had the same shape in
+      `DECIMAL(38,0)` and take the same spelling (`analytics::cast_or_null`); their `_overflow`
+      flag is untouched. GraphQL's derived lists needed three things of
+      Burrmill: `struct_pack` (to `named_struct`), `to_json` in DuckDB's spelling (upper-case `\u`
+      escapes, SQL NULL for NULL), and a correlated `ORDER BY … LIMIT` inside a scalar subquery,
+      which DataFusion cannot decorrelate: ranked per inner key instead (`dialect.rs`,
+      `top_n_correlated`). `dialect-parity` 224/224. A spill past `max_temp_size` now names
+      `max_temp_directory_size` as DuckDB does, so nuthatch's hint names the right setting.
+      `FORBIDDEN_FNS` needs nothing: Burrmill resolves only `range` and `generate_series` as table
+      functions and refuses `COPY`, so the denylist is a second lock. **Open:** Burrmill's HUGEINT
+      is `DECIMAL(38,0)`, so a value in `[10^38, 2^127)` is NULL to its `TRY_CAST` and a value to
+      DuckDB's; nuthatch's own `_dec`/`_overflow` columns already draw the line at 38 digits while
+      the folds and the IVM circuit draw it at i128. Chief's call. `printf` is still missing.
 - [ ] **Allocations nest memory**: ordered scans, the chain-order window rule, spilling and the view
       rewrites (`ledger-windows.md`) landed; `lodestar_delegator_stakes` still at 1 GB.
 - [ ] **Tests**: ~45 DuckDB-oracle tests in `src/` and `tests/` moved or retired; the Trino contract
@@ -260,7 +280,12 @@ neither folds nor the ledger work. Estimate on 2026-09-28: about six weeks of wo
 **Found on the way, not caused by this work:** with `graph` and `shadow-burrmill` together, which
 CI never builds, two tests fail on nuthatch `main` since #1527: `e2e_trino_contract` (the five views
 listed in another order) and `authoring_eval_board` (sealing slower than its 120 s wait). DIPS runs
-the plain shadow build, not `graph`.
+the plain shadow build, not `graph`. On `pete/burrmill-folds` with the same features (2026-09-29):
+`entity_lower::the_port_lowers_every_statement_exactly_as_duckdbs_parse_did` fails on the key order
+of a JSON object printed inside two error messages (Burrmill unifies `serde_json/preserve_order`
+in), the answers agreeing; `readers_racing_folds_never_answer_short_and_leave_no_file_behind` failed
+once and passed on rerun. `graft::canonical_plan` is dead outside tests there and fails
+`clippy -D warnings`; `pete/burrmill-dialect` carries the `#[cfg(test)]`.
 
 ## Phase 3a: cutover
 
