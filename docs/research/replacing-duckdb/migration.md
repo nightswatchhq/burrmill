@@ -166,10 +166,15 @@ Burrmill session exists.
       permit, `MemoryHigh=2G`; two faults in the prepared roll fixed first (two permits breach the
       two-engine budget; `ProtectSystem=strict` made the log read-only). The log's first record is a
       planted `printf` refusal, not traffic; it also names a real gap: Burrmill has no `printf`.
-- [ ] Concurrency sweep on the DataFusion path at 32 clients on the nest it will serve (plan risk).
-- [ ] Joins and cancellation: the scan-level token above is the mechanism; still owed is a test
-      that a cancelled join frees its memory, and the per-query timeout at the 30 s guard for the
-      cutover build (the shadow build has DuckDB's watchdog in front).
+- [x] Concurrency sweep on the DataFusion path at 32 clients on the nest it will serve (2026-09-29,
+      progress log): DIPS and GNS through the real `/sql` path, Burrmill alone level with or ahead of
+      DuckDB (355 qps, p99 103-122 ms at 32 clients, no 503s, ~100 MB). It also found GNS's
+      `developer_activity_weekly` refused by production DuckDB for want of ICU.
+- [ ] Joins and cancellation: the scan-level token above is the mechanism. A cancelled join frees
+      its memory (2026-09-29, `a_cancelled_join_returns_its_memory`: the pool is at zero within
+      milliseconds), though it runs on for one input batch past the cancel, bounded by the pool.
+      Still owed: the per-query timeout at the 30 s guard for the cutover build (the shadow build has
+      DuckDB's watchdog in front).
 
 **Gate 2** (all four, or no cutover):
 

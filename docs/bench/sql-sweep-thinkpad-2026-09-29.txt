@@ -1,0 +1,25 @@
+SWEEP	engine=duck	views=2	permits=2	seconds=10
+POINT	clients=1	ok_qps=189.3	p50_ms=6	p99_ms=8	max_ms=10	busy_503=0	other=0	ok_per_client=1893..1893	peak_rss_mb=66
+POINT	clients=2	ok_qps=355.3	p50_ms=6	p99_ms=13	max_ms=20	busy_503=0	other=0	ok_per_client=1772..1781	peak_rss_mb=77
+POINT	clients=4	ok_qps=358.4	p50_ms=10	p99_ms=19	max_ms=25	busy_503=0	other=0	ok_per_client=894..898	peak_rss_mb=80
+POINT	clients=8	ok_qps=341.9	p50_ms=22	p99_ms=34	max_ms=40	busy_503=0	other=0	ok_per_client=426..429	peak_rss_mb=81
+POINT	clients=16	ok_qps=346.3	p50_ms=45	p99_ms=61	max_ms=71	busy_503=0	other=0	ok_per_client=216..217	peak_rss_mb=81
+POINT	clients=32	ok_qps=347.5	p50_ms=91	p99_ms=125	max_ms=145	busy_503=0	other=0	ok_per_client=108..109	peak_rss_mb=81
+SWEEP	engine=burrmill	views=2	permits=2	seconds=10
+POINT	clients=1	ok_qps=197.9	p50_ms=5	p99_ms=7	max_ms=9	busy_503=0	other=0	ok_per_client=1979..1979	peak_rss_mb=93
+POINT	clients=2	ok_qps=379.2	p50_ms=5	p99_ms=9	max_ms=13	busy_503=0	other=0	ok_per_client=1894..1898	peak_rss_mb=96
+POINT	clients=4	ok_qps=361.8	p50_ms=10	p99_ms=17	max_ms=23	busy_503=0	other=0	ok_per_client=904..905	peak_rss_mb=98
+POINT	clients=8	ok_qps=352.7	p50_ms=22	p99_ms=32	max_ms=39	busy_503=0	other=0	ok_per_client=440..442	peak_rss_mb=98
+POINT	clients=16	ok_qps=355.5	p50_ms=44	p99_ms=63	max_ms=72	busy_503=0	other=0	ok_per_client=221..223	peak_rss_mb=99
+POINT	clients=32	ok_qps=355.1	p50_ms=90	p99_ms=103	max_ms=109	busy_503=0	other=0	ok_per_client=110..111	peak_rss_mb=99
+SWEEP-DONE
+SWEEP	engine=duck	views=7	permits=2	seconds=10
+SWEEP	engine=burrmill	views=7	permits=2	seconds=10
+POINT	clients=1	ok_qps=181.8	p50_ms=3	p99_ms=11	max_ms=15	busy_503=0	other=0	ok_per_client=1818..1818	peak_rss_mb=95
+POINT	clients=2	ok_qps=362.7	p50_ms=3	p99_ms=12	max_ms=18	busy_503=0	other=0	ok_per_client=1813..1814	peak_rss_mb=99
+POINT	clients=4	ok_qps=373.0	p50_ms=9	p99_ms=22	max_ms=27	busy_503=0	other=0	ok_per_client=928..936	peak_rss_mb=99
+POINT	clients=8	ok_qps=370.2	p50_ms=21	p99_ms=36	max_ms=41	busy_503=0	other=0	ok_per_client=461..465	peak_rss_mb=99
+POINT	clients=16	ok_qps=366.5	p50_ms=43	p99_ms=61	max_ms=69	busy_503=0	other=0	ok_per_client=228..230	peak_rss_mb=100
+POINT	clients=32	ok_qps=356.5	p50_ms=89	p99_ms=122	max_ms=135	busy_503=0	other=0	ok_per_client=111..112	peak_rss_mb=102
+SWEEP-DONE
+assertion `left == right` failed: /sql?q=SELECT%20%2A%20FROM%20%22developer_activity_weekly%22: {"error":"failed to prepare query: Catalog Error: Table with name developer_activity_weekly does not exist!\nDid you mean \"pg_am\"?\n\nLINE 1: SELECT * FROM \"developer_activity_weekly\"\n               

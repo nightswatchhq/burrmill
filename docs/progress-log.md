@@ -4,6 +4,55 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## `/sql` at 32 clients on DIPS and GNS, a cancelled join, and the hang — 2026-09-29
+
+**The sweep.** nuthatch `pete/sql-sweep`, `serve::tests::sql_sweep_over_a_nest`: real `/sql` requests
+through the router, the two permits, the 250 ms admission wait and its 503, one engine alone per
+process (a test-only process-wide override), every authored view read whole, 10 s a point, on
+copies of the nests from 2026-09-28. The memo (#1186) answers a repeated statement before the
+permit gate and never reaches an engine, so the first run measured a hash map at 27,000 qps;
+`NUTHATCH_SQL_MEMO_BYTES=0` measures the engines. Transcript:
+`docs/bench/sql-sweep-thinkpad-2026-09-29.txt`.
+
+| nest, clients | DuckDB qps | Burrmill qps | DuckDB p99 | Burrmill p99 | 503s | RSS D / B |
+|---|---:|---:|---:|---:|---:|---|
+| DIPS, 1 | 189 | 198 | 8 ms | 7 ms | 0 | 66 / 93 MB |
+| DIPS, 8 | 342 | 353 | 34 ms | 32 ms | 0 | |
+| DIPS, 32 | 348 | 355 | 125 ms | 103 ms | 0 | 81 / 99 MB |
+| GNS, 1 | refused | 182 | | 11 ms | 0 | – / 95 MB |
+| GNS, 32 | refused | 357 | | 122 ms | 0 | – / 102 MB |
+
+Both engines saturate the two permits from two clients on, are fair to within one query per
+client at 32, and never reach the admission limit: these nests' views take milliseconds. Burrmill
+is level or a little ahead for 16-20 MB more.
+
+**GNS's `developer_activity_weekly` is broken in production, on DuckDB.** Its `date_trunc('week',
+to_timestamp(...))` is `date_trunc` over a `TIMESTAMPTZ`, which needs ICU; the bundled DuckDB may not
+load it (`file system operations are disabled`), so the `CREATE VIEW` fails and the view is
+skipped without a log line. The live nest on Helsinki answers "Table with name
+developer_activity_weekly does not exist" (checked 2026-09-29). No consumer reads it (Lodestar,
+kittiwake, muster). Burrmill serves it as written; on DuckDB, `to_timestamp(published_at)::TIMESTAMP`
+would. The no-ICU class of the shadow classifier, found live.
+
+**A cancelled join returns its memory** (`df_host::a_cancelled_join_returns_its_memory`, with
+`Engine::memory_reserved`). A grouped cross join cancelled at 64-80 MB ends `Cancelled`, and the pool
+is back to zero 2-5 ms after the caller has its error, as the partition tasks unwind. But the
+cancel lands late: the join buffers one side, and one batch of the other is the whole product, so
+at 1 GB the statement held 655-756 MB when it returned (0.38 s), and at 16 GB 2.6 GB (1.5 s). The
+bound is one operator's work, as `cancel_token` says; the pool, always set in nuthatch, is the
+backstop. Still owed: the per-query timeout at the 30 s guard for the cutover build.
+
+**The hang, still parked.** The replay logged below as "A hang" (512 MB, two threads, fair pool,
+spilling; its stdout is `~/scratch/mem-512-t2-fair-spill.txt` on the ThinkPad) is still alive, 42
+hours on, at 0% CPU and 1.19 GB. All 37 threads sleep on futexes: 31 tokio workers and one in epoll
+idle, the two fold workers and the main thread in plain `std` waits, and the test thread with one
+thread it spawned both waiting on one address (op `0x189`). Spill files are open. The binary was
+stripped (`strip = true`) and has been rebuilt since, so it cannot be symbolised; stacks and wait
+channels are in `~/scratch/hang-2967563.txt`. "With symbols" means rerunning that configuration
+with `CARGO_PROFILE_RELEASE_STRIP=false` and line tables until it parks again.
+
+---
+
 ## Shadow mode under DuckDB's memory limit: Burrmill does not fit — 2026-09-27
 
 Jules on nuthatch#1527: the shadow opened a second engine with no memory bound. True, and worse
