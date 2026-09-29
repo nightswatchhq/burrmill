@@ -13,6 +13,21 @@ use arrow::record_batch::RecordBatch;
 use serde_json::Value;
 
 const CORPUS: &[&str] = &[
+    "SELECT printf('%d-x', 42) AS a, printf('%5d|%-5d|%05d|%+d|% d', 42, 42, 42, 42, 42) AS b, printf('%x %X %o %#x %#o', 255, 255, 8, 255, 8) AS c, printf('%c%%', 65) AS d",
+    "SELECT printf('%s and %s', 'a', 'b') AS a, printf('%10s|%-10s|%.2s', 'abc', 'abc', 'abc') AS b, printf('%d', -7) AS d",
+    "SELECT printf('%s', 42) AS a",
+    "SELECT printf('%s', true) AS a",
+    "SELECT printf('%d', true) AS a",
+    "SELECT printf('%x', -1) AS a",
+    "SELECT printf('%s', 1.5::DOUBLE) AS a",
+    "SELECT printf('%d', 1.5::DOUBLE) AS a",
+    "SELECT printf('%f', 2) AS a",
+    "SELECT printf('%d', CAST(value AS HUGEINT)) AS a FROM transfer ORDER BY block_number, log_index",
+    "SELECT printf('%f|%.2f|%10.3f|%-10.1f|%+.1f', 3.14159::DOUBLE, 2.675::DOUBLE, -1.5::DOUBLE, 0.05::DOUBLE, 1::DOUBLE) AS a, printf('%e|%.2E|%g|%g|%g|%#g|%G', 12345.678::DOUBLE, 0.000123::DOUBLE, 100000::DOUBLE, 1000000::DOUBLE, 0.0001::DOUBLE, 1.5::DOUBLE, 1e-10::DOUBLE) AS b",
+    "SELECT printf('%d|%s', block_number, \"from\") AS a, printf('%.4f', CAST(value AS DOUBLE) / 1e18) AS b, printf('%s', NULL) AS d FROM transfer ORDER BY block_number, log_index",
+    "SELECT format('{}', 42) AS a, format('{}', -7) AS b, format('{:s}', 'x') AS c, format('{}', CAST(value AS HUGEINT)) AS d FROM transfer ORDER BY block_number, log_index",
+    "SELECT format('{} and {}', 'a', 42) AS a, format('{1} {0}', 'x', 'y') AS b, format('{:>6}|{:<6}|{:^6}|{:*^7}', 'ab', 'ab', 'ab', 'ab') AS c, format('{:.2f}|{:08.3f}|{:+d}|{:x}|{:#x}|{:05d}', 3.14159::DOUBLE, -2.5::DOUBLE, 5, 255, 255, 42) AS d",
+    "SELECT format('{}', 0.1::DOUBLE) AS a, format('{}', 1e20::DOUBLE) AS b, format('{}', 1e-7::DOUBLE) AS c, format('{}', 123456.789::DOUBLE) AS d, format('{}', 1e15::DOUBLE) AS e, format('{}', 1e16::DOUBLE) AS f, format('{}', 2.0::DOUBLE) AS g, format('{}', true) AS h, format('{{}} {}', block_number) AS i FROM transfer ORDER BY block_number LIMIT 1",
     "SELECT to_json(struct_pack(\"a\" := block_number, b := \"from\", c := enabled)) AS j FROM transfer ORDER BY block_number, log_index",
     "SELECT to_json(list(s)) AS j FROM (SELECT struct_pack(k := log_index, v := value) AS s FROM transfer ORDER BY block_number DESC, log_index LIMIT 5) t",
     "SELECT b.block_number, coalesce((SELECT to_json(list(t.s)) FROM (SELECT struct_pack(\"id\" := c.\"to\", \"n\" := c.log_index) AS s FROM transfer c WHERE c.\"from\" = b.\"from\" ORDER BY c.block_number DESC, c.log_index LIMIT 3) t), '[]') AS j FROM transfer b ORDER BY b.block_number, b.log_index",
