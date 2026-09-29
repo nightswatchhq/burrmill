@@ -265,7 +265,11 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
       functions and refuses `COPY`, so the denylist is a second lock. **Open:** Burrmill's HUGEINT
       is `DECIMAL(38,0)`, so a value in `[10^38, 2^127)` is NULL to its `TRY_CAST` and a value to
       DuckDB's; nuthatch's own `_dec`/`_overflow` columns already draw the line at 38 digits while
-      the folds and the IVM circuit draw it at i128. Chief's call. `printf` and `format` added
+      the folds and the IVM circuit draw it at i128. **Decided 2026-09-29: 38 digits everywhere**
+      (nuthatch `pete/transfer-38-digits`, off `pete/burrmill-dialect`): `views::transfer_value` for
+      the live views, `analytics::exact_or_null` for the folds and recipes, the band dropped by both
+      engines and counted in `dropped_over_i128`, which keeps its name. A behaviour change for the
+      release notes: a transfer in `[10^38, 2^127)` leaves balances, exposure and velocity. `printf` and `format` added
       (`df/printf.rs`), a subset of fmt's specs measured against DuckDB, including its
       refusals (`%s` of a number, `%f` of an integer), `%d` of a boolean and `%x` of a negative
       as 64-bit two's complement; `dialect-parity` 239/239.
