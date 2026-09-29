@@ -148,3 +148,60 @@ fn outer_range_join_keeps_the_unmatched_side() {
     let sql = "SELECT p.id, i.k FROM pt p LEFT JOIN iv i ON p.x >= i.lo AND p.x <= i.hi";
     assert_eq!(pairs(&e, sql), want, "{sql}");
 }
+
+/// Every right row matches every left row: 4·10¹⁰ pairs, so only a check inside the probe can stop
+/// it in time.
+#[test]
+fn a_cancel_stops_a_wide_range_join() {
+    let e = Engine::open_empty().unwrap();
+    let sql = "SELECT count(*) AS n FROM (SELECT range AS x FROM range(200000)) p \
+               JOIN (SELECT range AS lo, range + 1000000000 AS hi FROM range(200000)) i \
+               ON p.x >= i.lo AND p.x <= i.hi";
+    assert!(uses_range_join(&e, sql), "not planned as a range join");
+    let token = e.cancel_token();
+    let stopper = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        token.cancel();
+    });
+    let started = std::time::Instant::now();
+    let r = e.sql(sql);
+    let took = started.elapsed();
+    stopper.join().unwrap();
+    assert!(matches!(r, Err(burrmill::BurrmillError::Cancelled)), "{:?}", r.map(|_| ()));
+    assert!(took < std::time::Duration::from_secs(2), "stopped after {took:?}");
+}
+
+/// The side a range join collects is held in the pool, as a hash join's build is: over the bound it
+/// is refused rather than answered from memory the bound never saw.
+#[test]
+fn a_range_join_build_is_held_in_the_pool() {
+    let e = Engine::open_empty_budgeted(burrmill::Budget {
+        memory_bytes: 32 << 20,
+        threads: 2,
+        spill: None,
+    })
+    .unwrap();
+    let side = |c: &str| {
+        format!("(SELECT range AS {c}, range AS {c}2, repeat('x', 200) AS pad FROM range(300000))")
+    };
+    let sql = format!(
+        "SELECT count(*) AS n FROM {} p JOIN {} i ON p.x >= i.lo AND p.x <= i.lo2",
+        side("x"),
+        side("lo")
+    );
+    assert!(uses_range_join(&e, &sql), "not planned as a range join");
+    let err = e.sql(&sql).map(|_| ()).unwrap_err().to_string();
+    assert!(err.contains("RangeJoin"), "refused, but not for the range join's build: {err}");
+}
+
+/// `count(*)` projects no column out of the join, so its batches are rows without columns.
+#[test]
+fn a_range_join_counts_with_no_column_projected() {
+    let (_t, e, points, intervals) = fixture(4);
+    let want: usize = expect(&points, &intervals, false, false, false).values().sum();
+    let sql = "SELECT count(*) AS n FROM pt p JOIN iv i ON p.x >= i.lo AND p.x <= i.hi";
+    assert!(uses_range_join(&e, sql));
+    let got = e.sql(sql).unwrap_or_else(|err| panic!("{err}"));
+    let n = got[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    assert_eq!(n as usize, want);
+}

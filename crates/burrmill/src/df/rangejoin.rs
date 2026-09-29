@@ -18,19 +18,20 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, RecordBatch, UInt32Array, make_comparator};
+use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array, make_comparator};
 use arrow::compute::{SortOptions, concat_batches, sort_to_indices, take};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{JoinSide, JoinType, Result};
+use datafusion_common::{DataFusionError, JoinSide, JoinType, Result};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, collect};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execute_stream};
 use datafusion_session::PhysicalOptimizerRule;
 use futures::StreamExt;
 
@@ -210,10 +211,23 @@ struct Built {
     b: ArrayRef,
     /// `suffix_min[i]`: the position in `order` of the least `L_b` at or after `i`.
     suffix_min: Vec<u32>,
+    /// All of the above, in the pool, as a hash join's build is.
+    _reservation: MemoryReservation,
 }
 
-fn build(batches: &[RecordBatch], schema: SchemaRef, bounds: Bounds) -> Result<Built> {
-    let batch = concat_batches(&schema, batches)?;
+async fn build(left: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, bounds: Bounds) -> Result<Built> {
+    let reservation = MemoryConsumer::new("RangeJoinExec build").register(ctx.memory_pool());
+    let schema = left.schema();
+    let mut batches = Vec::new();
+    let mut input = execute_stream(left, ctx)?;
+    while let Some(b) = input.next().await {
+        let b = b?;
+        reservation.try_grow(b.get_array_memory_size())?;
+        batches.push(b);
+    }
+    let batch = concat_batches(&schema, &batches)?;
+    reservation.try_grow(batch.get_array_memory_size())?;
+    drop(batches);
     let (a, b) = (batch.column(bounds.la), batch.column(bounds.lb));
     let sorted = sort_to_indices(a, Some(SortOptions { descending: false, nulls_first: true }), None)?;
     let order: UInt32Array = sorted
@@ -231,12 +245,42 @@ fn build(batches: &[RecordBatch], schema: SchemaRef, bounds: Bounds) -> Result<B
             _ => i as u32,
         };
     }
-    Ok(Built { batch, order, a, b, suffix_min })
+    // What is kept: the concatenated side, the sorted bounds and the order over them.
+    reservation.try_resize(
+        batch.get_array_memory_size()
+            + a.get_array_memory_size()
+            + b.get_array_memory_size()
+            + order.get_array_memory_size()
+            + suffix_min.len() * 4,
+    )?;
+    Ok(Built { batch, order, a, b, suffix_min, _reservation: reservation })
 }
 
-/// Left and right row indices for every match of `right`'s rows, and a NULL left for each right
-/// row with none when the join keeps them.
-fn probe(built: &Built, right: &RecordBatch, bounds: Bounds, keep: bool) -> Result<(UInt32Array, UInt32Array)> {
+/// Matches past this many in one call, or candidates examined past `STEPS`, and a probe stops to
+/// hand them on and look at the token: one wide right row can match the whole left side.
+const STEPS: usize = 1 << 16;
+
+/// Where a probe of one right batch stopped.
+#[derive(Default)]
+struct Cursor {
+    r: usize,
+    /// The candidate reached in row `r`, once its search is done.
+    i: Option<usize>,
+    /// Whether row `r` has matched, for a join that keeps unmatched right rows.
+    matched: bool,
+}
+
+/// Left and right row indices for the matches of `right`'s rows from `cur` on, and a NULL left for
+/// each right row with none when the join keeps them; at most `max_out` of them, and `true` once the
+/// batch is done.
+fn probe(
+    built: &Built,
+    right: &RecordBatch,
+    bounds: Bounds,
+    keep: bool,
+    cur: &mut Cursor,
+    max_out: usize,
+) -> Result<(UInt32Array, UInt32Array, bool)> {
     let (ra, rb) = (right.column(bounds.ra), right.column(bounds.rb));
     let ca = make_comparator(ra.as_ref(), built.a.as_ref(), SortOptions::default())?;
     let cb = make_comparator(rb.as_ref(), built.b.as_ref(), SortOptions::default())?;
@@ -254,30 +298,40 @@ fn probe(built: &Built, right: &RecordBatch, bounds: Bounds, keep: bool) -> Resu
     };
     let n = built.order.len();
     let (mut left, mut right_idx) = (Vec::new(), Vec::new());
-    for r in 0..right.num_rows() {
-        let before = left.len();
+    let mut steps = 0;
+    while cur.r < right.num_rows() {
+        let r = cur.r;
         if ra.is_valid(r) && rb.is_valid(r) {
             // First left row where `L_a >= R_a` holds; it holds from there on, `L_a` being sorted.
-            let (mut lo, mut hi) = (0, n);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if a_holds(r, mid) { hi = mid } else { lo = mid + 1 }
-            }
-            let mut i = lo;
+            let mut i = cur.i.unwrap_or_else(|| {
+                let (mut lo, mut hi) = (0, n);
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    if a_holds(r, mid) { hi = mid } else { lo = mid + 1 }
+                }
+                lo
+            });
             while i < n && b_holds(r, built.suffix_min[i] as usize) {
+                if left.len() >= max_out || steps >= STEPS {
+                    cur.i = Some(i);
+                    return Ok((UInt32Array::from(left), UInt32Array::from(right_idx), false));
+                }
+                steps += 1;
                 if b_holds(r, i) {
                     left.push(Some(built.order.value(i)));
                     right_idx.push(r as u32);
+                    cur.matched = true;
                 }
                 i += 1;
             }
         }
-        if keep && left.len() == before {
+        if keep && !cur.matched {
             left.push(None);
             right_idx.push(r as u32);
         }
+        *cur = Cursor { r: r + 1, ..Cursor::default() };
     }
-    Ok((UInt32Array::from(left), UInt32Array::from(right_idx)))
+    Ok((UInt32Array::from(left), UInt32Array::from(right_idx), true))
 }
 
 fn assemble(
@@ -298,7 +352,9 @@ fn assemble(
     if let Some(p) = projection {
         columns = p.iter().map(|&i| Arc::clone(&columns[i])).collect();
     }
-    Ok(RecordBatch::try_new(Arc::clone(schema), columns)?)
+    // `count(*)` projects no column, and a batch of none needs its row count said.
+    let options = RecordBatchOptions::new().with_row_count(Some(left_idx.len()));
+    Ok(RecordBatch::try_new_with_options(Arc::clone(schema), columns, &options)?)
 }
 
 impl DisplayAs for RangeJoinExec {
@@ -347,48 +403,51 @@ impl ExecutionPlan for RangeJoinExec {
         let (bounds, keep) = (self.bounds, self.join_type == JoinType::Right);
         let (projection, schema) = (self.projection.clone(), Arc::clone(&self.schema));
         let chunk = ctx.session_config().batch_size().max(1);
+        let token = ctx.session_config().get_extension::<crate::CancelToken>().unwrap_or_default();
         let mut right = Some(self.right.execute(partition, Arc::clone(&ctx))?);
-        let left_schema = self.left.schema();
         let stream = futures::stream::once(async move {
-            built
-                .get_or_try_init(|| async move {
-                    let batches = collect(left, ctx).await?;
-                    build(&batches, left_schema, bounds).map(Arc::new)
-                })
-                .await
-                .cloned()
+            built.get_or_try_init(|| async move { build(left, ctx, bounds).await.map(Arc::new) }).await.cloned()
         })
         .flat_map(move |b| {
-            let (projection, schema) = (projection.clone(), Arc::clone(&schema));
+            let (projection, schema, token) = (projection.clone(), Arc::clone(&schema), Arc::clone(&token));
             match b {
                 Err(e) => futures::stream::once(async move { Err(e) }).boxed(),
                 Ok(built) => right
                     .take()
                     .expect("built once")
-                    .map(move |r| -> Result<Vec<Result<RecordBatch>>> {
-                        let r = r?;
-                        let (li, ri) = probe(&built, &r, bounds, keep)?;
-                        let mut out = Vec::new();
-                        let mut start = 0;
-                        while start < li.len() {
-                            let len = chunk.min(li.len() - start);
-                            out.push(assemble(
-                                &built,
-                                &r,
-                                &li.slice(start, len),
-                                &ri.slice(start, len),
-                                projection.as_deref(),
-                                &schema,
-                            ));
-                            start += len;
-                        }
-                        Ok(out)
-                    })
-                    .flat_map(|v| {
-                        futures::stream::iter(match v {
-                            Ok(v) => v,
-                            Err(e) => vec![Err(e)],
+                    .flat_map(move |r| {
+                        let (built, projection, schema, token) =
+                            (Arc::clone(&built), projection.clone(), Arc::clone(&schema), Arc::clone(&token));
+                        let r = match r {
+                            Ok(r) => r,
+                            Err(e) => return futures::stream::once(async move { Err(e) }).boxed(),
+                        };
+                        // One output batch per step, so neither a wide batch's matches nor its time
+                        // are held in one piece.
+                        futures::stream::unfold(Some(Cursor::default()), move |cur| {
+                            let (built, r, projection, schema, token) =
+                                (Arc::clone(&built), r.clone(), projection.clone(), Arc::clone(&schema), Arc::clone(&token));
+                            async move {
+                                let mut cur = cur?;
+                                loop {
+                                    if token.is_cancelled() {
+                                        return Some((Err(DataFusionError::Execution("cancelled".into())), None));
+                                    }
+                                    let (li, ri, done) = match probe(&built, &r, bounds, keep, &mut cur, chunk) {
+                                        Ok(p) => p,
+                                        Err(e) => return Some((Err(e), None)),
+                                    };
+                                    if !li.is_empty() {
+                                        let out = assemble(&built, &r, &li, &ri, projection.as_deref(), &schema);
+                                        return Some((out, (!done).then_some(cur)));
+                                    }
+                                    if done {
+                                        return None;
+                                    }
+                                }
+                            }
                         })
+                        .boxed()
                     })
                     .boxed(),
             }

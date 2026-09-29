@@ -82,9 +82,11 @@ impl MiniSession {
         budget: Option<&super::Budget>,
         cancel: crate::CancelToken,
     ) -> DFResult<Self> {
+        // The token rides in the config too, for an owned operator that loops inside one poll.
         let mut config = SessionConfig::new()
             .with_target_partitions(threads.max(1))
-            .with_collect_statistics(false);
+            .with_collect_statistics(false)
+            .with_extension(Arc::new(cancel.clone()));
         config.options_mut().sql_parser.enable_ident_normalization = false;
         // DuckDB types `1.5` as DECIMAL(2,1), and nuthatch prints a DECIMAL as a string.
         config.options_mut().sql_parser.parse_float_as_decimal = true;
