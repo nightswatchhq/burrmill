@@ -30,8 +30,19 @@ This matters beyond the cutover. Plain `/sql` is not admitted by `parquet_scans`
 stayed with it. On the DIPS shadow build, a statement DuckDB answers inside 15 s and Burrmill cannot
 finish would have held DIPS's one permit; none is known, the path exists.
 
-Still open: `RangeJoinExec::probe` builds every index pair of a probe batch before chunking, so a
-wide range match is one long call the token does not interrupt, and its memory is not in the pool.
+**The range join, the same day.** `RangeJoinExec::probe` built every index pair of a right batch
+before chunking, and nothing it held was in the pool. Now the probe resumes from a cursor, at most a
+batch of matches or 65,536 candidates a call, reading the token between calls (it rides in the
+session config); a batch leaves as it is made; the collected side is reserved as it arrives. A
+cancelled wide range join (4·10¹⁰ pairs) stopped after 14.6 s, now at once. It also found that
+`count(*)` over any range join failed: no column projected, and a batch of none needs its row count
+(`a_range_join_counts_with_no_column_projected`). Views 22/22 identical on both builds;
+`lodestar_epochs`, its four range joins, 676-679 ms against main's 682-726 in alternating runs.
+
+The honest pool costs one view at 512 MB. The replay (greedy, two threads, spill) refuses
+`lodestar_epochs` where this afternoon's answered: 23 refusals against 22. The range join's build is
+not among the top five consumers; a sort merge at 236 MB and hash-join builds at 121 and 129 MB,
+none spillable, are. It was answering on memory the bound did not see.
 
 **The hang, reproduced with symbols.** Burrmill main plus a fair-pool probe knob, nuthatch
 `pete/sql-sweep` unstripped, the replay at 512 MB, two threads, spill on (ThinkPad, 17:50 EEST):

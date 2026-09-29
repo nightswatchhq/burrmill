@@ -182,7 +182,7 @@ Burrmill session exists.
       or a nested-loop join over `range`, both past 120 s against a 250 ms budget (nuthatch
       `pete/burrmill-watchdog`). Fixed in Burrmill: the caller races the token, and `Cancellable`
       checks it in every join's output and filter (progress log); the nuthatch test passes on both
-      engines with the rev bumped. `RangeJoinExec::probe` is still one long call.
+      engines with the rev bumped. `RangeJoinExec` since: resumable probe, build in the pool.
 
 **Gate 2** (all four, or no cutover):
 
