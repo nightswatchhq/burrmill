@@ -588,6 +588,10 @@ fn rename_function(f: &mut sq::Function) {
         arg_extreme(f, lower.ends_with("max") || lower == "max_by");
         return;
     }
+    if lower == "struct_pack" {
+        struct_pack(f);
+        return;
+    }
     // DataFusion's unicode planner binds `substr` itself and rejects a negative length.
     // Ours is looked up by name, so the call has to stop being called substr.
     if matches!(lower.as_str(), "substr" | "substring") {
@@ -622,6 +626,217 @@ fn rename_function(f: &mut sq::Function) {
         ))),
     );
     f.name = sq::ObjectName::from(vec![sq::Ident::new("date_part")]);
+}
+
+/// `struct_pack(k := v, ...)` is DataFusion's `named_struct('k', v, ...)`. An unnamed argument takes
+/// its column's name, as in DuckDB.
+fn struct_pack(f: &mut sq::Function) {
+    let sq::FunctionArguments::List(l) = &mut f.args else {
+        return;
+    };
+    let mut args = Vec::with_capacity(l.args.len() * 2);
+    for a in &l.args {
+        let (key, v) = match a {
+            sq::FunctionArg::Named {
+                name,
+                arg: sq::FunctionArgExpr::Expr(v),
+                operator: sq::FunctionArgOperator::Assignment,
+            } => (name.value.clone(), v.clone()),
+            sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(v)) => match v {
+                SqlExpr::Identifier(i) => (i.value.clone(), v.clone()),
+                SqlExpr::CompoundIdentifier(p) => (p.last().expect("a part").value.clone(), v.clone()),
+                _ => return,
+            },
+            _ => return,
+        };
+        args.push(SqlExpr::Value(sq::Value::SingleQuotedString(key).into()));
+        args.push(v);
+    }
+    *f = match call("named_struct", args) {
+        SqlExpr::Function(g) => g,
+        _ => unreachable!(),
+    };
+}
+
+/// A scalar subquery aggregating a correlated top-N,
+/// `(SELECT agg(t.x) FROM (SELECT … FROM r c WHERE c.k = <outer> AND … ORDER BY o LIMIT n) t)`,
+/// which DataFusion cannot decorrelate through the limit. Ranked within `c.k` instead, and
+/// correlated outside the derived table, where DataFusion pulls an equality up over the aggregate:
+/// `(SELECT agg(t.x ORDER BY t.rn) FROM (SELECT …, c.k AS k, row_number() OVER (PARTITION BY c.k
+/// ORDER BY o) AS rn FROM r c WHERE …) t WHERE t.k = <outer> AND t.rn > m AND t.rn <= m + n)`.
+/// With the correlation an equality on an inner column, a rank per key is a rank per outer row.
+fn top_n_correlated(q: &mut sq::Query) {
+    let _ = try_top_n_correlated(q);
+}
+
+fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
+    const KEY: &str = "__burrmill_k";
+    const RANK: &str = "__burrmill_rn";
+    if q.with.is_some() || q.order_by.is_some() || q.limit_clause.is_some() || q.fetch.is_some() {
+        return None;
+    }
+    let sq::SetExpr::Select(outer) = q.body.as_mut() else { return None };
+    if outer.selection.is_some()
+        || outer.having.is_some()
+        || outer.distinct.is_some()
+        || !matches!(&outer.group_by, sq::GroupByExpr::Expressions(g, m) if g.is_empty() && m.is_empty())
+    {
+        return None;
+    }
+    let [from] = outer.from.as_mut_slice() else { return None };
+    if !from.joins.is_empty() {
+        return None;
+    }
+    let sq::TableFactor::Derived { lateral: false, subquery: inner_q, alias: Some(t), sample: None } = &mut from.relation else {
+        return None;
+    };
+    let t = t.name.clone();
+    if inner_q.with.is_some() || inner_q.fetch.is_some() {
+        return None;
+    }
+    let Some(sq::OrderBy { kind: sq::OrderByKind::Expressions(order), interpolate: None }) = inner_q.order_by.clone() else {
+        return None;
+    };
+    let Some(sq::LimitClause::LimitOffset { limit: Some(limit), offset, limit_by }) = inner_q.limit_clause.clone() else {
+        return None;
+    };
+    let literal = |e: &SqlExpr| match e {
+        SqlExpr::Value(v) => match &v.value {
+            sq::Value::Number(n, _) => n.parse::<u64>().ok(),
+            _ => None,
+        },
+        _ => None,
+    };
+    let n = literal(&limit)?;
+    let m = match &offset {
+        Some(o) => literal(&o.value)?,
+        None => 0,
+    };
+    if !limit_by.is_empty() {
+        return None;
+    }
+    let sq::SetExpr::Select(inner) = inner_q.body.as_mut() else { return None };
+    if inner.having.is_some()
+        || inner.distinct.is_some()
+        || !matches!(&inner.group_by, sq::GroupByExpr::Expressions(g, m) if g.is_empty() && m.is_empty())
+    {
+        return None;
+    }
+    let [rel] = inner.from.as_slice() else { return None };
+    let sq::TableFactor::Table { name, alias, args: None, .. } = &rel.relation else { return None };
+    if !rel.joins.is_empty() {
+        return None;
+    }
+    let c = match alias {
+        Some(a) => a.name.value.clone(),
+        None => name.0.last()?.as_ident()?.value.clone(),
+    };
+    // Every column named must say whose it is; `Some(true)` for the inner relation's alone.
+    let inner_only = |e: &SqlExpr| -> Option<bool> {
+        let mut inside = true;
+        let mut unknown = false;
+        let _ = sq::visit_expressions(e, |x| {
+            match x {
+                SqlExpr::Identifier(_) => unknown = true,
+                SqlExpr::CompoundIdentifier(p) if p.len() == 2 => inside &= p[0].value == c,
+                SqlExpr::CompoundIdentifier(_) | SqlExpr::Subquery(_) | SqlExpr::Exists { .. } | SqlExpr::InSubquery { .. } => {
+                    unknown = true
+                }
+                _ => {}
+            }
+            ControlFlow::<()>::Continue(())
+        });
+        (!unknown).then_some(inside)
+    };
+    let mut conjuncts = Vec::new();
+    if let Some(w) = inner.selection.clone() {
+        split_and(w, &mut conjuncts);
+    }
+    let column = |e: &SqlExpr| matches!(e, SqlExpr::CompoundIdentifier(p) if p.len() == 2 && p[0].value == c);
+    let mut key = None;
+    let mut plain = Vec::new();
+    for x in conjuncts {
+        if let SqlExpr::BinaryOp { left, op: BinaryOperator::Eq, right } = &x
+            && key.is_none()
+        {
+            if column(left) && inner_only(right) == Some(false) {
+                key = Some(((**left).clone(), (**right).clone()));
+                continue;
+            }
+            if column(right) && inner_only(left) == Some(false) {
+                key = Some(((**right).clone(), (**left).clone()));
+                continue;
+            }
+        }
+        if inner_only(&x) != Some(true) {
+            return None;
+        }
+        plain.push(x);
+    }
+    let (inner_key, outer_value) = key?;
+    let items_inner = inner.projection.iter().all(|i| match i {
+        sq::SelectItem::UnnamedExpr(e) | sq::SelectItem::ExprWithAlias { expr: e, .. } => inner_only(e) == Some(true),
+        _ => false,
+    });
+    if !items_inner || order.iter().any(|o| inner_only(&o.expr) != Some(true)) {
+        return None;
+    }
+
+    inner.selection = (!plain.is_empty()).then(|| rejoin(plain));
+    let mut rank = call("row_number", vec![]);
+    if let SqlExpr::Function(f) = &mut rank {
+        f.over = Some(sq::WindowType::WindowSpec(sq::WindowSpec {
+            window_name: None,
+            partition_by: vec![inner_key.clone()],
+            order_by: order,
+            window_frame: None,
+        }));
+    }
+    inner.projection.push(sq::SelectItem::ExprWithAlias { expr: inner_key, alias: sq::Ident::new(KEY) });
+    inner.projection.push(sq::SelectItem::ExprWithAlias { expr: rank, alias: sq::Ident::new(RANK) });
+    inner_q.order_by = None;
+    inner_q.limit_clause = None;
+
+    let col = |name: &str| SqlExpr::CompoundIdentifier(vec![t.clone(), sq::Ident::new(name)]);
+    let num = |v: u64| SqlExpr::Value(sq::Value::Number(v.to_string(), false).into());
+    outer.selection = Some(rejoin(vec![
+        binop(col(KEY), BinaryOperator::Eq, outer_value),
+        binop(col(RANK), BinaryOperator::Gt, num(m)),
+        binop(col(RANK), BinaryOperator::LtEq, num(m + n)),
+    ]));
+    // An aggregate that sees its input's order takes it from the rank now.
+    let _ = sq::visit_expressions_mut(&mut outer.projection, |x| {
+        if let SqlExpr::Function(f) = x
+            && f.over.is_none()
+            && let [sq::ObjectNamePart::Identifier(id)] = f.name.0.as_slice()
+            && matches!(id.value.to_ascii_lowercase().as_str(), "list" | "array_agg" | "string_agg" | "group_concat")
+            && let sq::FunctionArguments::List(l) = &mut f.args
+            && !l.clauses.iter().any(|c| matches!(c, sq::FunctionArgumentClause::OrderBy(_)))
+        {
+            l.clauses.push(sq::FunctionArgumentClause::OrderBy(vec![sq::OrderByExpr {
+                expr: col(RANK),
+                options: sq::OrderByOptions { asc: None, nulls_first: None },
+                with_fill: None,
+            }]));
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    Some(())
+}
+
+fn split_and(e: SqlExpr, out: &mut Vec<SqlExpr>) {
+    match e {
+        SqlExpr::BinaryOp { left, op: BinaryOperator::And, right } => {
+            split_and(*left, out);
+            split_and(*right, out);
+        }
+        SqlExpr::Nested(x) if matches!(*x, SqlExpr::BinaryOp { op: BinaryOperator::And, .. }) => split_and(*x, out),
+        e => out.push(e),
+    }
+}
+
+fn rejoin(v: Vec<SqlExpr>) -> SqlExpr {
+    v.into_iter().reduce(|a, b| binop(a, BinaryOperator::And, b)).expect("at least one conjunct")
 }
 
 fn call(name: &str, args: Vec<SqlExpr>) -> SqlExpr {
@@ -746,6 +961,9 @@ impl VisitorMut for Rewriter {
     }
 
     fn pre_visit_expr(&mut self, e: &mut SqlExpr) -> ControlFlow<()> {
+        if let SqlExpr::Subquery(q) = e {
+            top_n_correlated(q);
+        }
         if let SqlExpr::Function(f) = e {
             if let Some(sq::WindowType::WindowSpec(w)) = f.over.as_mut() {
                 nulls_last(&mut w.order_by);

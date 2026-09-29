@@ -43,6 +43,7 @@ mod smallinputs;
 mod tables;
 pub use tables::duckdb_type;
 mod textfn;
+mod tojson;
 mod subqueries;
 mod topn;
 mod wide;

@@ -149,6 +149,8 @@ impl MiniSession {
         scalar.insert(intdiv.name().to_string(), intdiv);
         let xor = super::dialect::Xor::udf();
         scalar.insert(xor.name().to_string(), xor);
+        let to_json = super::tojson::ToJson::udf();
+        scalar.insert(to_json.name().to_string(), to_json);
         for f in datafusion_functions_nested::all_default_nested_functions() {
             let f = match f.name() {
                 "array_prepend" => super::lists::ElementAndList::udf(f, true),

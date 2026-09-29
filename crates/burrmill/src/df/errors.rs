@@ -122,10 +122,14 @@ pub fn duckdb_phrase(msg: &str) -> Option<String> {
         }
     }
     if let Some(rest) = after(msg, "Resources exhausted: ") {
-        return Some(format!(
-            "Out of Memory Error: {}",
-            rest.lines().next().unwrap_or(rest)
-        ));
+        let first = rest.lines().next().unwrap_or(rest);
+        // DuckDB names the setting a spill ran out of, and nuthatch's hint keys on the name.
+        let setting = if first.contains("during the spilling process") {
+            "\nThis limit was set by the 'max_temp_directory_size' setting."
+        } else {
+            ""
+        };
+        return Some(format!("Out of Memory Error: {first}{setting}"));
     }
     None
 }
@@ -200,6 +204,11 @@ mod tests {
             p("Resources exhausted: Failed to allocate 10.0 MB")
                 .unwrap()
                 .starts_with("Out of Memory Error")
+        );
+        assert!(
+            p("Resources exhausted: The used disk space during the spilling process has exceeded the allowable limit of 1.0 MB.")
+                .unwrap()
+                .ends_with("This limit was set by the 'max_temp_directory_size' setting.")
         );
         assert_eq!(p("Arrow error: Divide by zero error"), None);
         let r = super::restate(

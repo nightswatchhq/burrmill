@@ -13,6 +13,16 @@ use arrow::record_batch::RecordBatch;
 use serde_json::Value;
 
 const CORPUS: &[&str] = &[
+    "SELECT to_json(struct_pack(\"a\" := block_number, b := \"from\", c := enabled)) AS j FROM transfer ORDER BY block_number, log_index",
+    "SELECT to_json(list(s)) AS j FROM (SELECT struct_pack(k := log_index, v := value) AS s FROM transfer ORDER BY block_number DESC, log_index LIMIT 5) t",
+    "SELECT b.block_number, coalesce((SELECT to_json(list(t.s)) FROM (SELECT struct_pack(\"id\" := c.\"to\", \"n\" := c.log_index) AS s FROM transfer c WHERE c.\"from\" = b.\"from\" ORDER BY c.block_number DESC, c.log_index LIMIT 3) t), '[]') AS j FROM transfer b ORDER BY b.block_number, b.log_index",
+    "SELECT coalesce((SELECT to_json(list(t.s)) FROM (SELECT struct_pack(\"id\" := c.\"to\") AS s FROM transfer c WHERE c.block_number < 0) t), '[]') AS j",
+    "SELECT to_json('a\"b\\c/' || chr(10) || chr(9) || chr(1) || chr(31) || chr(127) || 'é€😀') AS j",
+    "SELECT to_json(CAST(value AS HUGEINT)) AS a, to_json(block_number) AS b, to_json(\"from\") AS c FROM transfer ORDER BY block_number, log_index LIMIT 3",
+    "SELECT to_json(NULL) AS a, to_json(struct_pack(x := NULL, y := 1)) AS b, to_json([1, NULL, 3]) AS c, to_json(true) AS d, to_json(struct_pack(\"we\"\"ird\" := 'v')) AS e",
+    "SELECT to_json(list(x)) AS j FROM (SELECT 1 AS x WHERE false) t",
+    "SELECT b.block_number, b.log_index, (SELECT string_agg(t.v, ',') FROM (SELECT c.value AS v FROM transfer c WHERE b.\"from\" = c.\"from\" AND c.log_index >= 0 ORDER BY c.value DESC, c.log_index LIMIT 2 OFFSET 1) t) AS j FROM transfer b ORDER BY 1, 2",
+    "SELECT b.block_number, (SELECT to_json(list(t.s)) FROM (SELECT struct_pack(\"id\" := c.\"to\") AS s FROM transfer c WHERE c.\"from\" = b.\"from\" ORDER BY c.block_number LIMIT 0) t) AS j FROM transfer b ORDER BY b.block_number, b.log_index",
     "SELECT count(*) FROM transfer",
     "SELECT sum(value_dec) FROM transfer",
     "SELECT sum(block_number) FROM transfer",
