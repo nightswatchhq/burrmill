@@ -135,10 +135,14 @@ Burrmill session exists.
       reach it as they reach DuckDB's.
 - [ ] Classifier for expected differences, so the log holds only the unexplained. Done so far
       (2026-09-27): both-truncated compares nothing; `Unordered` for a `LIMIT` with no `ORDER BY`;
-      `FloatOrder` for doubles equal to twelve significant digits. Still to name: `cold_velocity`
-      DOUBLE, `/` semantics, DuckDB 1.5.x wraps (duckdb#24081), the cast-comparison bug
-      (`docs/upstream/duckdb-cast-comparison-null-constant.md`), the no-ICU class, and the checked
-      rule's designed refusals (a sum over a `TRY_CAST` value).
+      `FloatOrder` for doubles equal to twelve significant digits; `Designed` for the checked
+      rule's refusals and `Looser` for the no-ICU class (nuthatch `5b5ff81`, on main).
+      `cold_velocity` and `/` need no class: the window is `//` now and `/` is DOUBLE on both
+      (6.5). Left, and **deliberately not written ahead of a record** (2026-09-29): DuckDB 1.5.x
+      wraps (duckdb#24081) and the cast-comparison bug
+      (`docs/upstream/duckdb-cast-comparison-null-constant.md`). Both are DuckDB answering
+      wrongly, no replay has met either, and a detector keyed on SQL text would explain away a
+      Burrmill fault of the same shape. Name each from the first real record, on its values.
 - [x] What the first replays found and fixed (2026-09-27, log entry "Shadow mode's first day"): a
       Burrmill `ORDER BY` alias bug (fixed, `dialect-parity` 210/210) and two dashboard statements
       summing `tokens_dec` (kittiwake `pete/dump-nest-sql` casts `tokens` instead; to merge before
@@ -174,7 +178,11 @@ Burrmill session exists.
       its memory (2026-09-29, `a_cancelled_join_returns_its_memory`: the pool is at zero within
       milliseconds), though it runs on for one input batch past the cancel, bounded by the pool.
       Still owed: the per-query timeout at the 30 s guard for the cutover build (the shadow build has
-      DuckDB's watchdog in front).
+      DuckDB's watchdog in front). **2026-09-29:** the guard did not stop Burrmill on a recursive CTE
+      or a nested-loop join over `range`, both past 120 s against a 250 ms budget (nuthatch
+      `pete/burrmill-watchdog`). Fixed in Burrmill: the caller races the token, and `Cancellable`
+      checks it in every join's output and filter (progress log); the nuthatch test passes on both
+      engines with the rev bumped. `RangeJoinExec::probe` is still one long call.
 
 **Gate 2** (all four, or no cutover):
 

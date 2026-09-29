@@ -4,6 +4,59 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The watchdog could not stop Burrmill, and the hang is a lost wakeup — 2026-09-29
+
+**The watchdog.** The cutover build has no DuckDB in front, so nuthatch's `/sql` guard must stop
+Burrmill itself. nuthatch `pete/burrmill-watchdog`, `guarded_query_times_out_on_a_runaway_on_burrmill`:
+the existing 250 ms guard, on a recursive CTE and on a nested-loop join of two `range`s. DuckDB
+stops at the budget; Burrmill was still running at 120 s. `df_host`'s two new tests reproduce it
+without nuthatch (`a_cancel_stops_a_recursive_cte`, `a_cancel_stops_a_join_of_ranges`, both past 60 s
+before, both 0.16 s after).
+
+The token was read in two places: `CancelExec` over nest scans, and between output batches. Neither
+plan has a nest scan. The recursive CTE's work runs on spawned tasks while the caller waits, so the
+caller now races the token (a 2 ms poll, as the gate's notice) and returns on it; dropping the
+stream aborts the tasks. The join is worse: `range(1000000)` is one batch in one partition, nothing
+is spawned, and `NestedLoopJoinExec` evaluates its filter over a million pairs per left row, 10¹²
+in all, inside the caller's one poll, emitting nothing. No race outside that poll can win. So a
+physical rule, `Cancellable`, last, wraps every join's output in `CancelExec` and every
+nested-loop and hash join filter in an expression that fails once the token is set: the check is
+where the join spends its time. `datafusion` suite green (17 binaries); nuthatch's guard test
+passes on both engines against it (0.5 s). Not re-measured: the cost
+of an atomic load per filter evaluation and per join batch on the views.
+
+This matters beyond the cutover. Plain `/sql` is not admitted by `parquet_scans` (that is
+`/q/{name}` only), so any client could send such a join, and the request's thread, and its permit,
+stayed with it. On the DIPS shadow build, a statement DuckDB answers inside 15 s and Burrmill cannot
+finish would have held DIPS's one permit; none is known, the path exists.
+
+Still open: `RangeJoinExec::probe` builds every index pair of a probe batch before chunking, so a
+wide range match is one long call the token does not interrupt, and its memory is not in the pool.
+
+**The hang, reproduced with symbols.** Burrmill main plus a fair-pool probe knob, nuthatch
+`pete/sql-sweep` unstripped, the replay at 512 MB, two threads, spill on (ThinkPad, 17:50 EEST):
+
+- greedy pool, production's configuration and the row the 27th never ran: **completed, 218 s**;
+- fair pool: **parked** on `SELECT * FROM "lodestar_delegators"`, straight after
+  `lodestar_delegator_stakes` was refused for memory in `FinalHashAggregateStream`, at 953 MB.
+
+Stacks (`~/scratch/hang-fair-stacks-keep.txt`): the statement thread in `Runtime::block_on` inside
+`sql_for_each`, both tokio workers idle (epoll, condvar), both fold workers asleep. Nothing runs;
+some future the plan awaits is never woken. That is why the guard's cancel never landed on the
+27th: the token is read only when something polls. The caller-side race above fixes that reach.
+The lost wakeup is its own bug, and it is chance, not state: repeated, the pair
+`lodestar_delegator_stakes, lodestar_delegators` in a fresh engine answered 20 times and parked on
+the 21st, on `lodestar_delegator_stakes` itself, before any refusal. Every operator in
+`lodestar_delegators`'s plan is stock DataFusion (sorts, repartitions, a partitioned hash join,
+aggregates), so the suspect is a spilling operator under `FairSpillPool`, upstream. Nuthatch runs
+the greedy pool.
+
+A first attempt at the rerun built DuckDB with debug info, which drops `NDEBUG`, and both runs died
+on `D_ASSERT(new_remaining_size != 0)` in `temporary_memory_manager.cpp:28` after
+`lodestar_escrow_transactions`: DuckDB breaks its own invariant at 512 MB, silently in release.
+
+---
+
 ## `/sql` at 32 clients on DIPS and GNS, a cancelled join, and the hang — 2026-09-29
 
 **The sweep.** nuthatch `pete/sql-sweep`, `serve::tests::sql_sweep_over_a_nest`: real `/sql` requests
