@@ -37,6 +37,9 @@ impl AnalyzerRule for NullableSubqueries {
             let before = Arc::clone(p.schema());
             let projection = matches!(p, LogicalPlan::Projection(_));
             let t = p.map_expressions(|e| {
+                if !e.exists(|x| Ok(matches!(x, Expr::ScalarSubquery(_))))? {
+                    return Ok(Transformed::no(e));
+                }
                 let name = e.schema_name().to_string();
                 let t = e.transform_up(|x| match x {
                     Expr::ScalarSubquery(ref q) if !q.subquery.schema().field(0).is_nullable() => Ok(

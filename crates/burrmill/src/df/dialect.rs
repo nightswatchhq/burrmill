@@ -25,7 +25,7 @@ use arrow::datatypes::{
     UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, Result as DFResult, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     BinaryExpr, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator,
@@ -1808,13 +1808,40 @@ impl AnalyzerRule for DuckComparisons {
     }
 
     fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> DFResult<LogicalPlan> {
-        let changed = plan.transform_up_with_subqueries(|p| {
-            if let Some(n) = set_op_types(&p)? {
-                return Ok(Transformed::yes(n));
+        plan.rewrite_with_subqueries(&mut Comparisons(Vec::new())).map(|t| t.data)
+    }
+}
+
+/// One pass, bottom-up. A node is re-derived where its own expressions changed or an input's schema
+/// did, and tells its parent whether its own schema changed. A union's schema was fixed when the
+/// SQL was planned, from the types before this rule, and `recompute_schema` keeps it while the width
+/// is unchanged, so a union under a changed input is rebuilt from its inputs instead.
+struct Comparisons(Vec<bool>);
+
+impl TreeNodeRewriter for Comparisons {
+    type Node = LogicalPlan;
+
+    fn f_down(&mut self, p: LogicalPlan) -> DFResult<Transformed<LogicalPlan>> {
+        self.0.push(false);
+        Ok(Transformed::no(p))
+    }
+
+    fn f_up(&mut self, p: LogicalPlan) -> DFResult<Transformed<LogicalPlan>> {
+        let below = self.0.pop().unwrap_or(false);
+        let before = Arc::clone(p.schema());
+        let t = if let Some(n) = set_op_types(&p)? {
+            Transformed::yes(n)
+        } else if let Some(n) = union_floats(&p)? {
+            Transformed::yes(n)
+        } else if let LogicalPlan::Union(u) = p {
+            if below {
+                Transformed::yes(LogicalPlan::Union(
+                    datafusion_expr::logical_plan::Union::try_new_with_loose_types(u.inputs)?,
+                ))
+            } else {
+                Transformed::no(LogicalPlan::Union(u))
             }
-            if let Some(n) = union_floats(&p)? {
-                return Ok(Transformed::yes(n));
-            }
+        } else {
             let mut schema = DFSchema::empty();
             for i in p.inputs() {
                 schema.merge(i.schema());
@@ -1824,35 +1851,27 @@ impl AnalyzerRule for DuckComparisons {
                 LogicalPlan::Projection(_) | LogicalPlan::Aggregate(_) | LogicalPlan::Window(_)
             );
             let t = p.map_expressions(|e| {
-                let name = e.schema_name().to_string();
+                let name = names_matter.then(|| e.schema_name().to_string());
                 let t = e.transform_up(|e| compare_as_duckdb(e, &schema))?;
-                if t.transformed && names_matter && t.data.schema_name().to_string() != name {
-                    Ok(Transformed::yes(t.data.alias(name)))
-                } else {
-                    Ok(t)
+                match name {
+                    Some(name) if t.transformed && t.data.schema_name().to_string() != name => {
+                        Ok(Transformed::yes(t.data.alias(name)))
+                    }
+                    _ => Ok(t),
                 }
             })?;
-            if t.transformed {
-                Ok(Transformed::yes(t.data.recompute_schema()?))
+            if t.transformed || below {
+                Transformed::yes(t.data.recompute_schema()?)
             } else {
-                Ok(t)
+                t
             }
-        })?;
-        if !changed.transformed {
-            return Ok(changed.data);
+        };
+        if t.data.schema() != &before
+            && let Some(parent) = self.0.last_mut()
+        {
+            *parent = true;
         }
-        // A union's schema was fixed when the SQL was planned, from the types before this rule, and
-        // `recompute_schema` keeps it while the width is unchanged; everything above inherits it.
-        // Re-derive it from the inputs and recompute upwards, so coercion sees the types as they are.
-        changed
-            .data
-            .transform_up_with_subqueries(|p| match p {
-                LogicalPlan::Union(u) => Ok(Transformed::yes(LogicalPlan::Union(
-                    datafusion_expr::logical_plan::Union::try_new_with_loose_types(u.inputs)?,
-                ))),
-                p => Ok(Transformed::yes(p.recompute_schema()?)),
-            })
-            .map(|t| t.data)
+        Ok(t)
     }
 }
 
@@ -2223,17 +2242,29 @@ fn sole_integer(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType>
 }
 
 fn compare_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
-    let before = e.clone();
     // `/` is DOUBLE before coercion too: typed as integer division there, `round(x / 7, 1) - h`
     // beside a HUGEINT was cast to DECIMAL(20,0), and the fraction lost once `/` became DOUBLE.
-    let t = divide_as_double(e, schema)?.transform_data(|e| compare_inner(e, schema))?;
-    if !t.transformed && t.data != before {
-        return Ok(Transformed::yes(t.data));
-    }
-    Ok(t)
+    divide_as_double(e, schema)?.transform_data(|e| {
+        let quiet = std::cell::Cell::new(false);
+        let t = compare_inner(e, schema, &quiet)?;
+        Ok(if quiet.get() { Transformed::yes(t.data) } else { t })
+    })
 }
 
-fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
+/// `quiet` is set where a literal is fitted or a cast added on a path that otherwise reports no
+/// change; comparing each node with a copy of itself instead made planning quadratic in depth.
+fn compare_inner(e: Expr, schema: &DFSchema, quiet: &std::cell::Cell<bool>) -> DFResult<Transformed<Expr>> {
+    let fit_literal = |e: Expr, to: &DataType| {
+        let was = match &e {
+            Expr::Literal(v, _) => Some(v.data_type()),
+            _ => None,
+        };
+        let out = fit_literal(e, to);
+        if matches!((&was, &out), (Some(w), Expr::Literal(v, _)) if v.data_type() != *w) {
+            quiet.set(true);
+        }
+        out
+    };
     // `avg` of integers: DataFusion's coercion casts the argument to DOUBLE and sums in floats,
     // inexact past 2^53, where DuckDB sums exactly. As DECIMAL(38,0), which holds any 64-bit
     // integer, it reaches the checked rule's exact average instead. Only for an argument that is
@@ -2376,6 +2407,7 @@ fn compare_inner(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
                     if expr.get_type(schema).ok().as_ref() == Some(&t) {
                         expr
                     } else {
+                        quiet.set(true);
                         Expr::Cast(Cast::new(Box::new(expr), t))
                     }
                 }

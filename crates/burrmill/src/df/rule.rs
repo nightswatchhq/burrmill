@@ -162,6 +162,20 @@ impl AnalyzerRule for CheckedShifts {
         plan.transform_up_with_subqueries(|p| {
             let before = Arc::clone(p.schema());
             let projection = matches!(p, LogicalPlan::Projection(_));
+            let shift = |x: &Expr| {
+                Ok(matches!(
+                    x,
+                    Expr::BinaryExpr(BinaryExpr { op: Operator::BitwiseShiftLeft | Operator::BitwiseShiftRight, .. })
+                ))
+            };
+            let mut shifts = false;
+            p.apply_expressions(|e| {
+                shifts = e.exists(shift)?;
+                Ok(if shifts { TreeNodeRecursion::Stop } else { TreeNodeRecursion::Continue })
+            })?;
+            if !shifts {
+                return Ok(Transformed::no(p));
+            }
             let mut schema = DFSchema::empty();
             for i in p.inputs() {
                 schema.merge(i.schema());
