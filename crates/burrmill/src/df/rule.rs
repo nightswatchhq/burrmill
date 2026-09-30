@@ -24,7 +24,7 @@ use datafusion_expr::{
 };
 use datafusion_optimizer::analyzer::AnalyzerRule;
 
-use super::checked::{CheckedAgg, CheckedBinary, ExactWide, Mode, is_exact, is_text, sum_type};
+use super::checked::{CheckedAgg, CheckedBinary, CheckedShift, ExactWide, Mode, is_exact, is_text, sum_type};
 
 /// Functions allowed to produce an integer or decimal. Anything else that does is refused, so a
 /// new DataFusion function that wraps cannot slip in unexamined.
@@ -34,6 +34,7 @@ const SAFE_SCALARS: &[&str] = &[
     "round",
     "coalesce",
     "maybe_null",
+    "burrmill_single",
     "nullif",
     "nvl",
     "nvl2",
@@ -75,6 +76,8 @@ const SAFE_SCALARS: &[&str] = &[
     "checked_sub",
     "checked_mul",
     "checked_neg",
+    "checked_shl",
+    "checked_shr",
 ];
 const SAFE_AGGREGATES: &[&str] = &[
     "count",
@@ -132,6 +135,72 @@ impl Default for CheckedArithmetic {
             wide_neg_hex: ExactWide::udf(true, true),
             fresh: AtomicUsize::new(0),
         }
+    }
+}
+
+/// `CheckedShifts`: integer `<<` and `>>` as DuckDB does them, before coercion widens them. An
+/// integer literal takes the other side's type, as DuckDB's does, so `CAST(1 AS INTEGER) << 31`
+/// overflows an INTEGER rather than being a BIGINT.
+#[derive(Debug)]
+pub struct CheckedShifts {
+    shl: Arc<ScalarUDF>,
+    shr: Arc<ScalarUDF>,
+}
+
+impl Default for CheckedShifts {
+    fn default() -> Self {
+        Self { shl: CheckedShift::udf(true), shr: CheckedShift::udf(false) }
+    }
+}
+
+impl AnalyzerRule for CheckedShifts {
+    fn name(&self) -> &str {
+        "checked_shifts"
+    }
+
+    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+        plan.transform_up_with_subqueries(|p| {
+            let before = Arc::clone(p.schema());
+            let projection = matches!(p, LogicalPlan::Projection(_));
+            let mut schema = DFSchema::empty();
+            for i in p.inputs() {
+                schema.merge(i.schema());
+            }
+            let t = p.map_expressions(|e| {
+                let name = e.schema_name().to_string();
+                let t = e.transform_up(|e| self.shift(e, &schema))?;
+                Ok(if projection && t.transformed { t.map_data(|e| e.alias_if_changed(name))? } else { t })
+            })?;
+            if !t.transformed {
+                return Ok(t);
+            }
+            t.map_data(|p| super::nullsub::renamed(p.recompute_schema()?, &before))
+        })
+        .map(|t| t.data)
+    }
+}
+
+impl CheckedShifts {
+    fn shift(&self, e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = e else { return Ok(Transformed::no(e)) };
+        let (lt, rt) = (left.get_type(schema)?, right.get_type(schema)?);
+        if !matches!(op, Operator::BitwiseShiftLeft | Operator::BitwiseShiftRight) || !lt.is_integer() || !rt.is_integer() {
+            return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })));
+        }
+        let adopt = |e: Box<Expr>, t: &DataType| match *e {
+            Expr::Literal(v, m) => match v.cast_to(t) {
+                Ok(c) => Expr::Literal(c, m),
+                Err(_) => Expr::Literal(v, m),
+            },
+            e => e,
+        };
+        let (l, r) = match (left.as_ref(), right.as_ref()) {
+            (_, Expr::Literal(..)) => (*left, adopt(right, &lt)),
+            (Expr::Literal(..), _) => (adopt(left, &rt), *right),
+            _ => (*left, *right),
+        };
+        let f = if op == Operator::BitwiseShiftLeft { &self.shl } else { &self.shr };
+        Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(f), vec![l, r]))))
     }
 }
 

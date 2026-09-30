@@ -4,6 +4,34 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The network nest on Burrmill: contract 21/21, serve 97/97 — 2026-09-30
+
+The last failures of nuthatch's network tests with Burrmill the engine, each a difference from
+DuckDB:
+
+- **A to-one lookup.** `(SELECT struct_pack(…) FROM indexer r WHERE r.id = c.indexer)`, which is
+  how nuthatch's GraphQL compiles a relation: DuckDB runs a correlated scalar subquery that is not
+  aggregated, failing only when an outer row finds two rows; DataFusion 55 refuses to plan it.
+  `SingleRowSubqueries` makes it `{n: count(*), v: first_value(v)}` per correlation and checks `n`
+  in the outer row, not in the subquery: decorrelated, the aggregate runs for every key of the
+  inner relation, and the first version refused a duplicate key no outer row asked for.
+- **The same lookup inside a paged list.** The rewrite that ranks a correlated `ORDER BY … LIMIT n
+  OFFSET m` gave up on any select item holding a subquery. A subquery naming only the list's own
+  relation and its own tables is now that relation's.
+- **`>>` and `<<`.** The checked rule refused both. DuckDB's `>>` is 0 for a count outside
+  `[0, bits)`, where Arrow's takes the count modulo the width (`1000 >> 64` was 1000); its `<<`
+  refuses a bad count, a negative signed value and any bit shifted out; and an integer literal
+  takes the other side's type, so `CAST(1 AS INTEGER) << 31` overflows. `CheckedShifts` rewrites
+  both before coercion, which would otherwise have widened the literal.
+- **A 78-digit cast** read "Cannot cast … to Decimal128(38, 10)": Arrow names its default decimal
+  type whatever the target. The target was DECIMAL(38,0), per the decision to stay at 38 digits;
+  the message now says so. Three nuthatch fixtures computed past 38 digits (2^256-1 balances,
+  10^40 deltas); on Chief's call they keep exact arithmetic at the 38-digit line instead.
+
+With the NULL subquery below: network contract 21/21 and `serve::tests` 97/97 on Burrmill, and the
+contract still 21/21 on DuckDB. dialect-parity 260/260. The contract takes 116 s on Burrmill against
+32 s on DuckDB; not yet looked at.
+
 ## An empty scalar subquery defaulted with coalesce came back NULL — 2026-09-30
 
 `graph_network."isPaused"` read NULL on Burrmill where the fixture expects `false`. The view says

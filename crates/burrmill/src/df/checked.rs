@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Decimal128Builder, Decimal256Builder,
+    Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Decimal128Builder, Decimal256Builder,
     FixedSizeBinaryBuilder, StringBuilder, UInt64Array,
 };
 use arrow::compute::kernels::numeric;
@@ -660,6 +660,89 @@ impl ScalarUDFImpl for CheckedBinary {
             validate_precision(&c)?;
             c
         };
+        if all_scalar {
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(&out, 0)?))
+        } else {
+            Ok(ColumnarValue::Array(out))
+        }
+    }
+}
+
+/// `checked_shl` / `checked_shr`: an integer shift as DuckDB 1.5 does it. Arrow takes the count
+/// modulo the width, so `1000 >> 64` would be 1000; DuckDB's `>>` is 0 for any count outside
+/// `[0, bits)`, and its `<<` refuses such a count, a negative signed value, and any bit shifted out.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct CheckedShift {
+    sig: Signature,
+    left: bool,
+}
+
+impl CheckedShift {
+    pub fn udf(left: bool) -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable), left }))
+    }
+}
+
+impl ScalarUDFImpl for CheckedShift {
+    fn name(&self) -> &str {
+        if self.left { "checked_shl" } else { "checked_shr" }
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        match arg_types {
+            // Mixed signs have no common integer type here (DuckDB's is HUGEINT); a count needs none.
+            [l, r] if l.is_integer() && r.is_integer() && l.is_signed_integer() != r.is_signed_integer() => {
+                Ok(vec![l.clone(), r.clone()])
+            }
+            [l, r] if l.is_integer() && r.is_integer() => {
+                let t = BinaryTypeCoercer::new(l, &Operator::BitwiseShiftLeft, r).get_result_type()?;
+                Ok(vec![t.clone(), t])
+            }
+            _ => plan_err!("{} takes two integers", self.name()),
+        }
+    }
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].clone())
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let all_scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
+        let t = arrays[0].data_type().clone();
+        let bits = (t.primitive_width().unwrap_or(8) * 8) as i128;
+        let signed = t.is_signed_integer();
+        let (min, max) = if signed { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) };
+        let wide = |a: &ArrayRef| -> Result<Vec<Option<i128>>> {
+            let d = cast_with_options(a, &DataType::Decimal128(38, 0), &CastOptions::default())?;
+            Ok(d.as_primitive::<Decimal128Type>().iter().collect())
+        };
+        let (xs, ns) = (wide(&arrays[0])?, wide(&arrays[1])?);
+        let mut out = Vec::with_capacity(xs.len());
+        for (x, n) in xs.into_iter().zip(ns) {
+            let (Some(x), Some(n)) = (x, n) else {
+                out.push(None);
+                continue;
+            };
+            let in_range = (0..bits).contains(&n);
+            out.push(Some(if !self.left {
+                if in_range { x >> n } else { 0 }
+            } else {
+                if !in_range {
+                    return exec_err!("Left-shift value {n} is out of range");
+                }
+                if signed && x < 0 {
+                    return exec_err!("Cannot left-shift negative number {x}");
+                }
+                let v = x << n;
+                if v > max || v < min {
+                    return exec_err!("Overflow in left shift ({x} << {n})");
+                }
+                v
+            }));
+        }
+        let d: ArrayRef = Arc::new(Decimal128Array::from(out).with_precision_and_scale(38, 0)?);
+        let out = cast_with_options(&d, &t, &CastOptions { safe: false, ..Default::default() })?;
         if all_scalar {
             Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(&out, 0)?))
         } else {

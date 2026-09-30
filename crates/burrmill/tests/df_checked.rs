@@ -287,7 +287,8 @@ fn floats_pass_through() {
 fn unknown_exact_functions_are_refused() {
     let (_t, e) = engine(&[("t", vec![i64s(&[3])])]);
     let m = refused(&e, "SELECT v << 70 FROM t");
-    assert!(m.contains("no checked form"), "{m}");
+    assert!(m.contains("Left-shift value 70 is out of range"), "{m}");
+    assert_eq!(one(&e, "SELECT v << 2 FROM t"), "12");
     let m = refused(&e, "SELECT factorial(v) FROM t");
     assert!(m.contains("factorial"), "{m}");
     assert_eq!(one(&e, "SELECT abs(v) FROM t"), "3");

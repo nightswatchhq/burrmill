@@ -243,6 +243,7 @@ impl MiniSession {
                 Arc::new(super::nullsub::NullableSubqueries::default()),
                 // Before coercion: DuckDB's text comparisons depend on what was written.
                 Arc::new(super::dialect::DuckComparisons),
+                Arc::new(super::rule::CheckedShifts::default()),
                 Arc::new(TypeCoercion::new()),
                 Arc::new(super::dialect::DuckSemantics::default()),
                 // Before the checked rewrite, which would hide the shape it matches.
@@ -255,6 +256,7 @@ impl MiniSession {
                 Arc::new(super::sharing::ShareRepeats),
                 Arc::new(TypeCoercion::new()),
                 Arc::new(super::doubles::DuckDoubles::default()),
+                Arc::new(super::onerow::SingleRowSubqueries::default()),
                 Arc::new(super::correlate::KeyedCorrelation),
                 Arc::new(super::correlate::SubqueriesBelowAggregates),
                 Arc::new(super::correlate::NonEquiCorrelation),

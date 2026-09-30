@@ -13,7 +13,7 @@ use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{DataType, Decimal128Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DFSchema, Result, ScalarValue, plan_err};
+use datafusion_common::{DFSchema, Result, ScalarValue, exec_datafusion_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan, ScalarFunctionArgs, ScalarUDF,
@@ -165,7 +165,10 @@ impl ScalarUDFImpl for TextToDecimal {
             match plain(s, self.precision) {
                 Some(v) => out.append_value(v),
                 None => {
-                    let one = cast_with_options(&a.slice(i, 1), &want, &strict)?;
+                    // Arrow's message names its default DECIMAL(38,10), whatever the target.
+                    let one = cast_with_options(&a.slice(i, 1), &want, &strict).map_err(|_| {
+                        exec_datafusion_err!("Could not convert string '{s}' to DECIMAL({},0)", self.precision)
+                    })?;
                     let one = one.as_primitive::<Decimal128Type>();
                     if one.is_null(0) {
                         out.append_null()

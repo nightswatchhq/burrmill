@@ -57,7 +57,7 @@ impl AnalyzerRule for NullableSubqueries {
 
 /// `p` under the column names it had before, which an aggregate or window over a wrapped subquery
 /// changes, and its parent reads.
-fn renamed(p: LogicalPlan, before: &DFSchema) -> Result<LogicalPlan> {
+pub(super) fn renamed(p: LogicalPlan, before: &DFSchema) -> Result<LogicalPlan> {
     if p.schema().iter().map(|(_, f)| f.name()).eq(before.iter().map(|(_, f)| f.name())) {
         return Ok(p);
     }

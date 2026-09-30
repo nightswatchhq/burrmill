@@ -24,6 +24,7 @@ mod constants;
 mod correlate;
 mod latest;
 mod nullsub;
+mod onerow;
 mod dialect;
 mod distinct;
 mod doubles;

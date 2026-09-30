@@ -102,10 +102,11 @@ fn bignum_is_the_38_digit_decimal() {
         one("SELECT CAST(sum(CAST(v AS BIGNUM)) AS VARCHAR) AS x FROM (VALUES ('5000000000000000000000000000'), ('5000000000000000000000000000')) t(v)"),
         serde_json::json!({"x": "10000000000000000000000000000"})
     );
-    assert!(
-        engine.sql("SELECT CAST('12345678901234567890123456789012345678901234567890' AS BIGNUM) AS x").is_err(),
-        "a value past 38 digits refuses"
-    );
+    let refused = engine
+        .sql("SELECT CAST('12345678901234567890123456789012345678901234567890' AS BIGNUM) AS x")
+        .expect_err("a value past 38 digits refuses")
+        .to_string();
+    assert!(refused.contains("to DECIMAL(38,0)"), "{refused}");
 }
 
 /// `AS MATERIALIZED` is only a hint to DuckDB's planner; the answer is the CTE's either way.
@@ -157,4 +158,27 @@ fn a_repeated_expression_inside_a_cte_is_not_a_clash() {
         .unwrap_or_else(|e| panic!("{e}"));
     let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
     assert_eq!(rows, vec![serde_json::json!({"n": 3})]);
+}
+
+/// Shifts as DuckDB 1.5 does them: `>>` is 0 past the width, `<<` refuses anything shifted out,
+/// and a literal takes the other side's type.
+#[test]
+fn shifts_are_duckdbs() {
+    let engine = Engine::open_empty().unwrap();
+    let one = |sql: &str| -> serde_json::Value {
+        let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).next().unwrap()
+    };
+    assert_eq!(
+        one("SELECT CAST(1000 AS BIGINT) >> 64 AS a, CAST(-1000 AS BIGINT) >> 3 AS b, CAST(1000 AS UBIGINT) >> -1 AS c, \
+             (CAST(66051 AS UBIGINT) >> 8) & 255 AS d, CAST(3 AS BIGINT) << 2 AS e"),
+        serde_json::json!({"a": 0, "b": -125, "c": 0, "d": 2, "e": 12})
+    );
+    for sql in [
+        "SELECT CAST(1 AS INTEGER) << 31 AS a",
+        "SELECT CAST(1 AS BIGINT) << 64 AS a",
+        "SELECT CAST(-1 AS BIGINT) << 2 AS a",
+    ] {
+        assert!(engine.sql(sql).is_err(), "{sql} refuses");
+    }
 }

@@ -729,6 +729,42 @@ fn struct_pack(f: &mut sq::Function) {
 /// `(SELECT agg(t.x ORDER BY t.rn) FROM (SELECT …, c.k AS k, row_number() OVER (PARTITION BY c.k
 /// ORDER BY o) AS rn FROM r c WHERE …) t WHERE t.k = <outer> AND t.rn > m AND t.rn <= m + n)`.
 /// With the correlation an equality on an inner column, a rank per key is a rank per outer row.
+/// Whether every column `q` names is qualified by `outer` or by a table `q` itself reads.
+fn names_only(q: &sq::Query, outer: &str) -> bool {
+    struct Tables(Vec<String>);
+    impl sq::Visitor for Tables {
+        type Break = ();
+        fn pre_visit_table_factor(&mut self, t: &sq::TableFactor) -> ControlFlow<()> {
+            match t {
+                sq::TableFactor::Table { alias: Some(a), .. } | sq::TableFactor::Derived { alias: Some(a), .. } => {
+                    self.0.push(a.name.value.clone())
+                }
+                sq::TableFactor::Table { name, alias: None, .. } => {
+                    if let Some(i) = name.0.last().and_then(|p| p.as_ident()) {
+                        self.0.push(i.value.clone())
+                    }
+                }
+                _ => return ControlFlow::Break(()),
+            }
+            ControlFlow::Continue(())
+        }
+    }
+    let mut tables = Tables(vec![outer.to_string()]);
+    if sq::Visit::visit(q, &mut tables).is_break() || q.with.is_some() {
+        return false;
+    }
+    let mut known = true;
+    let _ = sq::visit_expressions(q, |x| {
+        known &= match x {
+            SqlExpr::Identifier(_) => false,
+            SqlExpr::CompoundIdentifier(p) => p.len() == 2 && tables.0.contains(&p[0].value),
+            _ => true,
+        };
+        ControlFlow::<()>::Continue(())
+    });
+    known
+}
+
 fn top_n_correlated(q: &mut sq::Query) {
     let _ = try_top_n_correlated(q);
 }
@@ -795,11 +831,21 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
         Some(a) => a.name.value.clone(),
         None => name.0.last()?.as_ident()?.value.clone(),
     };
-    // Every column named must say whose it is; `Some(true)` for the inner relation's alone.
+    // Every column named must say whose it is; `Some(true)` for the inner relation's alone. A
+    // subquery naming only `c` and its own tables, a to-one lookup, counts as the inner relation's.
     let inner_only = |e: &SqlExpr| -> Option<bool> {
+        let mut e = e.clone();
+        let _ = sq::visit_expressions_mut(&mut e, |x| {
+            if let SqlExpr::Subquery(s) = x
+                && names_only(s, &c)
+            {
+                *x = SqlExpr::Value(sq::Value::Null.with_empty_span());
+            }
+            ControlFlow::<()>::Continue(())
+        });
         let mut inside = true;
         let mut unknown = false;
-        let _ = sq::visit_expressions(e, |x| {
+        let _ = sq::visit_expressions(&e, |x| {
             match x {
                 SqlExpr::Identifier(_) => unknown = true,
                 SqlExpr::CompoundIdentifier(p) if p.len() == 2 => inside &= p[0].value == c,
