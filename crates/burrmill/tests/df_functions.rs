@@ -182,3 +182,29 @@ fn shifts_are_duckdbs() {
         assert!(engine.sql(sql).is_err(), "{sql} refuses");
     }
 }
+
+/// `information_schema` as nuthatch's `.tables` and `.schema` read it, current after a view is
+/// defined past the first read.
+#[test]
+fn information_schema_follows_the_views() {
+    let mut engine = Engine::open_empty().unwrap();
+    let rows = |engine: &Engine, sql: &str| -> Vec<serde_json::Value> {
+        let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect()
+    };
+    let tables = "SELECT table_name FROM information_schema.tables ORDER BY 1";
+    engine.register_view("a", "SELECT 1 AS x").unwrap();
+    assert_eq!(rows(&engine, tables), vec![serde_json::json!({"table_name": "a"})]);
+    engine.register_view("b", "SELECT 'y' AS y, 2 AS z").unwrap();
+    assert_eq!(
+        rows(&engine, tables),
+        vec![serde_json::json!({"table_name": "a"}), serde_json::json!({"table_name": "b"})]
+    );
+    assert_eq!(
+        rows(&engine, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'b' ORDER BY ordinal_position"),
+        vec![
+            serde_json::json!({"column_name": "y", "data_type": "VARCHAR"}),
+            serde_json::json!({"column_name": "z", "data_type": "BIGINT"}),
+        ]
+    );
+}

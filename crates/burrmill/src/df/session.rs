@@ -57,7 +57,9 @@ pub struct MiniSession {
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     tables: HashMap<String, Arc<dyn TableSource>>,
     known: std::sync::Mutex<Option<super::dialect::Known>>,
-    information_schema: HashMap<String, Arc<dyn TableSource>>,
+    /// Built on first read: rebuilding it at every registration was quadratic in the views.
+    information_schema: std::sync::Mutex<Option<HashMap<String, Arc<dyn TableSource>>>>,
+    hidden: fn(&str) -> bool,
     analyzer: Analyzer,
     optimizer: Optimizer,
     physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
@@ -235,7 +237,8 @@ impl MiniSession {
             window,
             expr_planners,
             tables: HashMap::new(),
-            information_schema: HashMap::new(),
+            information_schema: std::sync::Mutex::new(None),
+            hidden: |_| false,
             known: std::sync::Mutex::new(None),
             // Checked sums change their output type, so coercion runs again after the rule.
             analyzer: Analyzer::with_rules(vec![
@@ -290,12 +293,19 @@ impl MiniSession {
     /// `information_schema.tables` and `.columns` as DuckDB shows them to nuthatch's `.tables` and
     /// `.schema`: the visible tables, all views, with DuckDB's type names. A subset of DuckDB's
     /// columns, the ones those commands and a person reading them use.
-    pub fn build_information_schema(&mut self, hidden: impl Fn(&str) -> bool) -> DFResult<()> {
+    pub fn build_information_schema(&mut self, hidden: fn(&str) -> bool) -> DFResult<()> {
+        self.hidden = hidden;
+        *self.information_schema.get_mut().unwrap_or_else(|e| e.into_inner()) = None;
+        Ok(())
+    }
+
+    fn information_schema(&self) -> DFResult<HashMap<String, Arc<dyn TableSource>>> {
         use arrow::array::{ArrayRef, Int32Array, StringArray};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use datafusion_catalog::MemTable;
 
+        let hidden = self.hidden;
         let mut names: Vec<&String> = self.tables.keys().filter(|n| !hidden(n)).collect();
         names.sort();
         let text = |v: Vec<String>| Arc::new(StringArray::from(v)) as ArrayRef;
@@ -346,12 +356,12 @@ impl MiniSession {
                 text(ty),
             ],
         )?;
+        let mut out = HashMap::new();
         for (name, schema, batch) in [("tables", tschema, tables), ("columns", cschema, columns)] {
             let t = MemTable::try_new(schema, vec![vec![batch]])?;
-            self.information_schema
-                .insert(name.into(), provider_as_source(Arc::new(t)));
+            out.insert(name.into(), provider_as_source(Arc::new(t)));
         }
-        Ok(())
+        Ok(out)
     }
 
     /// A scalar function under its name and aliases, replacing any of the same name.
@@ -567,14 +577,17 @@ impl ContextProvider for MiniSession {
         }
     }
     fn get_table_source(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
-        let tables = match name.schema() {
-            Some(s) if s.eq_ignore_ascii_case("information_schema") => &self.information_schema,
-            _ => &self.tables,
+        let found = match name.schema() {
+            Some(s) if s.eq_ignore_ascii_case("information_schema") => {
+                let mut built = self.information_schema.lock().unwrap_or_else(|e| e.into_inner());
+                if built.is_none() {
+                    *built = Some(self.information_schema()?);
+                }
+                built.as_ref().and_then(|b| b.get(name.table()).cloned())
+            }
+            _ => self.tables.get(name.table()).cloned(),
         };
-        tables
-            .get(name.table())
-            .cloned()
-            .ok_or_else(|| plan_datafusion_err!("no table {name}"))
+        found.ok_or_else(|| plan_datafusion_err!("no table {name}"))
     }
     fn create_cte_work_table(
         &self,

@@ -51,6 +51,15 @@ that fail on DuckDB too. The Trino contract's `sender_kinds` was a Burrmill bug,
 (corrected 2026-09-30: a drifted table's columns came from its first segment); fixed, it agrees on
 both engines and fails only on the view order it fails on under DuckDB too.
 
+**2026-09-30/10-01, with `graph`:** the two that failed on DuckDB too are fixed in nuthatch
+(`dbfe6e2`): `entity_lower` and the Trino view order read serde_json maps, which iterate in insertion
+order once DataFusion turns on `preserve_order`; `authoring_eval_board` started `dev` as shadow,
+two engines past the default memory split, and now runs it on Burrmill. One new with `graph`,
+which builds the `folds` feature the earlier flips did not:
+`fold_connections_are_bounded_and_locked_down_like_sql` reads DuckDB's settings through
+`current_setting`, which Burrmill does not have. LEAVES for now; it moves with the folds, whose
+budget and lockdown need a Burrmill form of the same check.
+
 Also found, not chased: a hot JSON row missing a numeric field reads as 0 on Burrmill where
 DuckDB's `read_json` gives NULL. And `serve::tests::a_statement_reading_outside_the_nest_is_refused_and_never_remembered`
 counts the process-wide memo across an `.await`, so a parallel test that remembers an answer fails
