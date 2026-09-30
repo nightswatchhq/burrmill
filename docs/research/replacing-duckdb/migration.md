@@ -321,23 +321,24 @@ them had run on Burrmill. With `graph` they did: 21 network-contract tests and 6
 network documents, 27 failures. Fixed since in Burrmill (`938d52b`, `e9fc080`): `BIGNUM` as
 `DECIMAL(38,0)` (166 uses over 15 view files), `AS MATERIALIZED`, a recursive query tainted only by
 what it casts, `regexp_full_match`, `hex`, and a CTE with a column list repeating an expression.
-18 remain (12 contract, 6 `serve`):
+The rest:
 
-- [ ] **Correlated subqueries** DataFusion does not flatten (`OuterReferenceColumn`,
-      `ScalarSubquery` reaching the physical plan): 11 of the 12 left. The shape is "the latest
-      matching event per row": `LEFT JOIN LATERAL (... WHERE id = c.id AND (block, log) after c's
-      ORDER BY ... DESC LIMIT 1)`, and the same as a scalar subquery. Burrmill flattens an equality
-      version (`top_n_correlated`) and aggregates over a non-equality one (`NonEquiCorrelation`);
-      this is the ranked non-equality case between them.
-- [x] **`SUM` over a `_dec` whose source the checked rule could not trace**: 5 tests. Not a
-      window or a join after all: the taint started at a lateral derived table (`LogicalPlan::Subquery`,
-      which the rule counted wholly lossy) and ran through a recursive fold (whose taint is now per
-      column, to a fixed point). Both fixed (`bbbeace`, `ff9eb30`); those tests now stop at the
-      correlated subqueries below.
-- [ ] **2^256-1 sentinels.** Decided 2026-09-30 (Chief): `BIGNUM` stays 38 digits and the network
-      views turn the sentinel into NULL or a named "unlimited" before arithmetic. A view change in
-      nuthatch.
-- [ ] `serve`'s 6 network documents, not yet read: likely the same causes through HTTP.
+- [x] **Correlated subqueries** DataFusion does not flatten: "the latest matching event per row",
+      as a lateral join and as a scalar subquery (`LatestCorrelation`, `8f7c2c3`, `c5e49b7`); a
+      to-one lookup that is not aggregated, alone and inside a paged list (`SingleRowSubqueries`,
+      `2997998`).
+- [x] **`SUM` over a `_dec` whose source the checked rule could not trace**: the taint started at a
+      lateral derived table and ran through a recursive fold (`bbbeace`, `ff9eb30`).
+- [x] **An empty scalar subquery under `coalesce`** came back NULL: DataFusion types the subquery by
+      its column (`e747729`).
+- [x] **`>>` and `<<`**, refused by the checked rule, now DuckDB's (`2997998`).
+- [x] **Past 38 digits.** Decided 2026-09-30 (Chief): `BIGNUM` stays 38 digits, refusing past them.
+      The 2^256-1 values that reach arithmetic in the fixtures were balances and deltas, not
+      sentinels; on Chief's second call the three fixtures keep exact arithmetic at the 38-digit line
+      (nuthatch `pete/burrmill-watchdog`). Real GRT amounts sit ten orders of magnitude below it.
+
+With Burrmill the engine: network contract 21/21 and `serve::tests` 97/97; the contract 21/21 on
+DuckDB too. Owed: the contract takes 116 s on Burrmill against 32 s on DuckDB.
 
 ## Phase 3a: cutover
 
