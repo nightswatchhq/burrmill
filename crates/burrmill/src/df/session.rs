@@ -257,6 +257,7 @@ impl MiniSession {
                 Arc::new(super::correlate::KeyedCorrelation),
                 Arc::new(super::correlate::SubqueriesBelowAggregates),
                 Arc::new(super::correlate::NonEquiCorrelation),
+                Arc::new(super::latest::LatestCorrelation),
             ]),
             // Without `eliminate_group_by_constant`: it recomputes a key that is a function of
             // another key in a projection, where a rewritten `TRY_CAST(k AS BIGINT)`, which DataFusion
