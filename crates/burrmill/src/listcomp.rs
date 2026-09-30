@@ -17,6 +17,70 @@ pub fn expand(sql: &str) -> String {
     cur
 }
 
+/// Every text rewrite made before a parser sees DuckDB's SQL.
+pub fn before_parse(sql: &str) -> String {
+    drop_materialized(&expand(sql))
+}
+
+/// `AS [NOT] MATERIALIZED (` as `AS (`: a planner hint to DuckDB, which sqlparser reads only for
+/// Postgres. Strings and comments are left as written.
+pub fn drop_materialized(sql: &str) -> String {
+    let b = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\'' || b[i] == b'"' {
+            i = copy_string(sql, i, &mut out);
+            continue;
+        }
+        if b[i] == b'-' && b.get(i + 1) == Some(&b'-') {
+            i = copy_line(sql, i, &mut out);
+            continue;
+        }
+        if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            i = copy_block(sql, i, &mut out);
+            continue;
+        }
+        let boundary = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+        if boundary && let Some(end) = materialized_after_as(b, i) {
+            out.push_str("AS ");
+            i = end;
+            continue;
+        }
+        let ch = sql[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// At `AS`, the index of the `(` after `[NOT] MATERIALIZED`, if that is what follows.
+fn materialized_after_as(b: &[u8], at: usize) -> Option<usize> {
+    let word = |i: usize, w: &str| {
+        b.len() >= i + w.len()
+            && b[i..i + w.len()].eq_ignore_ascii_case(w.as_bytes())
+            && b.get(i + w.len()).is_none_or(|c| !(c.is_ascii_alphanumeric() || *c == b'_'))
+    };
+    let space = |mut i: usize| {
+        while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        i
+    };
+    if !word(at, "AS") {
+        return None;
+    }
+    let mut i = space(at + 2);
+    if word(i, "NOT") {
+        i = space(i + 3);
+    }
+    if !word(i, "MATERIALIZED") {
+        return None;
+    }
+    let i = space(i + "MATERIALIZED".len());
+    (b.get(i) == Some(&b'(')).then_some(i)
+}
+
 fn pass(sql: &str) -> String {
     let b = sql.as_bytes();
     let mut out = String::with_capacity(sql.len());

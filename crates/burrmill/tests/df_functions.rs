@@ -79,3 +79,48 @@ fn first_and_last_are_duckdbs_aggregates() {
     let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
     assert_eq!(rows, vec![serde_json::json!({"a": null, "b": 3, "c": 4})]);
 }
+
+/// DuckDB's `BIGNUM`, as the network nest's views write it: token amounts cast from text, added,
+/// negated and summed, exactly, and read back as text. It is `DECIMAL(38,0)` here, the nest's
+/// 38-digit line, so a value past it refuses rather than being guessed at.
+#[test]
+fn bignum_is_the_38_digit_decimal() {
+    let engine = Engine::open_empty().unwrap();
+    let one = |sql: &str| -> serde_json::Value {
+        let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).next().unwrap()
+    };
+    assert_eq!(
+        one("SELECT CAST(CAST('9000000000000000000000000000' AS BIGNUM) + CAST('1000000000000000000' AS BIGNUM) AS VARCHAR) AS x"),
+        serde_json::json!({"x": "9000000001000000000000000000"})
+    );
+    assert_eq!(
+        one("SELECT CAST(CAST(0 AS BIGNUM) - CAST('7' AS BIGNUM) AS VARCHAR) AS x"),
+        serde_json::json!({"x": "-7"})
+    );
+    assert_eq!(
+        one("SELECT CAST(sum(CAST(v AS BIGNUM)) AS VARCHAR) AS x FROM (VALUES ('5000000000000000000000000000'), ('5000000000000000000000000000')) t(v)"),
+        serde_json::json!({"x": "10000000000000000000000000000"})
+    );
+    assert!(
+        engine.sql("SELECT CAST('12345678901234567890123456789012345678901234567890' AS BIGNUM) AS x").is_err(),
+        "a value past 38 digits refuses"
+    );
+}
+
+/// `AS MATERIALIZED` is only a hint to DuckDB's planner; the answer is the CTE's either way.
+#[test]
+fn a_materialized_cte_answers_as_a_plain_one() {
+    let engine = Engine::open_empty().unwrap();
+    for sql in [
+        "WITH t AS MATERIALIZED (SELECT 1 AS n) SELECT n FROM t",
+        "WITH t AS NOT MATERIALIZED (SELECT 1 AS n) SELECT n FROM t",
+        "WITH RECURSIVE t(n) AS MATERIALIZED (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT max(n) AS n FROM t",
+    ] {
+        let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        assert_eq!(got.iter().map(|b| b.num_rows()).sum::<usize>(), 1, "{sql}");
+    }
+    let got = engine.sql("SELECT 'AS MATERIALIZED (' AS n").unwrap();
+    let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
+    assert_eq!(rows, vec![serde_json::json!({"n": "AS MATERIALIZED ("})], "a string is left as written");
+}

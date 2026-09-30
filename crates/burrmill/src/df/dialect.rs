@@ -4,6 +4,7 @@
 //! and the AST is then rewritten into what DataFusion plans:
 //!
 //! - `HUGEINT` → `DECIMAL(38,0)`, the same 128 bits; `UHUGEINT` is refused, having no home.
+//! - `BIGNUM` → `DECIMAL(38,0)` too: the 38-digit line, refused past it rather than approximated.
 //! - `UBIGINT`, `UINTEGER`, `USMALLINT`, `UTINYINT` → DataFusion's `... UNSIGNED` spellings.
 //! - `a // b` → `burrmill_intdiv(a, b)`, exact and truncating. Built on `/` it would become a
 //!   float, because `/` is DOUBLE in DuckDB and is made so here too.
@@ -43,7 +44,7 @@ use crate::error::{BurrmillError, Result};
 /// names come back too, taken from the statement as written, before any rewrite.
 pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String>>)> {
     // Before the parser: sqlparser rejects `[expr FOR x IN list]`, which the views still write.
-    let expanded = crate::listcomp::expand(sql);
+    let expanded = crate::listcomp::before_parse(sql);
     let sql = expanded.as_str();
     let stmts = DFParser::parse_sql_with_dialect(sql, &Duck)
         .map_err(|e| BurrmillError::Parse(super::errors::restate(format!("SQL error: {e:?}"))))?;
@@ -899,6 +900,9 @@ fn retype(t: &mut SqlType) -> Option<String> {
                 "UINT8" => SqlType::TinyIntUnsigned(None),
                 "UINT16" => SqlType::SmallIntUnsigned(None),
                 "UINT64" => SqlType::BigIntUnsigned(None),
+                // Arbitrary precision in DuckDB; the nest's amounts stop at 38 digits, as
+                // `HUGEINT` does here, and the checked arithmetic refuses past it.
+                "BIGNUM" | "VARINT" => SqlType::Decimal(ExactNumberInfo::PrecisionAndScale(38, 0)),
                 _ => return None,
             }
         }

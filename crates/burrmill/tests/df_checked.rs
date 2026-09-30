@@ -470,3 +470,21 @@ fn signed_fold_over_try_cast() {
         "{m}"
     );
 }
+
+/// A recursive fold with no `TRY_CAST` in it is not lossy: its aggregates answer. One whose seed
+/// carries a `TRY_CAST` still refuses where a value did not fit, whichever column it ends in.
+#[test]
+fn a_recursive_fold_is_tainted_only_by_what_it_casts() {
+    let (_t, e) = transfers(&[&[("a", "5"), ("b", "7")]]);
+    assert_eq!(
+        one(&e, "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT max(n) FROM t"),
+        "3"
+    );
+    let (_t, e) = transfers(&[&[("a", "5"), ("b", U256_MAX)]]);
+    let m = refused(
+        &e,
+        "WITH RECURSIVE t(x, y, k) AS (SELECT CAST(0 AS DECIMAL(38,0)) AS x, value_dec AS y, 0 AS k FROM transfer \
+         UNION ALL SELECT y, x, k + 1 FROM t WHERE k < 1) SELECT max(x) FROM t",
+    );
+    assert!(m.contains("TRY_CAST") || m.contains("did not fit"), "{m}");
+}

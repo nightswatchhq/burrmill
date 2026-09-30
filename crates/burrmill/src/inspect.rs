@@ -117,7 +117,7 @@ impl Visitor for Walk {
 /// The tables `sql` reaches, or why it is refused.
 pub fn reach(sql: &str) -> Result<Reach> {
     // The same rewrite `Engine` parses with, so a comprehension does not hide the tables in it.
-    let expanded = crate::listcomp::expand(sql);
+    let expanded = crate::listcomp::before_parse(sql);
     let sql = expanded.as_str();
     let stmts = Parser::parse_sql(&DuckDbDialect {}, sql)
         .map_err(|e| BurrmillError::Parse(format!("Parser Error: {e}")))?;
@@ -182,7 +182,7 @@ impl Visitor for Collect {
 }
 
 pub fn refs(sql: &str) -> Option<Refs> {
-    let expanded = crate::listcomp::expand(sql);
+    let expanded = crate::listcomp::before_parse(sql);
     let stmts = Parser::parse_sql(&DuckDbDialect {}, &expanded).ok()?;
     let [stmt @ Statement::Query(_)] = stmts.as_slice() else {
         return None;
@@ -197,7 +197,7 @@ pub fn refs(sql: &str) -> Option<Refs> {
 /// `WITH t AS (SELECT * FROM t)` reads the table `t`; a qualified name is always a table. This is
 /// nuthatch's `walk_base_table_refs` over DuckDB's AST. `None` as for [`refs`].
 pub fn base_tables(sql: &str) -> Option<BTreeSet<String>> {
-    let expanded = crate::listcomp::expand(sql);
+    let expanded = crate::listcomp::before_parse(sql);
     let stmts = Parser::parse_sql(&DuckDbDialect {}, &expanded).ok()?;
     let [stmt @ Statement::Query(_)] = stmts.as_slice() else {
         return None;
@@ -271,7 +271,7 @@ impl Visitor for Scoped {
 /// declared aliases are touched, so a real table name is never renamed into another. `None` for
 /// anything but one parseable statement.
 pub fn canonical(sql: &str) -> Option<String> {
-    let expanded = crate::listcomp::expand(sql);
+    let expanded = crate::listcomp::before_parse(sql);
     let mut stmts = Parser::parse_sql(&DuckDbDialect {}, &expanded).ok()?;
     let [stmt] = stmts.as_mut_slice() else {
         return None;

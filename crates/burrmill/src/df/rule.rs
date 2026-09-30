@@ -627,6 +627,15 @@ fn lossy(plan: &LogicalPlan) -> Vec<bool> {
             }
             t
         }
+        // Each round feeds the last one's rows back in, possibly into other columns: any lossy
+        // value in either term may end up in any column.
+        LogicalPlan::RecursiveQuery(r) => {
+            let any = lossy(&r.static_term)
+                .into_iter()
+                .chain(lossy(&r.recursive_term))
+                .any(|t| t);
+            vec![any; n]
+        }
         LogicalPlan::Values(v) => {
             let empty = DFSchema::empty();
             let mut t = vec![false; n];

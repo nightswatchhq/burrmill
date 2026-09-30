@@ -158,6 +158,8 @@ const CORPUS: &[&str] = &[
     "SELECT arg_max(x, y) AS a, arg_min(x, y) AS b FROM (VALUES (1, 5), (NULL, 9), (3, NULL), (4, 6)) t(x, y)",
     "SELECT \"from\", last(value ORDER BY block_number, log_index) AS a, first(value ORDER BY block_number, log_index) AS b, last(\"to\" ORDER BY block_number, log_index) FILTER (WHERE value <> '4') AS c FROM transfer GROUP BY 1 ORDER BY 1",
     "SELECT last(x ORDER BY y) AS a, first(x ORDER BY y) AS b, last(x ORDER BY y) FILTER (WHERE x IS NOT NULL) AS c FROM (VALUES (1, 5), (NULL, 9), (3, 2), (4, 6)) t(x, y)",
+    "SELECT CAST(sum(CAST(value AS BIGNUM)) AS VARCHAR) AS s, CAST(CAST(0 AS BIGNUM) - CAST(value AS BIGNUM) AS VARCHAR) AS neg FROM transfer GROUP BY value ORDER BY value",
+    "WITH RECURSIVE t(n, s) AS MATERIALIZED (SELECT 1, CAST('1' AS BIGNUM) UNION ALL SELECT n + 1, s + CAST('1000000000000000000' AS BIGNUM) FROM t WHERE n < 4) SELECT n, CAST(s AS VARCHAR) AS s FROM t ORDER BY n",
     "SELECT json_extract_string('{\"a\": {\"b\": 7}, \"c\": [1, 2]}', '$.a.b') AS a, json_extract('{\"a\": {\"b\": 7}}', '$.a') AS b, json_extract_string('{\"c\": [1, 2]}', '$.c[1]') AS c, json_extract_string('{\"a\": 1}', '$.zz') AS d",
     "SELECT '{\"a\": 1, \"b\": \"x\"}'->>'b' AS a, '{\"a\": {\"k\": 2}}'->'a' AS b, '{\"a\": {\"k\": 2}}'->>'$.a.k' AS c",
     "SELECT json_type('{\"a\": 1}') AS a, json_type('[1]') AS b, json_type('1.5') AS c, json_type('\"x\"') AS d, json_type('1') AS e, json_type('-1') AS f, json_type('0') AS g",
