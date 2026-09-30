@@ -324,10 +324,16 @@ what it casts, `regexp_full_match`, `hex`, and a CTE with a column list repeatin
 18 remain (12 contract, 6 `serve`):
 
 - [ ] **Correlated subqueries** DataFusion does not flatten (`OuterReferenceColumn`,
-      `ScalarSubquery` reaching the physical plan): 6 tests. Burrmill flattens one shape
-      (`top_n_correlated`); the views use more.
-- [ ] **`SUM` over a `_dec` whose source the checked rule cannot trace** (through a window or a
-      join, where `expose` follows only projections, filters and unions): 5 tests.
+      `ScalarSubquery` reaching the physical plan): 11 of the 12 left. The shape is "the latest
+      matching event per row": `LEFT JOIN LATERAL (... WHERE id = c.id AND (block, log) after c's
+      ORDER BY ... DESC LIMIT 1)`, and the same as a scalar subquery. Burrmill flattens an equality
+      version (`top_n_correlated`) and aggregates over a non-equality one (`NonEquiCorrelation`);
+      this is the ranked non-equality case between them.
+- [x] **`SUM` over a `_dec` whose source the checked rule could not trace**: 5 tests. Not a
+      window or a join after all: the taint started at a lateral derived table (`LogicalPlan::Subquery`,
+      which the rule counted wholly lossy) and ran through a recursive fold (whose taint is now per
+      column, to a fixed point). Both fixed (`bbbeace`, `ff9eb30`); those tests now stop at the
+      correlated subqueries below.
 - [ ] **2^256-1 sentinels.** Decided 2026-09-30 (Chief): `BIGNUM` stays 38 digits and the network
       views turn the sentinel into NULL or a named "unlimited" before arithmetic. A view change in
       nuthatch.
