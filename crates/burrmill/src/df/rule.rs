@@ -579,16 +579,26 @@ fn expr_lossy(e: &Expr, schema: &DFSchema, taint: &[bool]) -> bool {
 
 /// Per output column of `plan`: does it carry a lossy `TRY_CAST` value?
 fn lossy(plan: &LogicalPlan) -> Vec<bool> {
+    lossy_in(plan, &Default::default())
+}
+
+/// [`lossy`], with the taint of each recursive CTE's work table as the round in progress has it.
+fn lossy_in(plan: &LogicalPlan, work: &std::collections::HashMap<String, Vec<bool>>) -> Vec<bool> {
     let n = plan.schema().fields().len();
     let through = |input: &LogicalPlan, exprs: &[Expr]| -> Vec<bool> {
-        let t = lossy(input);
+        let t = lossy_in(input, work);
         exprs
             .iter()
             .map(|e| expr_lossy(e, input.schema(), &t))
             .collect()
     };
     match plan {
-        LogicalPlan::TableScan(_) | LogicalPlan::EmptyRelation(_) => vec![false; n],
+        LogicalPlan::TableScan(s) => work
+            .get(s.table_name.table())
+            .filter(|t| t.len() == n)
+            .cloned()
+            .unwrap_or_else(|| vec![false; n]),
+        LogicalPlan::EmptyRelation(_) => vec![false; n],
         LogicalPlan::Extension(e) if e.node.name() == "OwnedSignedFold" => vec![false; n],
         LogicalPlan::Projection(p) => through(&p.input, &p.expr),
         LogicalPlan::Aggregate(a) => {
@@ -597,7 +607,7 @@ fn lossy(plan: &LogicalPlan) -> Vec<bool> {
             t
         }
         LogicalPlan::Window(w) => {
-            let mut t = lossy(&w.input);
+            let mut t = lossy_in(&w.input, work);
             t.resize(n, false);
             t
         }
@@ -606,10 +616,10 @@ fn lossy(plan: &LogicalPlan) -> Vec<bool> {
         | LogicalPlan::Sort(datafusion_expr::Sort { input, .. })
         | LogicalPlan::Limit(datafusion_expr::Limit { input, .. })
         | LogicalPlan::Repartition(datafusion_expr::Repartition { input, .. })
-        | LogicalPlan::Distinct(Distinct::All(input)) => lossy(input),
+        | LogicalPlan::Distinct(Distinct::All(input)) => lossy_in(input, work),
         LogicalPlan::Distinct(Distinct::On(d)) => through(&d.input, &d.select_expr),
         LogicalPlan::Join(j) => {
-            let (l, r) = (lossy(&j.left), lossy(&j.right));
+            let (l, r) = (lossy_in(&j.left, work), lossy_in(&j.right, work));
             let mut t = match j.join_type {
                 JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => l,
                 JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => r,
@@ -621,7 +631,7 @@ fn lossy(plan: &LogicalPlan) -> Vec<bool> {
         LogicalPlan::Union(u) => {
             let mut t = vec![false; n];
             for i in &u.inputs {
-                for (acc, x) in t.iter_mut().zip(lossy(i)) {
+                for (acc, x) in t.iter_mut().zip(lossy_in(i, work)) {
                     *acc |= x;
                 }
             }
@@ -630,11 +640,24 @@ fn lossy(plan: &LogicalPlan) -> Vec<bool> {
         // Each round feeds the last one's rows back in, possibly into other columns: any lossy
         // value in either term may end up in any column.
         LogicalPlan::RecursiveQuery(r) => {
-            let any = lossy(&r.static_term)
-                .into_iter()
-                .chain(lossy(&r.recursive_term))
-                .any(|t| t);
-            vec![any; n]
+            // The recursive term reads the last round's rows under the CTE's name: its taint is
+            // the seed's, widened by what each round adds, until a round adds nothing.
+            let mut t = lossy_in(&r.static_term, work);
+            t.resize(n, false);
+            loop {
+                let mut rounds = work.clone();
+                rounds.insert(r.name.clone(), t.clone());
+                let step = lossy_in(&r.recursive_term, &rounds);
+                let next: Vec<bool> = t
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &a)| a || step.get(i).copied().unwrap_or(false))
+                    .collect();
+                if next == t {
+                    break t;
+                }
+                t = next;
+            }
         }
         LogicalPlan::Values(v) => {
             let empty = DFSchema::empty();

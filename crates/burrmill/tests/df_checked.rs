@@ -488,3 +488,19 @@ fn a_recursive_fold_is_tainted_only_by_what_it_casts() {
     );
     assert!(m.contains("TRY_CAST") || m.contains("did not fit"), "{m}");
 }
+
+/// A fold that carries a table's `_dec` companions along, as `SELECT *` does, sums its own clean
+/// column: the companions taint only themselves, round after round.
+#[test]
+fn a_recursive_fold_carrying_dec_columns_sums_a_clean_one() {
+    let (_t, e) = transfers(&[&[("a", "5"), ("b", U256_MAX)]]);
+    assert_eq!(
+        one(
+            &e,
+            "WITH RECURSIVE f AS (SELECT party, value, value_dec, value_overflow, CAST(1 AS DECIMAL(38,0)) AS amt, 1 AS k \
+             FROM transfer UNION ALL SELECT party, value, value_dec, value_overflow, amt, k + 1 FROM f WHERE k < 2) \
+             SELECT sum(amt) FROM f"
+        ),
+        "4"
+    );
+}
