@@ -314,6 +314,25 @@ in), the answers agreeing; `readers_racing_folds_never_answer_short_and_leave_no
 once and passed on rerun. `graft::canonical_plan` is dead outside tests there and fails
 `clippy -D warnings`; `pete/burrmill-dialect` carries the `#[cfg(test)]`.
 
+## The network nest (RFC-0060), found 2026-09-30
+
+Every earlier flip built `shadow-burrmill` alone; the network nest's tests need `graph`, so none of
+them had run on Burrmill. With `graph` they did: 21 network-contract tests and 6 of `serve`'s
+network documents, 27 failures. Fixed since in Burrmill (`938d52b`, `e9fc080`): `BIGNUM` as
+`DECIMAL(38,0)` (166 uses over 15 view files), `AS MATERIALIZED`, a recursive query tainted only by
+what it casts, `regexp_full_match`, `hex`, and a CTE with a column list repeating an expression.
+18 remain (12 contract, 6 `serve`):
+
+- [ ] **Correlated subqueries** DataFusion does not flatten (`OuterReferenceColumn`,
+      `ScalarSubquery` reaching the physical plan): 6 tests. Burrmill flattens one shape
+      (`top_n_correlated`); the views use more.
+- [ ] **`SUM` over a `_dec` whose source the checked rule cannot trace** (through a window or a
+      join, where `expose` follows only projections, filters and unions): 5 tests.
+- [ ] **2^256-1 sentinels.** Decided 2026-09-30 (Chief): `BIGNUM` stays 38 digits and the network
+      views turn the sentinel into NULL or a named "unlimited" before arithmetic. A view change in
+      nuthatch.
+- [ ] `serve`'s 6 network documents, not yet read: likely the same causes through HTTP.
+
 ## Phase 3a: cutover
 
 - [x] **The switch** (2026-09-30, nuthatch `pete/burrmill-watchdog`): `NUTHATCH_ENGINE` =
