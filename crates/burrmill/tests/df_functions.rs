@@ -124,3 +124,37 @@ fn a_materialized_cte_answers_as_a_plain_one() {
     let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
     assert_eq!(rows, vec![serde_json::json!({"n": "AS MATERIALIZED ("})], "a string is left as written");
 }
+
+/// What the network nest's controller and escrow views call: a whole-string regex match, and `hex`
+/// of a byte value as DuckDB prints it, upper case with no leading zeros.
+#[test]
+fn regexp_full_match_and_hex_as_duckdb_has_them() {
+    let engine = Engine::open_empty().unwrap();
+    let got = engine
+        .sql(
+            "SELECT regexp_full_match('0x' || repeat('0', 24) || repeat('ab', 20), '0x0{24}[0-9a-fA-F]{40}') AS whole, \
+             regexp_full_match('x0x', '0x') AS part, hex(10) AS a, hex(255) AS b, hex(0) AS c, \
+             lpad(hex(7 & 255), 2, '0') AS d",
+        )
+        .unwrap();
+    let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
+    assert_eq!(
+        rows,
+        vec![serde_json::json!({"whole": true, "part": false, "a": "A", "b": "FF", "c": "0", "d": "07"})]
+    );
+}
+
+/// DuckDB allows an unaliased expression to repeat inside a CTE, whose column list names it; the
+/// recursive fold the network nest's indexer view seeds this way.
+#[test]
+fn a_repeated_expression_inside_a_cte_is_not_a_clash() {
+    let engine = Engine::open_empty().unwrap();
+    let got = engine
+        .sql(
+            "WITH RECURSIVE f(a, b, c, d) AS (SELECT DISTINCT 1, CAST(0 AS BIGNUM), CAST(0 AS BIGNUM), 0 \
+             UNION ALL SELECT a + 1, b, c, d FROM f WHERE a < 3) SELECT count(*) AS n FROM f",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
+    assert_eq!(rows, vec![serde_json::json!({"n": 3})]);
+}

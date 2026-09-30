@@ -35,7 +35,62 @@ pub fn all() -> Vec<Arc<ScalarUDF>> {
         // Volatile, or the simplifier folds `error('x')` at planning and fails every statement
         // that merely contains it.
         error_udf(),
+        udf(Hex(Signature::user_defined(Volatility::Immutable))),
     ]
+}
+
+/// `hex(x)` as DuckDB prints it, upper case without leading zeros: an integer as its 64-bit two's
+/// complement, text or bytes as their bytes.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Hex(Signature);
+
+impl ScalarUDFImpl for Hex {
+    fn name(&self) -> &str {
+        "hex"
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
+        match args {
+            [t] if t.is_integer() || t.is_null() => Ok(vec![DataType::Int64]),
+            [DataType::Binary | DataType::LargeBinary | DataType::BinaryView] => Ok(vec![DataType::Binary]),
+            [t] if matches!(t, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
+                Ok(vec![DataType::Utf8])
+            }
+            _ => plan_err!("hex takes an integer, text or bytes"),
+        }
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
+        let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let mut b = StringBuilder::new();
+        let bytes = |v: &[u8]| v.iter().map(|x| format!("{x:02X}")).collect::<String>();
+        match a.data_type() {
+            DataType::Int64 => {
+                let a = a.as_primitive::<arrow::datatypes::Int64Type>();
+                for i in 0..a.len() {
+                    if a.is_null(i) { b.append_null() } else { b.append_value(format!("{:X}", a.value(i))) }
+                }
+            }
+            DataType::Binary => {
+                let a = a.as_binary::<i32>();
+                for i in 0..a.len() {
+                    if a.is_null(i) { b.append_null() } else { b.append_value(bytes(a.value(i))) }
+                }
+            }
+            _ => {
+                let a = a.as_string::<i32>();
+                for i in 0..a.len() {
+                    if a.is_null(i) { b.append_null() } else { b.append_value(bytes(a.value(i).as_bytes())) }
+                }
+            }
+        }
+        scalar_out(scalar, Arc::new(b.finish()))
+    }
 }
 
 pub(super) fn error_udf() -> Arc<ScalarUDF> {

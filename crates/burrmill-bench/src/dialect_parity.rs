@@ -159,6 +159,8 @@ const CORPUS: &[&str] = &[
     "SELECT \"from\", last(value ORDER BY block_number, log_index) AS a, first(value ORDER BY block_number, log_index) AS b, last(\"to\" ORDER BY block_number, log_index) FILTER (WHERE value <> '4') AS c FROM transfer GROUP BY 1 ORDER BY 1",
     "SELECT last(x ORDER BY y) AS a, first(x ORDER BY y) AS b, last(x ORDER BY y) FILTER (WHERE x IS NOT NULL) AS c FROM (VALUES (1, 5), (NULL, 9), (3, 2), (4, 6)) t(x, y)",
     "SELECT CAST(sum(CAST(value AS BIGNUM)) AS VARCHAR) AS s, CAST(CAST(0 AS BIGNUM) - CAST(value AS BIGNUM) AS VARCHAR) AS neg FROM transfer GROUP BY value ORDER BY value",
+    "SELECT hex(10) AS a, hex(255) AS b, hex(0) AS c, lpad(hex(block_number & 255), 2, '0') AS d, regexp_full_match(\"from\", '0x[0-9a-f]+') AS e, regexp_full_match(\"from\", '0x') AS f FROM transfer ORDER BY block_number, log_index",
+    "WITH RECURSIVE f(a, b, c, d) AS (SELECT DISTINCT 1, CAST(0 AS BIGNUM), CAST(0 AS BIGNUM), 0 UNION ALL SELECT a + 1, b, c, d FROM f WHERE a < 3) SELECT a, CAST(b AS VARCHAR) AS b, d FROM f ORDER BY a",
     "WITH RECURSIVE t(n, s) AS MATERIALIZED (SELECT 1, CAST('1' AS BIGNUM) UNION ALL SELECT n + 1, s + CAST('1000000000000000000' AS BIGNUM) FROM t WHERE n < 4) SELECT n, CAST(s AS VARCHAR) AS s FROM t ORDER BY n",
     "SELECT json_extract_string('{\"a\": {\"b\": 7}, \"c\": [1, 2]}', '$.a.b') AS a, json_extract('{\"a\": {\"b\": 7}}', '$.a') AS b, json_extract_string('{\"c\": [1, 2]}', '$.c[1]') AS c, json_extract_string('{\"a\": 1}', '$.zz') AS d",
     "SELECT '{\"a\": 1, \"b\": \"x\"}'->>'b' AS a, '{\"a\": {\"k\": 2}}'->'a' AS b, '{\"a\": {\"k\": 2}}'->>'$.a.k' AS c",

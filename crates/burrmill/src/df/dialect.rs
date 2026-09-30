@@ -346,6 +346,31 @@ fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
     dedupe_set(q.body.as_mut(), names, &ordered, true);
 }
 
+/// What an unaliased item will be called in the plan: DataFusion names a cast after what it casts,
+/// so `CAST(0 AS DECIMAL(38,0))` and a bare `0` beside it are one name there.
+fn planned_name(e: &SqlExpr) -> String {
+    match e {
+        SqlExpr::Cast { expr, .. } | SqlExpr::Nested(expr) => planned_name(expr),
+        e => e.to_string(),
+    }
+}
+
+struct DedupeInner;
+
+impl VisitorMut for DedupeInner {
+    type Break = ();
+    fn pre_visit_query(&mut self, q: &mut sq::Query) -> ControlFlow<()> {
+        // Only under a column list: elsewhere a repeat keeps DuckDB's `_1` name, which a query may
+        // select by (`subqueries::name`).
+        for cte in q.with.iter_mut().flat_map(|w| w.cte_tables.iter_mut()) {
+            if !cte.alias.columns.is_empty() {
+                dedupe_output_names(&mut cte.query, &mut []);
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 /// The leftmost branch names a set operation's output, so only it keeps `names` and the `ORDER BY`
 /// rule; a later branch's repeats are suffixed too, or its projection is refused, and never show.
 fn dedupe_set(
@@ -401,7 +426,7 @@ fn dedupe_select(
                         .cloned()
                         .flatten()
                         .unwrap_or_else(|| e.to_string());
-                    (e.to_string(), shown, false)
+                    (planned_name(e), shown, false)
                 }
             },
             sq::SelectItem::ExprWithAlias { alias, .. } => {
@@ -456,6 +481,8 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
     let _ = sq::VisitMut::visit(s.as_mut(), &mut CaseFix(&known));
     if let sq::Statement::Query(q) = s.as_mut() {
         dedupe_output_names(q, names);
+        // A CTE whose column list names its output may repeat an expression, as DuckDB allows.
+        let _ = sq::VisitMut::visit(q.as_mut(), &mut DedupeInner);
         super::subqueries::name(q, &known);
     }
     let mut ctes = std::collections::HashSet::new();
@@ -613,6 +640,10 @@ fn rename_function(f: &mut sq::Function) {
             f.name = sq::ObjectName::from(vec![sq::Ident::new("regexp_like")]);
             return;
         }
+        "regexp_full_match" => {
+            full_match(f);
+            return;
+        }
         "first" | "last" => {
             f.name = sq::ObjectName::from(vec![sq::Ident::new(format!("{lower}_value"))]);
             return;
@@ -632,6 +663,33 @@ fn rename_function(f: &mut sq::Function) {
         ))),
     );
     f.name = sq::ObjectName::from(vec![sq::Ident::new("date_part")]);
+}
+
+/// `regexp_full_match(s, p[, flags])` is `regexp_like` over the whole string: `^(?:p)$`.
+fn full_match(f: &mut sq::Function) {
+    let sq::FunctionArguments::List(l) = &mut f.args else {
+        return;
+    };
+    let Some(sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(p))) = l.args.get_mut(1) else {
+        return;
+    };
+    let lit = |s: &str| SqlExpr::Value(sq::Value::SingleQuotedString(s.into()).into());
+    let literal = match p {
+        SqlExpr::Value(v) => match &v.value {
+            sq::Value::SingleQuotedString(s) => Some(s.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    *p = match literal {
+        Some(s) => lit(&format!("^(?:{s})$")),
+        None => binop(
+            binop(lit("^(?:"), BinaryOperator::StringConcat, p.clone()),
+            BinaryOperator::StringConcat,
+            lit(")$"),
+        ),
+    };
+    f.name = sq::ObjectName::from(vec![sq::Ident::new("regexp_like")]);
 }
 
 /// `struct_pack(k := v, ...)` is DataFusion's `named_struct('k', v, ...)`. An unnamed argument takes
