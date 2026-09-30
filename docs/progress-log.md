@@ -4,6 +4,39 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Where the network nest's planning time goes — 2026-10-01
+
+The network contract took 116 s on Burrmill against 32 s on DuckDB, 3.5-4.5x on every heavy test
+alike. Per query, not per row: the fixtures are tiny, and each query's plan is 5,000-6,000 logical
+and 3,000-3,700 physical nodes (about 30 views composed, nearly all distinct: 3,998 distinct
+subtrees in 4,444, so sharing would not shrink them). Timed per rule on the slowest test (25
+queries, 31 s):
+
+| stage | s | notes |
+|---|---|---|
+| logical optimizer | 9.1 | DataFusion's; three passes, the first the dearest |
+| physical optimizer | 8.4 | `EnsureRequirements` 5.2 of it |
+| analyzer | 7.8 → 6.4 | `type_coercion` 2.6 (run twice); Burrmill's rules the rest |
+| parse, view definitions | 5.5 | nuthatch defines ~33 views per query session |
+| `information_schema` | 0.8 → 0 | rebuilt at every registration |
+
+Fixed in Burrmill (`06d88f4`, `1001297`): `DuckComparisons` copied and compared every expression node
+with itself (quadratic in depth) and re-derived every node's schema whenever it changed anything,
+1.31 s to 0.41 s; the subquery and shift rules formatted every expression's name to find nothing,
+0.65 s to 0.13 s; `information_schema` is built on first read.
+
+Not fixed here:
+
+- **`EnsureRequirements`** gives every child of every node a fresh statistics cache, so each walks
+  its whole subtree: quadratic in plan size, 200 ms a query at this size. Fixed upstream
+  (apache/datafusion#25098, merged 2026-09-17), not in 55.1.0; first in 56, due by the cadence
+  late October or early November. Taken with that upgrade rather than a vendored fork.
+- **`max_passes`**: one pass slowed execution (`lodestar_deployments` 143 to 533 ms); two matched
+  three on all 22 views but saved only 1.9 s of 31. Left at DataFusion's three.
+- What remains is DataFusion planning 5,000-node plans, about 1 s a query here against DuckDB's
+  ~0.3 s end to end. On production data the scans dominate; for the network endpoint's latency
+  it is the next thing to measure on a real nest.
+
 ## The network nest on Burrmill: contract 21/21, serve 97/97 — 2026-09-30
 
 The last failures of nuthatch's network tests with Burrmill the engine, each a difference from
