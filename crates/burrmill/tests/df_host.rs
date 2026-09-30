@@ -745,3 +745,56 @@ fn a_segment_that_will_not_bind_refuses_the_definition() {
         .unwrap();
     assert_eq!(rows(&engine, "SELECT count(*) AS n FROM t"), vec![json!({"n": 1})]);
 }
+
+/// A hot row without a counter has NULL there, as DuckDB's `read_json` reads it, not 0: a missing
+/// block number is not block zero.
+#[test]
+fn a_hot_row_missing_a_counter_reads_null() {
+    let mut engine = Engine::open_empty().unwrap();
+    let hot = [json!({"who": "0xa", "amount": "5"}), json!({"block_number": 12, "who": "0xb", "amount": "7"})];
+    engine
+        .register_facts("t", &declared(), Vec::new(), &hot, (None, None))
+        .unwrap();
+    assert_eq!(
+        rows(&engine, "SELECT who, block_number FROM t ORDER BY who"),
+        vec![json!({"who": "0xa", "block_number": null}), json!({"who": "0xb", "block_number": 12})]
+    );
+    assert_eq!(rows(&engine, "SELECT min(block_number) AS m FROM t"), vec![json!({"m": 12})]);
+}
+
+/// Segments that drifted, one carrying a column the other lacks, answer the same whichever comes
+/// first: the table's columns are every segment's, not the first one's.
+#[test]
+fn a_column_only_a_later_segment_carries_is_read_in_either_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let old = segment(tmp.path(), 1, &[(1, "0xa", "5"), (2, "0xb", "7")]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("block_number", DataType::UInt64, false),
+        Field::new("who", DataType::Utf8, false),
+        Field::new("memo", DataType::Utf8, true),
+        Field::new("amount", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt64Array::from(vec![3u64, 4])),
+            Arc::new(StringArray::from(vec!["0xc", "0xd"])),
+            Arc::new(StringArray::from(vec![Some("paid"), None])),
+            Arc::new(StringArray::from(vec!["1", "2"])),
+        ],
+    )
+    .unwrap();
+    let path = tmp.path().join("t-new.parquet");
+    let mut w = parquet::arrow::ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema, None).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    let new = (path.clone(), std::fs::metadata(&path).unwrap().len());
+    for files in [vec![old.clone(), new.clone()], vec![new.clone(), old.clone()]] {
+        let mut engine = Engine::open_empty().unwrap();
+        engine.register_facts("t", &declared(), files, &[], (None, None)).unwrap();
+        assert_eq!(
+            rows(&engine, "SELECT count(*) AS n, count(memo) AS m FROM t"),
+            vec![json!({"n": 4, "m": 1})]
+        );
+    }
+}

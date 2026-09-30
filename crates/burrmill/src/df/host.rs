@@ -76,19 +76,24 @@ impl Engine {
         // Every footer, as DuckDB's `read_parquet` binds them all, so a file that is not Parquet
         // refuses the definition here and a host can define the table from what remains.
         for (path, len) in &files {
-            if self.bound_segments.contains(&(path.clone(), *len)) {
+            if self.bound_segments.contains_key(&(path.clone(), *len)) {
                 continue;
             }
             let bound = std::fs::File::open(path).map_err(|e| e.to_string()).and_then(|f| {
                 ArrowReaderMetadata::load(&f, ArrowReaderOptions::new()).map_err(|e| e.to_string())
             });
-            if let Err(e) = bound {
-                return Err(crate::BurrmillError::Substrate(format!(
-                    "segment {} will not bind: {e}",
-                    path.display()
-                )));
+            match bound {
+                Ok(meta) => {
+                    let schema = Arc::new(view_schema(meta.schema()));
+                    self.bound_segments.insert((path.clone(), *len), schema);
+                }
+                Err(e) => {
+                    return Err(crate::BurrmillError::Substrate(format!(
+                        "segment {} will not bind: {e}",
+                        path.display()
+                    )));
+                }
             }
-            self.bound_segments.insert((path.clone(), *len));
         }
         let raw = format!("{name}__raw");
         let raw_schema: SchemaRef = if files.is_empty() {
@@ -99,9 +104,14 @@ impl Engine {
                     .collect::<Vec<_>>(),
             ))
         } else {
-            let f = std::fs::File::open(&files[0].0)?;
-            let meta = ArrowReaderMetadata::load(&f, ArrowReaderOptions::new())?;
-            Arc::new(view_schema(meta.schema()))
+            // Every segment's columns by name, as DuckDB's `union_by_name`: a column the ABI gained
+            // is in the later segments only, and the first one's schema would read it as NULL.
+            let schemas = files
+                .iter()
+                .map(|(p, l)| self.bound_segments[&(p.clone(), *l)].as_ref().clone());
+            Arc::new(Schema::try_merge(schemas).map_err(|e| {
+                crate::BurrmillError::Substrate(format!("the segments of {name} disagree: {e}"))
+            })?)
         };
         let raw_provider: Arc<dyn TableProvider> = if files.is_empty() {
             Arc::new(MemTable::try_new(raw_schema.clone(), vec![vec![]]).map_err(df_err)?)
@@ -254,10 +264,11 @@ fn json_batch(rows: &[Value], typed: bool) -> Result<(SchemaRef, RecordBatch)> {
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(columns.len());
     for c in &columns {
         if typed && counter(c) {
-            fields.push(Field::new(c, DataType::UInt64, false));
+            // A row without one has NULL, as DuckDB reads it: a missing block number is not zero.
+            fields.push(Field::new(c, DataType::UInt64, true));
             arrays.push(Arc::new(UInt64Array::from(
                 rows.iter()
-                    .map(|r| r.get(c).and_then(Value::as_u64).unwrap_or(0))
+                    .map(|r| r.get(c).and_then(Value::as_u64))
                     .collect::<Vec<_>>(),
             )));
         } else {
