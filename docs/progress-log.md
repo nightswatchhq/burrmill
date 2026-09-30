@@ -4,6 +4,24 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## A dead entity circuit went unnoticed at the tip — 2026-09-30
+
+With Burrmill the default, two `e2e_entity_reorg` tests timed out in 7 of 11 full runs (a dead
+entity circuit must end the nest, and must push an alert), never alone and never on DuckDB (0 of 9).
+Not Burrmill's fault: nuthatch's. `apply_window` hands a window to the entity's circuit thread
+without waiting, and `ensure_views_healthy` runs straight after; when the circuit dies a moment later
+the check passes, and the next check was only after the next window. At the tip there is none, so the
+nest carried on with a dead entity, the freeze those tests exist to catch. Burrmill's timing lost the
+race more often. Caught with the suite's own log: both circuits died within a millisecond of each
+other, one nest was quarantined, the other never noticed.
+
+Fixed in nuthatch: the solo loop checks before each idle poll, and the runtime cursor quarantines,
+through its supervisor, any live nest whose circuit died, before both of its waits. Ten full Burrmill
+runs, none failing, against 7 of 11 before. No deterministic test: making a circuit die late on
+purpose would take a hook into the thread; the two tests are the reproduction.
+
+---
+
 ## A drifted table read from its first segment's columns, and a missing counter read as 0 — 2026-09-30
 
 **`register_facts` took a table's columns from `files[0]`.** A column the ABI gained is in the later
