@@ -4,6 +4,20 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## An empty scalar subquery defaulted with coalesce came back NULL — 2026-09-30
+
+`graph_network."isPaused"` read NULL on Burrmill where the fixture expects `false`. The view says
+`coalesce((SELECT "isPaused" FROM controller_state), false)`, and `controller_state` is empty until
+the Controller emits anything. DataFusion 55 types a scalar subquery by its column
+(`expr_schema.rs:377`), so over a non-nullable column the `coalesce` is typed non-nullable, the
+simplifier drops the default, and the NULL the empty subquery produces goes out, or, without the
+`coalesce`, fails the batch as a NULL in a non-nullable column.
+
+`NullableSubqueries`, first among the analyzer rules, wraps each such subquery in `maybe_null`, an
+identity typed nullable, and restores the output names a wrapped aggregate or window changed. The
+fuzzer's `stricter` count went from 7 to 0: those seven were this, refused with the non-nullable
+error. `network_clock` passes; dialect-parity 251/251.
+
 ## A dead entity circuit went unnoticed at the tip — 2026-09-30
 
 With Burrmill the default, two `e2e_entity_reorg` tests timed out in 7 of 11 full runs (a dead

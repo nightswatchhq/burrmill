@@ -23,6 +23,7 @@ pub use textfn::TextFunction;
 mod constants;
 mod correlate;
 mod latest;
+mod nullsub;
 mod dialect;
 mod distinct;
 mod doubles;

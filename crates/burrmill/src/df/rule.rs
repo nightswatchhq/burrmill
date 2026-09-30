@@ -33,6 +33,7 @@ const SAFE_SCALARS: &[&str] = &[
     // On a DECIMAL it checks the rounded value against the precision and refuses.
     "round",
     "coalesce",
+    "maybe_null",
     "nullif",
     "nvl",
     "nvl2",

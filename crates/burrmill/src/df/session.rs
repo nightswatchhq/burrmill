@@ -240,6 +240,7 @@ impl MiniSession {
             // Checked sums change their output type, so coercion runs again after the rule.
             analyzer: Analyzer::with_rules(vec![
                 Arc::new(ResolveGroupingFunction::new()),
+                Arc::new(super::nullsub::NullableSubqueries::default()),
                 // Before coercion: DuckDB's text comparisons depend on what was written.
                 Arc::new(super::dialect::DuckComparisons),
                 Arc::new(TypeCoercion::new()),

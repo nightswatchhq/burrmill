@@ -165,6 +165,8 @@ const CORPUS: &[&str] = &[
     "WITH c(id, b) AS (VALUES (1, 10), (1, 10), (1, 30), (2, 10), (3, 50)), d(id, b, v) AS (VALUES (1, 5, 'early'), (1, 20, 'mid'), (1, 40, 'late'), (2, 15, 'two'), (3, 40, 'before')) SELECT c.id, c.b, x.v FROM c LEFT JOIN LATERAL (SELECT d.v FROM d WHERE d.id = c.id AND d.b > c.b ORDER BY d.b ASC LIMIT 1) x ON true ORDER BY c.id, c.b",
     "WITH c(id, b) AS (VALUES (1, 10), (1, 10), (1, 30), (2, 10), (3, 50)), d(id, b, v) AS (VALUES (1, 5, 'early'), (1, 20, 'mid'), (1, 40, 'late'), (2, 15, 'two'), (3, 40, 'before')) SELECT c.id, c.b, x.v FROM c CROSS JOIN LATERAL (SELECT d.v, d.b FROM d WHERE d.id = c.id AND d.b > c.b ORDER BY d.b DESC LIMIT 2) x ORDER BY c.id, c.b, x.b",
     "WITH c(id, b) AS (VALUES (1, 10), (1, 10), (1, 30), (2, 10), (3, 50)) SELECT c.id, c.b, r.x, r.y FROM c CROSS JOIN LATERAL (SELECT CASE WHEN c.b > 20 THEN c.b * 2 ELSE 0 END AS x, c.id + 100 AS y) r ORDER BY c.id, c.b",
+    "WITH s AS (SELECT true AS p WHERE false) SELECT coalesce((SELECT p FROM s), false) AS x, (SELECT p FROM s) IS NULL AS y",
+    "SELECT \"from\", coalesce((SELECT true FROM label WHERE addr = 'nobody'), false) AS x FROM transfer ORDER BY 1 LIMIT 2",
     "WITH RECURSIVE t(n, s) AS MATERIALIZED (SELECT 1, CAST('1' AS BIGNUM) UNION ALL SELECT n + 1, s + CAST('1000000000000000000' AS BIGNUM) FROM t WHERE n < 4) SELECT n, CAST(s AS VARCHAR) AS s FROM t ORDER BY n",
     "SELECT json_extract_string('{\"a\": {\"b\": 7}, \"c\": [1, 2]}', '$.a.b') AS a, json_extract('{\"a\": {\"b\": 7}}', '$.a') AS b, json_extract_string('{\"c\": [1, 2]}', '$.c[1]') AS c, json_extract_string('{\"a\": 1}', '$.zz') AS d",
     "SELECT '{\"a\": 1, \"b\": \"x\"}'->>'b' AS a, '{\"a\": {\"k\": 2}}'->'a' AS b, '{\"a\": {\"k\": 2}}'->>'$.a.k' AS c",
