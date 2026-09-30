@@ -316,6 +316,12 @@ once and passed on rerun. `graft::canonical_plan` is dead outside tests there an
 
 ## Phase 3a: cutover
 
+- [x] **The switch** (2026-09-30, nuthatch `pete/burrmill-watchdog`): `NUTHATCH_ENGINE` =
+      `duckdb` | `shadow` | `burrmill` in a `shadow-burrmill` build, read by `dev` at startup; unset,
+      each build does what it did (shadow, or DuckDB), and a build without Burrmill refuses to be
+      asked for it. So a nest moves to Burrmill, and back, with a unit edit and a restart, no new
+      binary. Checked on a DIPS copy: the same statement answered by each engine by its own error
+      text, the startup log naming it.
 - [ ] Burrmill the default engine; DuckDB a dev-dependency oracle only, gone from the shipped binary.
 - [ ] The parser role (`reach`, graft canonical form, entity gate, Dune, lowering) off
       `json_serialize_sql`.
@@ -325,6 +331,7 @@ once and passed on rerun. `graft::canonical_plan` is dead outside tests there an
 - [ ] Roll: stopped-store tar, then DIPS. Watch a day. GNS. QoS. Alloc, with Lodestar's crons watched
       through one full cycle. Platform image last, pools first, then per-nest containers.
 - [ ] Roll-back rehearsed once on the ThinkPad before the first Helsinki roll.
+      With the switch, roll-back is `NUTHATCH_ENGINE=shadow` (or `duckdb`) and a restart.
 
 ## Phase 3b: removal
 
