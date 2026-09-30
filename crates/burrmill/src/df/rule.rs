@@ -292,8 +292,9 @@ impl CheckedArithmetic {
             if tainted && exact.is_none() {
                 let Some((new_input, args)) = self.guarded(&input, &params.args, func)? else {
                     return plan_err!(
-                        "refusing plan: {func} over a TRY_CAST value would drop the rows that did \
-                         not fit, and where the value came from cannot be traced here"
+                        "refusing plan: {func}({}) over a TRY_CAST value would drop the rows that \
+                         did not fit, and where the value came from cannot be traced here",
+                        af.params.args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ")
                     );
                 };
                 input = new_input;
@@ -618,6 +619,8 @@ fn lossy_in(plan: &LogicalPlan, work: &std::collections::HashMap<String, Vec<boo
         | LogicalPlan::Repartition(datafusion_expr::Repartition { input, .. })
         | LogicalPlan::Distinct(Distinct::All(input)) => lossy_in(input, work),
         LogicalPlan::Distinct(Distinct::On(d)) => through(&d.input, &d.select_expr),
+        // A derived table correlated to its outer query: its columns are its plan's.
+        LogicalPlan::Subquery(q) => lossy_in(&q.subquery, work),
         LogicalPlan::Join(j) => {
             let (l, r) = (lossy_in(&j.left, work), lossy_in(&j.right, work));
             let mut t = match j.join_type {

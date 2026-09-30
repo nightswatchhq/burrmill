@@ -504,3 +504,18 @@ fn a_recursive_fold_carrying_dec_columns_sums_a_clean_one() {
         "4"
     );
 }
+
+/// A lateral derived table's columns carry only their own taint: a clean `CAST` summed through one
+/// answers, where the whole derived table had counted as lossy.
+#[test]
+fn a_correlated_subquery_is_tainted_only_by_what_it_casts() {
+    let (_t, e) = transfers(&[&[("a", "5"), ("b", U256_MAX)]]);
+    assert_eq!(
+        one(
+            &e,
+            "SELECT sum(d.x) FROM transfer t CROSS JOIN LATERAL \
+             (SELECT CAST(1 AS DECIMAL(38,0)) AS x FROM label l WHERE l.party = t.party) d"
+        ),
+        "2"
+    );
+}
