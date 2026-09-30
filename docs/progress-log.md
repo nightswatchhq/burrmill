@@ -4,6 +4,26 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## A drifted table read from its first segment's columns, and a missing counter read as 0 — 2026-09-30
+
+**`register_facts` took a table's columns from `files[0]`.** A column the ABI gained is in the later
+segments only, so whenever an older segment came first the column read as NULL on every row, a
+wrong answer with nothing to show for it; Burrmill answered the drifted fixture correctly by the luck
+of its file order. The table's columns are now every segment's by name, DuckDB's `union_by_name`,
+from the footers the definition already reads (kept per engine with each segment); two segments
+that disagree on a column's type refuse, naming the table. `df_host`
+`a_column_only_a_later_segment_carries_is_read_in_either_order`, which failed in one order (`count`
+of the new column 0 against 1). With it nuthatch's Trino contract agrees on both engines, `sender_kinds`
+1,000 and 500 on each.
+
+**A hot row missing a counter read as 0.** `block_number`, `log_index`, `_seq` and `block_timestamp`
+were non-nullable, so a row without one got 0: `min(block_number)` of a table with an unstamped hot
+row was 0. Now NULL, as DuckDB's `read_json` reads it (`a_hot_row_missing_a_counter_reads_null`).
+
+Suite 17/17, `dialect-parity` 241/241.
+
+---
+
 ## Two decisions, and the checked rule refusing only what did not fit — 2026-09-29
 
 Chief decided both open questions. **Allocations memory:** raise the figure (about 2 GB of
@@ -27,13 +47,13 @@ built not to fit; both now say "the ones that fit" (`FILTER (WHERE NOT value_ove
 NOT value_overflow THEN value_dec END`), the same answer on DuckDB, and the idiom the release note
 gives authors.
 
-**A wrong answer on nuthatch's DuckDB path, found by the switch.** The Trino contract's
-`sender_kinds` over the drifted fixture: blocks 10-1509 are 1,000 rows with no `sender` and 500 with
-one, by the fixture's construction. Burrmill says so. Both of nuthatch's DuckDB paths, the nest view
-and the translation run through `CREATE TABLE ... read_parquet(..., union_by_name=true)`, say 1,500
-and 0, so the test passed by two DuckDB readings agreeing. DuckDB 1.5.5 (the bench's) answers 1,000
-and 500 over the same two segment files and the same query shape; nuthatch pins 1.5.4. Not isolated
-between the version and the `CREATE TABLE ... REPLACE` step.
+**Corrected 2026-09-30: the wrong answer was Burrmill's, not DuckDB's.** This paragraph first
+said nuthatch's DuckDB path miscounted the Trino contract's `sender_kinds`. It did not. On the DuckDB
+default both sides were right and agreed; on the Burrmill default the translator took the table's
+columns from Burrmill, and `register_facts` took them from the first segment only. The drifted
+fixture's first segment has no `sender`, so the translation read it as absent and counted 1,500 with
+none. DuckDB 1.5.4 answers 1,000 and 500 at every step (probed: `read_parquet`, `CREATE TABLE AS`,
+`CREATE TABLE ... REPLACE`). The fix and its test are in the next entry.
 
 ---
 
