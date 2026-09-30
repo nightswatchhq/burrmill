@@ -6,6 +6,9 @@
 //! subquery's relation LEFT JOINed on its correlated conjuncts, ranked within each outer row by the
 //! subquery's order, and cut at `k`. An outer row with no match keeps one NULL-extended row: the
 //! scalar subquery's NULL and the left join's empty side, and what a cross join drops.
+//!
+//! A lateral with no relation, `CROSS JOIN LATERAL (SELECT f(c.x) AS y) r`, only names a value of
+//! the outer row, one row per row: it becomes that column.
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
@@ -124,6 +127,40 @@ fn literal_limit(l: &Limit) -> Option<usize> {
     }
 }
 
+/// `SELECT <expressions of the outer row>` with no relation: the expressions, each with its name.
+fn binding(sub: &LogicalPlan) -> Option<Vec<(Expr, String)>> {
+    let LogicalPlan::Projection(p) = sub else { return None };
+    let LogicalPlan::EmptyRelation(e) = p.input.as_ref() else { return None };
+    if !e.produce_one_row {
+        return None;
+    }
+    let plain = |x: &Expr| {
+        !x.exists(|y| Ok(matches!(y, Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) | Expr::AggregateFunction(_) | Expr::WindowFunction(_)))).unwrap_or(true)
+    };
+    p.expr.iter().all(plain).then(|| {
+        p.expr
+            .iter()
+            .zip(p.schema.fields())
+            .map(|(x, f)| {
+                let x = match x {
+                    Expr::Alias(a) => a.expr.as_ref().clone(),
+                    x => x.clone(),
+                };
+                (x, f.name().clone())
+            })
+            .collect()
+    })
+}
+
+/// An outer reference as the column it refers to, once the subquery is joined to its outer rows.
+fn unouter(e: Expr) -> Result<Expr> {
+    e.transform(|x| match x {
+        Expr::OuterReferenceColumn(_, c) => Ok(Transformed::yes(Expr::Column(c))),
+        x => Ok(Transformed::no(x)),
+    })
+    .map(|t| t.data)
+}
+
 fn qualifiers(p: &LogicalPlan) -> std::collections::HashSet<String> {
     p.schema().iter().filter_map(|(q, _)| q.map(|q| q.to_string())).collect()
 }
@@ -144,13 +181,6 @@ fn ranked(outer: &LogicalPlan, t: TopN, n: &mut usize, names: &[String]) -> Resu
     }
     let columns: Vec<Expr> = relation.schema().columns().into_iter().map(Expr::Column).collect();
     let relation = relation.project(columns.into_iter().chain([lit(true).alias(&marker)]))?.build()?;
-    let unouter = |e: Expr| -> Result<Expr> {
-        e.transform(|x| match x {
-            Expr::OuterReferenceColumn(_, c) => Ok(Transformed::yes(Expr::Column(c))),
-            x => Ok(Transformed::no(x)),
-        })
-        .map(|t| t.data)
-    };
     let on = t.correlated.into_iter().map(unouter).collect::<Result<Vec<_>>>()?;
     let joined = LogicalPlanBuilder::from(numbered.clone()).join_on(relation, JoinType::Left, on)?.build()?;
     let carried: Vec<Expr> = numbered.schema().columns().into_iter().map(Expr::Column).collect();
@@ -246,6 +276,17 @@ fn lateral(j: &Join, n: &mut usize) -> Result<Option<LogicalPlan>> {
         other => (None, other),
     };
     let LogicalPlan::Subquery(sq) = sub else { return Ok(None) };
+    if let Some(bound) = binding(&sq.subquery) {
+        let left: Vec<Expr> = j.left.schema().columns().into_iter().map(Expr::Column).collect();
+        let right = bound
+            .into_iter()
+            .map(|(e, name)| match &alias {
+                Some(a) => Ok(unouter(e)?.alias_qualified(Some(TableReference::from(a.clone())), name)),
+                None => Ok(unouter(e)?.alias(name)),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(Some(LogicalPlanBuilder::from((*j.left).clone()).project(left.into_iter().chain(right))?.build()?));
+    }
     let Some(t) = top_n(&sq.subquery) else { return Ok(None) };
     if !qualifiers(&j.left).is_disjoint(&qualifiers(&t.relation)) {
         return Ok(None);

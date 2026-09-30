@@ -72,3 +72,23 @@ fn a_lateral_join_with_a_limit_of_two_and_a_cross_join_drops_the_unmatched() {
         ]
     );
 }
+
+/// A lateral with no relation of its own names a value computed from the outer row, one row per
+/// outer row: the network nest's reward fold binds its per-event reward this way.
+#[test]
+fn a_lateral_binding_is_a_column_of_the_outer_row() {
+    let sql = format!(
+        "{DATA} SELECT c.id, c.b, r.x, r.y FROM c CROSS JOIN LATERAL \
+         (SELECT CASE WHEN c.b > 20 THEN c.b * 2 ELSE 0 END AS x, c.id + 100 AS y) r ORDER BY c.id, c.b"
+    );
+    assert_eq!(
+        rows(&sql),
+        vec![
+            json!({"id": 1, "b": 10, "x": 0, "y": 101}),
+            json!({"id": 1, "b": 10, "x": 0, "y": 101}),
+            json!({"id": 1, "b": 30, "x": 60, "y": 101}),
+            json!({"id": 2, "b": 10, "x": 0, "y": 102}),
+            json!({"id": 3, "b": 50, "x": 100, "y": 103}),
+        ]
+    );
+}
