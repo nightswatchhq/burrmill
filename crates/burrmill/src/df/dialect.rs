@@ -1610,24 +1610,43 @@ fn try_as_duckdb(e: Expr) -> DFResult<Transformed<Expr>> {
     }))
 }
 
-/// Every cast and call under a `TRY`, each failing to NULL: DuckDB's covers the whole expression, so
-/// `TRY(CAST(decode(unhex(x)) AS VARCHAR))` is NULL for hex that is not hex, not only for a bad cast.
+/// The calls under a `TRY`, each failing to NULL, as far as that is certainly DuckDB's answer: its
+/// `TRY` makes the whole expression NULL, which a NULL argument does only through a function that
+/// returns NULL for one. So `TRY(CAST(decode(unhex(x)) AS VARCHAR))` is NULL for hex that is not
+/// hex; below a function not known to be strict (`coalesce`, a struct) nothing is touched, and an
+/// inner cast stays a cast, failing loudly rather than tainting what is summed downstream.
 fn try_within(e: &Expr) -> Expr {
-    match e {
-        Expr::Alias(a) => try_within(&a.expr),
-        Expr::Cast(Cast { expr, field }) => Expr::TryCast(TryCast::new(
-            Box::new(try_within(expr)),
-            field.data_type().clone(),
-        )),
-        Expr::ScalarFunction(inner) => {
-            Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
-                Arc::new(ScalarUDF::from(super::duckfns::TryCall {
-                    inner: Arc::clone(&inner.func),
-                })),
-                inner.args.iter().map(try_within).collect(),
-            ))
+    const STRICT: &[&str] = &[
+        "decode", "from_hex", "hex", "substr", "substring", "lower", "upper", "length",
+    ];
+    fn call(e: &Expr) -> Expr {
+        match e {
+            Expr::Alias(a) => call(&a.expr),
+            Expr::Cast(Cast { expr, field }) => Expr::Cast(Cast::new(
+                Box::new(call(expr)),
+                field.data_type().clone(),
+            )),
+            Expr::ScalarFunction(inner) => {
+                let strict = STRICT.contains(&inner.func.name());
+                Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+                    Arc::new(ScalarUDF::from(super::duckfns::TryCall {
+                        inner: Arc::clone(&inner.func),
+                    })),
+                    if strict {
+                        inner.args.iter().map(call).collect()
+                    } else {
+                        inner.args.clone()
+                    },
+                ))
+            }
+            other => other.clone(),
         }
-        other => other.clone(),
+    }
+    match e {
+        Expr::Cast(Cast { expr, field }) => {
+            Expr::TryCast(TryCast::new(Box::new(call(expr)), field.data_type().clone()))
+        }
+        e => call(e),
     }
 }
 

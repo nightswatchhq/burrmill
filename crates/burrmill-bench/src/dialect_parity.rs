@@ -93,6 +93,8 @@ const CORPUS: &[&str] = &[
     "SELECT DATE '1970-01-01' + CAST(d AS INTEGER) AS day FROM range(106750, 106755) t(d) ORDER BY 1",
     "SELECT DATE '2024-03-01' - 1 AS a, 5 + DATE '2024-02-27' AS b, DATE '1970-01-01' + 115739 AS c, DATE '2024-03-01' + CAST(-366 AS INTEGER) AS d",
     "SELECT h, TRY(CAST(decode(unhex(substr(h, 3))) AS VARCHAR)) AS s FROM (VALUES ('0x6162'), ('0xzz'), ('0xff'), ('0x'), (NULL)) t(h) ORDER BY h",
+    "SELECT h, count(TRY(CAST(decode(unhex(substr(h, 1))) AS VARCHAR))) OVER () AS n FROM (VALUES ('6162'), ('zz'), ('ff')) t(h) ORDER BY h",
+    "SELECT sum(length(TRY(CAST(decode(unhex(substr(h, 3))) AS VARCHAR)))) AS s, count(*) AS n FROM (VALUES ('0x6162'), ('0xzz'), ('0xff')) t(h)",
     "SELECT count(*) n, min(day) lo, max(day) hi FROM (SELECT DATE '1970-01-01' + CAST(d AS INTEGER) AS day FROM range(11575, 115740) t(d)) x",
     "SELECT DATE '2024-03-01' + 2147483647",
     "SELECT CAST(('0x' || substr('000000000000000000000000000000000000000000000000000000000000002a', 49, 16)) AS BIGINT) AS n",
