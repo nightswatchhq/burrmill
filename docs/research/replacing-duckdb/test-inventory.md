@@ -60,10 +60,11 @@ which builds the `folds` feature the earlier flips did not:
 `current_setting`, which Burrmill does not have. LEAVES for now; it moves with the folds, whose
 budget and lockdown need a Burrmill form of the same check.
 
-Also found, not chased: a hot JSON row missing a numeric field reads as 0 on Burrmill where
-DuckDB's `read_json` gives NULL. And `serve::tests::a_statement_reading_outside_the_nest_is_refused_and_never_remembered`
-counts the process-wide memo across an `.await`, so a parallel test that remembers an answer fails
-it (5 against 3 once in a full run, 3/3 alone); the refusal it guards held.
+Also found: a hot JSON row missing a numeric field read as 0 on Burrmill where DuckDB's `read_json`
+gives NULL; fixed 2026-09-30 (`df_host::a_hot_row_missing_a_counter_reads_null`). And
+`serve::tests::a_statement_reading_outside_the_nest_is_refused_and_never_remembered` counts the
+process-wide memo across an `.await`, so a parallel test that remembers an answer fails it (5
+against 3 once in a full run, 3/3 alone); the refusal it guards held.
 
 ## The 69 that touch DuckDB directly
 
@@ -90,14 +91,21 @@ cross-nest `conn()` schema test (LEAVES), `entities::the_port_gates_every_statem
   an invented `read_totally_new_format`, a path or URL in table position) were in no Burrmill
   corpus. Now run on both walks (nuthatch `pete/burrmill-watchdog`, `allowlist_sessions`).
 - `collect_separates_a_bind_failure_from_a_read_failure`: Burrmill's `collect` must sort errors into
-  `Binding` and `Executing` as DuckDB's does, or the degradation sweep amplifies.
+  `Binding` and `Executing` as DuckDB's does, or the degradation sweep amplifies. **It did not**
+  (2026-10-01): an unknown column came back as a substrate error, so nuthatch would have swept the
+  table's segments for corruption over a typo. Burrmill now has `BurrmillError::Plan` for anything
+  that fails before execution (`e9440a1`), nuthatch maps it to `Binding`, and the test runs on both
+  engines (nuthatch `e472d1f`); red without the mapping.
 - `a_case_guard_does_not_decode_an_empty_predeployment_word`: a `CASE` must not evaluate its untaken
-  UDF branch on Burrmill either.
+  UDF branch on Burrmill either. Holds; a Burrmill twin with the real `nuthatch_uint256` (`e472d1f`).
 - `unconfigured_duckdb_still_opens_at_todays_walls`: Burrmill's default memory, threads and spill.
+  Twin `unconfigured_burrmill_opens_at_todays_walls` (`e472d1f`): 512 MiB, 2 threads, the private
+  spill directory with a 100 GiB cap. DuckDB reads `512MB` as 488 MiB, so Burrmill's wall is 5% higher.
 - The FIXTURE tests that prove "footer intact, pages corrupt" with DuckDB's `read_parquet` bind:
   where Burrmill draws the line between binding and reading may differ, so the premise is re-checked,
   not translated.
 - `a_query_that_names_no_table_reaches_no_segment` asserts DuckDB's "Conversion Error" wording.
+  Passes with Burrmill primary as it stands: Burrmill restates the cast error in DuckDB's words.
 
 **Re-pointed, 2026-09-30** (nuthatch `pete/burrmill-watchdog`): seven STANDIN tests now run their
 body once per engine through `each_engine`, from their own setup: the dependency closure, the fact
