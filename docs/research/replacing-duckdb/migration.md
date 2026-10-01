@@ -374,11 +374,18 @@ exists, DIPS, GNS, QoS, allocations, platform; DuckDB checks for about a month a
 lines instead. The public account is nuthatch-indexer.com
 `/blog/switching-the-engine-under-a-live-indexer`.
 
+**Changed again 2026-10-01 (Chief):** no month either. The live subgraphs are the judge, a nest
+rolls on `lodestar-parity.sh` before and after, and DuckDB leaves as soon as every nest runs
+without it. DIPS, GNS, allocations and QoS were served by Burrmill by 18:46 UTC that day.
+
 ## Phase 3b: removal
 
 - [ ] One clean release on Burrmill across the fleet.
 - [ ] `duckdb` out of `Cargo.toml`, `deny.toml` and the Dockerfile. The generated corpus, the `.slt`
-      files and the reference oracle stay as the regression suite.
+      files and the reference oracle stay as the regression suite. **Written 2026-10-02**
+      (nuthatch#1626, not merged): out of the manifest and lockfile, the engine and shadow files,
+      Dune and the spike deleted, 1,880 and 1,989 tests passing on the ThinkPad. The Dockerfile
+      never had a toolchain (it copies the release binary); the binary no longer links libstdc++.
 - [ ] Footprint and build time re-measured on nuthatch itself (burrmill#7's consumer half,
       nuthatch#1428).
 - [ ] muster updated: versions, the runbook's roll and roll-back, and the `.duckdb/` line under

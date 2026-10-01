@@ -4,6 +4,61 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## DuckDB out of nuthatch's tree — 2026-10-02
+
+nuthatch#1626 (`pete/duckdb-removal`, three commits on main): `duckdb` is out of `Cargo.toml` and
+the lockfile, Burrmill is a plain dependency pinned at `17e0a22`, and the `shadow-burrmill` feature
+is gone. 92 files, 971 lines in and 23,988 out. Not merged; Chief merges.
+
+**What Burrmill as the default showed** (1,948 passed and 7 failed before any fix):
+
+- `typeof` did not exist. Added here (`17e0a22`): the type as DuckDB names it, `"NULL"` quoted as
+  DuckDB quotes it. A `HUGEINT` is carried as `DECIMAL(38,0)` and is named so, which nuthatch's two
+  tests now expect. A bare `1` is `BIGINT` here and `INTEGER` in DuckDB: listed in `KNOWN`.
+  dialect-parity 273/273.
+- A maintained relation lost its declared types: `load_relation` staged every column as text. It
+  now validates each row against the plan's type as DuckDB's appender did, registers the rows as
+  text under `<name>__raw` and a view under the name that casts each column, with a marker column
+  so an empty relation exists with no rows. `drop_relation` is implemented, so a pooled session
+  stops answering for an entity that has since faulted.
+- An empty answer had no column names: `collect` read them from the first batch. It asks
+  `describe` when there was none.
+- A statement past the spill cap was stopped by DataFusion's disk manager in 0.3 s, well inside
+  the watchdog's 250 ms poll, with a message naming `datafusion.runtime.max_temp_directory_size`.
+  nuthatch answers that as its own `QuerySpillExceeded`, so `/sql` still says 507.
+
+**What went with DuckDB:** `engine_duck.rs` (1,267 lines), `engine_shadow.rs` (1,074), the shadow
+and checked modes and their replay test, `nuthatch emit dune` with `dune_views.rs` and
+`dune_emit.rs` (Chief, 2026-09-28: Dune support is deprecated), the RFC-0041 spike and
+`bench authored-entity`, the two `duck_oracle` test modules, `tools/df-gate` and one `slice6` crate,
+`tests/duckdb_containment.rs` and `duckdb_extensions_are_static.rs`. `NUTHATCH_ENGINE=duckdb`,
+`shadow` or `checked` is refused at startup; unset or `burrmill` starts. DIPS runs `checked` and
+needs that line changed before it takes the build.
+
+**Two things that passed and should not have.** `tests/abi_floors_documented.rs` required the
+README to state a libstdc++ floor "because it embeds DuckDB", and went on passing with DuckDB
+gone, because the README still said so. The binary links `libc`, `libm` and `libgcc` now (`ldd`
+on the ThinkPad build); README, `install.md` and the test say that. And
+`tests/engine_batch_boundary.rs` sized its cases at DuckDB's 2,048-row vector, 5,000 at most, so
+on DataFusion's 8,192-row batches no case crossed a boundary. Resized to 8,191, 8,192, 8,193 and
+20,000, the grouped case to 16,391. All pass.
+
+**Suite on the ThinkPad**, release, `TZ=UTC`: 1,880 passed on default features and 1,989 with
+`graph`, none failing (each assembled from a full run and a rerun of the one documentation check
+whose allowlist count was wrong). `clippy --all-targets -D warnings` clean under default, `graph`,
+`folds`, `counter`, `exex` and `postgres-store`. Not run here: the Postgres, MinIO and Trino jobs,
+and the footprint jobs, which CI runs and which measure a Burrmill binary for the first time.
+
+**Three runs were lost** to rsyncing a newer tree under a build still in its second pass; the
+failures belonged to no tree. Memory note `rsync-under-a-running-build`.
+
+**Owed.** The legacy staking archive (3.8.4, `serve`) and `data-services-nest` (3.12.1) are still
+on DuckDB and have not been replayed. The glibc floor (2.34) in the README was measured on the
+4.0 artifact and wants re-measuring on the release build. Release notes for 4.1. Day pruning
+through a one-row join side. muster.
+
+---
+
 ## Four nests served by Burrmill; what each one took — 2026-10-01
 
 Chief, during the day: the live subgraphs are the judge, not DuckDB; no month of checking; every
