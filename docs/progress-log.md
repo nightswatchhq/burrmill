@@ -4,6 +4,47 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Checked mode, the stack on main, and what the allocations nest needs — 2026-10-01
+
+Chief, the same day: migrate now and troubleshoot after, Lodestar being the only consumer; DuckDB
+stays as the checker for about a month. So the shadow is turned round. `NUTHATCH_ENGINE=checked`
+(nuthatch#1615) serves Burrmill and runs DuckDB behind it; a record still reads DuckDB first, so the
+kinds mean what they meant. The stack is on nuthatch main as #1613 (`ee84d3c`), with #1612 for the
+racing test. Review found the cold exposure and velocity folds counting a transfer past 38 digits
+that the hot replay drops, as main's `COUNT(*)` always had; both now filter it.
+
+**The allocations copy, served by Burrmill** (ThinkPad, `gan-portable`, 22 views and 81 dashboard
+statements through `query_guarded`, checked mode). No `Rows` record in any of 16 replays. What
+differs is memory refusals, and they follow the thread count, not the limit:
+
+| limit | analytics threads | runs | runs with a refusal | refusals per run |
+|---:|---:|---:|---:|---|
+| 512 MB | 2 | 1 | 1 | 22, and one statement that spilled to the 600 s guard instead |
+| 2 GB | 2 | 4 | 4 | 6, 1, 2, 1 |
+| 2.5 GB | 2 | 1 | 1 | 1 |
+| 3 GB | 2 | 4 | 3 | 1, 2, 0, 1 |
+| 2 GB | 8 | 3 | 0 | |
+| 3 GB | 8 | 3 | 0 | |
+
+At two threads the refused statement changes from run to run (`lodestar_network`,
+`lodestar_indexers`, `lodestar_delegator_stakes`, `lodestar_indexer_daily`, `lodestar_indexer_pool`),
+one at 2.5 GB with the process at 1,098 MB resident: a `RepartitionExec` holding 657 MB, spillable
+and never asked to spill under the greedy pool, beside a `HashJoinInput` that cannot. Why eight
+partitions do not do this is not established. The fair pool is not the way out (27 and 29 September:
+more refusals, and the lost wakeup). So the allocations nest takes 2 GB **and**
+`NUTHATCH_ANALYTICS_THREADS=8`; 2 GB alone, the figure decided on 2026-09-29, refuses on every run at
+nuthatch's default of two. The 27 September "2 at 2 GB" was at 8 threads without spill and is not
+comparable with these.
+
+The tally writes at 1, 2, 4, … and every thousandth, so its last line is a floor: 64 after a
+103-statement replay.
+
+DIPS: `nuthatch 4.0.0-checked.1` built on the ThinkPad from main `4722f56` plus #1615 (sha256
+`caac5e12…`); the roll and its three roll-backs are muster `helsinki/scripts/roll-dips-checked*.sh`.
+Not rolled yet. No rehearsal on a DIPS copy: there is none on the ThinkPad.
+
+---
+
 ## The nuthatch stack merged with main; DIPS's shadow log says nothing either way — 2026-10-01
 
 **The merge.** `pete/burrmill-watchdog` was 34 commits ahead of nuthatch `main` and 167 behind, with

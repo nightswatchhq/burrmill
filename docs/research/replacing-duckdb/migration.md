@@ -291,7 +291,10 @@ an unconditional dependency (`bundled`, `parquet`, `json`), and `graph` adds `vs
       (`df/printf.rs`), a subset of fmt's specs measured against DuckDB, including its
       refusals (`%s` of a number, `%f` of an integer), `%d` of a boolean and `%x` of a negative
       as 64-bit two's complement; `dialect-parity` 239/239.
-- [ ] **Allocations nest memory**: ordered scans, the chain-order window rule, spilling and the view
+- [ ] **Allocations nest memory, measured 2026-10-01** (progress log): 2 GB refuses on every run at
+      the default two analytics threads and on none of six at eight, so the nest takes
+      `NUTHATCH_ANALYTICS_THREADS=8` with the 2 GB. Earlier:
+      ordered scans, the chain-order window rule, spilling and the view
       rewrites (`ledger-windows.md`) landed; `lodestar_delegator_stakes` still at 1 GB.
       **Decided 2026-09-29 (Chief): raise the figure, no spilling work.** `analytics.memory_limit`
       about 2 GB for the allocations nest and its MemoryHigh above RFC-0047's shipped 2 GiB split, so
@@ -363,6 +366,13 @@ DuckDB too. Owed: the contract takes 116 s on Burrmill against 32 s on DuckDB.
       through one full cycle. Platform image last, pools first, then per-nest containers.
 - [ ] Roll-back rehearsed once on the ThinkPad before the first Helsinki roll.
       With the switch, roll-back is `NUTHATCH_ENGINE=shadow` (or `duckdb`) and a restart.
+
+**Changed 2026-10-01 (Chief):** no shadow release cycle per nest. Each nest rolls to
+`NUTHATCH_ENGINE=checked` (Burrmill served, DuckDB checking, nuthatch#1615) as soon as the build
+exists, DIPS, GNS, QoS, allocations, platform; DuckDB checks for about a month and leaves
+`Cargo.toml` around early November. Gate 2 is read from the checked log's differences and `Tally`
+lines instead. The public account is nuthatch-indexer.com
+`/blog/switching-the-engine-under-a-live-indexer`.
 
 ## Phase 3b: removal
 
