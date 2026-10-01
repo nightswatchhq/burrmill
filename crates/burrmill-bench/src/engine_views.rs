@@ -286,6 +286,35 @@ pub fn analyze(root: &str, view: &str) -> anyhow::Result<()> {
     .expect("analyze thread")
 }
 
+/// `engine-explain <nest> <view>`: the plan of one authored view through `Engine`, not run. For a
+/// view that cannot be run to completion to be analysed.
+pub fn explain(root: &str, view: &str) -> anyhow::Result<()> {
+    let nest = load_nest(Path::new(root))?;
+    let root_owned = Path::new(root).to_path_buf();
+    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let view = view.to_string();
+    std::thread::spawn(move || -> anyhow::Result<()> {
+        let mut e = burrmill::Engine::open_nest(&root_owned)?;
+        for (n, b) in &views {
+            let _ = e.register_view(n, b);
+        }
+        use arrow::array::Array;
+        for b in e.sql(&format!("EXPLAIN SELECT * FROM \"{view}\""))? {
+            let kind = arrow::compute::cast(b.column(0), &arrow::datatypes::DataType::Utf8)?;
+            let kind = kind.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+            let plan = arrow::compute::cast(b.column(1), &arrow::datatypes::DataType::Utf8)?;
+            let plan = plan.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+            for i in 0..plan.len() {
+                println!("== {}\n{}", kind.value(i), plan.value(i));
+            }
+        }
+        std::thread::spawn(move || drop(e)).join().expect("drop");
+        Ok(())
+    })
+    .join()
+    .expect("explain thread")
+}
+
 /// `engine-sql <nest> <sql-file>...`: each file's statement on both engines over the nest with its
 /// views, as a sorted row multiset in nuthatch's JSON, with warm medians of 5.
 pub fn sql_files(root: &str, files: &[String]) -> anyhow::Result<()> {

@@ -276,6 +276,13 @@ impl MiniSession {
             physical_optimizers: PhysicalOptimizer::new()
                 .rules
                 .into_iter()
+                // Straight after DataFusion's own choice of sides, which without statistics is none.
+                .flat_map(|r| {
+                    let after_selection = r.name() == "join_selection";
+                    std::iter::once(r).chain(after_selection.then(|| {
+                        Arc::new(super::buildside::BuildOnSmaller) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+                    }))
+                })
                 .chain([
                     Arc::new(super::rangejoin::RangeJoin) as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
                     Arc::new(super::smallinputs::SmallInputs),

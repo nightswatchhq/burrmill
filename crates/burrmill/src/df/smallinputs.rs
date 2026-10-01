@@ -30,7 +30,7 @@ pub const SMALL_BYTES: u64 = 4 << 20;
 pub struct SmallInputs;
 
 /// Bytes the scans under `p` read, or `None` if one cannot be measured.
-fn bytes_read(p: &Arc<dyn ExecutionPlan>) -> Option<u64> {
+pub(super) fn bytes_read(p: &Arc<dyn ExecutionPlan>) -> Option<u64> {
     if let Some(d) = p.downcast_ref::<DataSourceExec>() {
         if let Some(f) = d.data_source().downcast_ref::<FileScanConfig>() {
             return Some(f.file_groups.iter().flat_map(|g| g.iter()).map(|f| f.object_meta.size).sum());

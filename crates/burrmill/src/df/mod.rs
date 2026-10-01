@@ -39,6 +39,7 @@ mod lists;
 mod names;
 mod ordered_agg;
 mod printf;
+mod buildside;
 mod rangejoin;
 mod rule;
 mod session;
