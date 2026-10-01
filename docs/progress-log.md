@@ -4,6 +4,69 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Four nests served by Burrmill; what each one took — 2026-10-01
+
+Chief, during the day: the live subgraphs are the judge, not DuckDB; no month of checking; every
+Lodestar nest on the latest build and on Burrmill before DuckDB leaves the binary.
+
+| nest | served by Burrmill since (UTC) | build | settings |
+|---|---|---|---|
+| DIPS | 11:09 | 4.0.0-checked.1 | checked, defaults |
+| GNS | 15:08 (11:11 to 11:37 first) | 4.0.0-checked.1 | Burrmill alone, defaults |
+| allocations | 15:44 | 4.0.0-checked.2 | 2 permits x 2 GB, 8 threads, 6 GiB wall |
+| QoS (ThinkPad) | 18:46 | 4.0.0-checked.3 | 2 permits x 2 GB, 8 threads, 6 GiB wall |
+
+Still on DuckDB: the legacy archive (3.8.4, `serve`) and `data-services-nest` (3.12.1).
+
+**GNS** came off Burrmill for 3.5 h over five `Rows` records, all one kittiwake query taking the
+newest subgraph per deployment by `created_at` alone; the one checked was two subgraphs at
+1715090775, each engine taking a different one. Fixed in the query (kittiwake#193), not classified:
+the checker cannot see `created_at`.
+
+**Allocations.** Every replay before 15:00 ran `gan-portable`, whose views were rewritten on
+2026-09-24 on a branch never pushed. Production's views (`ASOF`, `LATERAL`, list lambdas) do not
+define on Burrmill: six views absent. The seven commits were rebased onto the nest's main
+(graph-allocations-nest#28), each rewrite compared whole against its original on DuckDB (23/23,
+`lodestar_indexer_ledger` 1,678,525 rows), and put on the nest before the engine changed.
+`scripts/lodestar-parity.sh` at pinned block 510,658,602 prints the same on DuckDB with the
+originals, DuckDB with the rewrites and Burrmill with the rewrites: rewards 203/203 epochs, seven
+fee epochs the nest books to the neighbouring epoch (each group sums to the subgraph's, to the wei),
+nine known self-collections. The nest ran 4 permits x 256 MB, not the 2 x 512 MB muster records; at
+1 GB Burrmill refuses 12-13 of the dashboard's statements and at 768 MB 18, so the limit stays at
+2 GB and the permits went to two. Sweep through `/sql` on the copy (`sql_sweep_over_a_nest`,
+whole views): DuckDB 4 x 256 MB 29/112/123 qps at 1/4/8 clients, p99 128-184 ms; Burrmill
+1 x 2 GB 12/14/15 qps with 87 and 311 busy; 2 x 2 GB 11/26/28, 19 and 116 busy; 4 x 2 GB
+11/49/49, 0 and 31 busy; p99 about 620 ms. About 2.5x DuckDB's time a statement there.
+Three attempts: 14.5 min down on the first (a later drop-in put the permits back to four and the
+gate refused; the script waited its full fifteen minutes on a nest failing in fifteen seconds), a
+minute on the second (the roll worked and the script undid it: `journalctl | grep -q` under
+`pipefail`), none wasted on the third.
+
+**QoS** was replayed before it was touched and 5 of 23 views answered. Seven faults, in order:
+`unhex`; `DATE + integer` past 2262 (the days became an interval of nanoseconds); `TRY` covering
+only its outermost cast; every hash join building on the first table named, the 74-million-row one
+(`BuildOnSmaller`: killed at 60 GB, then 30 s with 3-4 MB of build); `unnest` tainting every column
+for the checked rule; `QUALIFY k = min(k) OVER (PARTITION BY ...)` sorting the whole input
+(`PartitionExtreme`: 600 s, then 40 s); `count(DISTINCT (a, b, c))` beside another distinct kept as
+`ScalarValue` structs (`DistinctRows`: past 500 s for a day, then 4 s). Lodestar's eight statements,
+one day each, bench at 32 threads and no bound: DuckDB 0.6-0.7 s, Burrmill 3.2-4.1 s, equal to
+3e-15 relative. Through `query_guarded` at 30 s: 7 of 8 at 512 MB (the indexer-daily one refused in
+a sort merge), 7 of 8 at 2 threads and 2 GB (over the guard), 8 of 8 at 8 threads and 1 or 2 GB at
+about 4.5 s. Whole views still fail at 512 MB (spill past 2 GB, or 600 s). Burrmill reads every
+segment for a one-day statement where DuckDB reads that day's: the range in the join filter is not
+pushed to the scan. Owed.
+
+dialect-parity 269/269 after all of it; the allocations views unchanged by each rule.
+
+**Owed.** Day pruning through a one-row join side. The shadow's `FloatOrder` rounds each side to
+twelve digits and calls a pair straddling a rounding boundary `Rows`
+(747.756973491 against 747.756973490); compare relatively. nest#24 (rewards denylist) is merged
+and not live: it needs a re-index. The seven fee epochs against the subgraph, a views matter.
+Removal: with Burrmill the default engine, 2,112 passed and 8 failed (`typeof`; an entity
+relation loaded as text; an empty answer without column names; three tests of DuckDB's own).
+
+---
+
 ## Checked mode, the stack on main, and what the allocations nest needs — 2026-10-01
 
 Chief, the same day: migrate now and troubleshoot after, Lodestar being the only consumer; DuckDB
