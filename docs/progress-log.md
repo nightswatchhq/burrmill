@@ -23,8 +23,8 @@ is gone. 92 files, 971 lines in and 23,988 out. Not merged; Chief merges.
   stops answering for an entity that has since faulted.
 - An empty answer had no column names: `collect` read them from the first batch. It asks
   `describe` when there was none.
-- A statement past the spill cap was stopped by DataFusion's disk manager in 0.3 s, well inside
-  the watchdog's 250 ms poll, with a message naming `datafusion.runtime.max_temp_directory_size`.
+- A statement past the spill cap was stopped by DataFusion's disk manager itself, the whole test
+  over in 0.28 s, with a message naming `datafusion.runtime.max_temp_directory_size`.
   nuthatch answers that as its own `QuerySpillExceeded`, so `/sql` still says 507.
 
 **What went with DuckDB:** `engine_duck.rs` (1,267 lines), `engine_shadow.rs` (1,074), the shadow
