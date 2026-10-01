@@ -1596,23 +1596,39 @@ fn try_as_duckdb(e: Expr) -> DFResult<Transformed<Expr>> {
     if f.func.name() != "try" || f.args.len() != 1 {
         return Ok(Transformed::no(e));
     }
-    Ok(Transformed::yes(match &f.args[0] {
-        Expr::Cast(Cast { expr, field }) => {
-            Expr::TryCast(TryCast::new(expr.clone(), field.data_type().clone()))
-        }
+    // A function under another of its names arrives aliased (`unhex` is `from_hex`).
+    let mut arg = &f.args[0];
+    while let Expr::Alias(a) = arg {
+        arg = &a.expr;
+    }
+    Ok(Transformed::yes(match arg {
         x @ (Expr::TryCast(_) | Expr::Column(_) | Expr::Literal(..)) => x.clone(),
+        x @ (Expr::Cast(_) | Expr::ScalarFunction(_)) => try_within(x),
+        other => {
+            return plan_err!("TRY is supported here around a cast or a function call, not {other}");
+        }
+    }))
+}
+
+/// Every cast and call under a `TRY`, each failing to NULL: DuckDB's covers the whole expression, so
+/// `TRY(CAST(decode(unhex(x)) AS VARCHAR))` is NULL for hex that is not hex, not only for a bad cast.
+fn try_within(e: &Expr) -> Expr {
+    match e {
+        Expr::Alias(a) => try_within(&a.expr),
+        Expr::Cast(Cast { expr, field }) => Expr::TryCast(TryCast::new(
+            Box::new(try_within(expr)),
+            field.data_type().clone(),
+        )),
         Expr::ScalarFunction(inner) => {
             Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
                 Arc::new(ScalarUDF::from(super::duckfns::TryCall {
                     inner: Arc::clone(&inner.func),
                 })),
-                inner.args.clone(),
+                inner.args.iter().map(try_within).collect(),
             ))
         }
-        other => {
-            return plan_err!("TRY is supported here around a cast or a function call, not {other}");
-        }
-    }))
+        other => other.clone(),
+    }
 }
 
 /// DataFusion's logical planner proves some `CASE` values never NULL from which branches are
@@ -1689,6 +1705,48 @@ fn dates_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
                     && !inner.get_type(schema).is_ok_and(|t| t.is_integer())
             };
             let (lt, rt) = (lt, rt);
+            // Coercion makes those days an interval of nanoseconds, which overflows past 106,751 of
+            // them (the year 2262). Days are what a DATE counts, so add them as days.
+            let days = |e: &Expr| {
+                let mut inner = e;
+                while let Expr::Cast(Cast { expr, .. }) = inner {
+                    inner = expr;
+                }
+                match inner {
+                    Expr::BinaryExpr(BinaryExpr {
+                        left,
+                        op: Operator::Multiply,
+                        right,
+                    }) if matches!(
+                        right.as_ref(),
+                        Expr::Literal(v, _) if v.to_string() == "86400"
+                    ) && left.get_type(schema).is_ok_and(|t| t.is_integer()) =>
+                    {
+                        Some(left.as_ref().clone())
+                    }
+                    _ => None,
+                }
+            };
+            let add_days = |date: Expr, op: Operator, n: Expr| {
+                let cast = |e: Expr, t: DataType| Expr::Cast(Cast::new(Box::new(e), t));
+                let sum = Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(cast(cast(date, DataType::Int32), DataType::Int64)),
+                    op,
+                    Box::new(cast(n, DataType::Int64)),
+                ));
+                cast(cast(sum, DataType::Int32), DataType::Date32)
+            };
+            if lt == DataType::Date32 && matches!(rt, DataType::Interval(_)) {
+                if let Some(n) = days(&right) {
+                    return Ok(Transformed::yes(add_days(*left, op, n)));
+                }
+            }
+            if rt == DataType::Date32 && matches!(lt, DataType::Interval(_)) && op == Operator::Plus
+            {
+                if let Some(n) = days(&left) {
+                    return Ok(Transformed::yes(add_days(*right, op, n)));
+                }
+            }
             if date(&lt) && interval(&rt, &right) {
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(micros(*left)),

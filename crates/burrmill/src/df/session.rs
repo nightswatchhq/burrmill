@@ -151,6 +151,7 @@ impl MiniSession {
             scalar.insert(f.name().to_string(), f);
         }
         let from_hex = super::dialect::FromHex::udf();
+        scalar.insert("unhex".to_string(), Arc::clone(&from_hex));
         scalar.insert(from_hex.name().to_string(), from_hex);
         let round = super::dialect::RoundInt::udf();
         scalar.insert(round.name().to_string(), round);
