@@ -51,6 +51,31 @@ whose allowlist count was wrong). `clippy --all-targets -D warnings` clean under
 `folds`, `counter`, `exex` and `postgres-store`. Not run here: the Postgres, MinIO and Trino jobs,
 and the footprint jobs, which CI runs and which measure a Burrmill binary for the first time.
 
+**What CI found that the ThinkPad could not.** CI tests an unoptimised build; I had run release.
+The graph job failed two router tests of the network endpoint on "exceeded the 29s time budget".
+Each of those tests takes 42 and 47 s alone in a release build on Burrmill, every query planning
+through about thirty views; unoptimised on four cores one query passes both the 30 s budget and
+the fixture's 60 s freshness limit. Measured before choosing, on the ThinkPad, `-c 0-3` to stand
+in for a runner (its unoptimised library suite took 211 s there against CI's 255):
+
+| dependencies in the test profile | build, CPU-minutes | the two tests alone |
+|---|---:|---|
+| unoptimised | 14 | both fail at 29 s |
+| all at `opt-level = 1` | 75 | 67 s, 60 s |
+| all at `opt-level = 2` | 113 | 63 s, 54 s |
+| Burrmill, DataFusion, sqlparser at 2 | 52 | 84 s, 76 s; one still fails on four cores |
+| the same, `debug-assertions = false`, at 1 | 31 | 95 s, 95 s (with the allowance below) |
+| release | | 47 s, 42 s |
+
+No profile setting buys enough, and DataFusion's per-rule invariant check in debug builds, which
+I suspected, is not the bulk of it. The stacks (gdb, six samples) sit in physical planning:
+`equivalence::properties`, `Statistics`, `ChildStats`. So the router tests take ten times the
+budget under `cfg!(test)` and their fixtures a 600 s freshness limit, as
+`tests/network_contract.rs` already allows itself for the same views. With that the whole `graph`
+suite passes unoptimised on four cores: 1,989, in 21 minutes of which the network contract is 646 s.
+The graph job was 13 minutes. **This is the planning cost on deep views, and it is the engine's
+to fix**: DataFusion 56's `EnsureRequirements` change, and whatever is left after it.
+
 **Three runs were lost** to rsyncing a newer tree under a build still in its second pass; the
 failures belonged to no tree. Memory note `rsync-under-a-running-build`.
 
