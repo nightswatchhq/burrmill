@@ -4,6 +4,41 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## The nuthatch stack merged with main; DIPS's shadow log says nothing either way — 2026-10-01
+
+**The merge.** `pete/burrmill-watchdog` was 34 commits ahead of nuthatch `main` and 167 behind, with
+sixteen of main's in the same entity files. Merged as nuthatch `34fc981`: six conflict hunks in four
+files, one of them both sides fixing the dead circuit at the tip. Three things the text of the merge
+did not show:
+
+- Main's `entities::typed_for_check` (#1587) parsed through `json_serialize_sql` and
+  `json_deserialize_sql` on a fresh DuckDB connection, new parser-role surface since the inventory at
+  `711ae88`. Now sqlparser (`visit_relations_mut` drops the qualifiers); no production DuckDB in
+  `entities.rs` again.
+- Main gave the spill cap a 2 GB default (`cd03e81`); Burrmill's budget still defaulted to 100 GB.
+  It takes `spill_cap_bytes` now, one cap for both engines.
+- `Session::collect` returns `Collected` (#1609); six call sites followed.
+
+On the ThinkPad, default features and `shadow-burrmill,graph`: integration 394/394 and 397/397,
+network contract 21/21, library 1,512 and 1,658 passed with one failure on each,
+`readers_racing_folds_never_answer_short_and_leave_no_file_behind`. Not the merge's: untouched
+`origin/main` and the untouched branch fail it too, 2 runs of 2 each, and it passes 5 of 5 alone. It
+asserts the readers got more than 120 answers in while 120 seals ran, which a 32-core box running
+the whole library does not grant. Owed on main, apart from this stack. Clippy `-D warnings` and fmt
+clean on both feature sets.
+
+**The DIPS shadow log.** After three days on `3.12.1-shadow.1` the file holds one line, the planted
+`printf` refusal. The shadow wrote differences only, so that reads the same for a nest that agreed
+on every statement and one that was never sent any; the journal could not say either (a grep for
+`shadow` matched the binary's own name on every line, 1,654 of them). Gate 2's first leg cannot be
+read off that file. The shadow now counts every statement (nuthatch `5ffed4f`): `agreed`,
+`both_refused`, `both_truncated`, `differed`, `skipped`, as `kind: "Tally"` lines in the same file
+at 1, 2, 4, 8, … statements and every thousandth, and in the log. The DIPS binary is also built
+from `711ae88`, before every Burrmill fix since 2026-09-28, so the release cycle is counted from a
+fresh shadow build off the merged stack, not from 2026-09-28.
+
+---
+
 ## Where the network nest's planning time goes — 2026-10-01
 
 The network contract took 116 s on Burrmill against 32 s on DuckDB, 3.5-4.5x on every heavy test

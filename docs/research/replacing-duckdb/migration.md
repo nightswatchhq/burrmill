@@ -170,6 +170,11 @@ Burrmill session exists.
       permit, `MemoryHigh=2G`; two faults in the prepared roll fixed first (two permits breach the
       two-engine budget; `ProtectSystem=strict` made the log read-only). The log's first record is a
       planted `printf` refusal, not traffic; it also names a real gap: Burrmill has no `printf`.
+      **2026-10-01:** still one line, and no evidence either way: the shadow recorded differences
+      only, so an empty log is also what a nest nobody queried writes. It counts every statement
+      now (`kind: "Tally"` lines, nuthatch `5ffed4f`), on the stack merged with main (`34fc981`).
+      The cycle restarts from a shadow build of that, with a current Burrmill; `711ae88`'s predates
+      every fix since 2026-09-28.
 - [x] Concurrency sweep on the DataFusion path at 32 clients on the nest it will serve (2026-09-29,
       progress log): DIPS and GNS through the real `/sql` path, Burrmill alone level with or ahead of
       DuckDB (355 qps, p99 103-122 ms at 32 clients, no 503s, ~100 MB). It also found GNS's
