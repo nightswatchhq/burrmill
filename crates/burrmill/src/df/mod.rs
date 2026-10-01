@@ -31,6 +31,7 @@ mod doubles;
 mod duckfns;
 pub mod encode;
 mod errors;
+mod extreme;
 mod fastcast;
 mod fold;
 mod host;

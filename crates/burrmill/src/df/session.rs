@@ -255,6 +255,7 @@ impl MiniSession {
                 Arc::new(super::constants::MoveConstants),
                 Arc::new(CheckedArithmetic::default()),
                 Arc::new(super::topn::TopPerGroup),
+                Arc::new(super::extreme::PartitionExtreme),
                 Arc::new(super::distinct::DistinctSplit),
                 Arc::new(super::fastcast::FastTextCasts),
                 Arc::new(super::sharing::ShareRepeats),

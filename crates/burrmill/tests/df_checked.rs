@@ -520,3 +520,24 @@ fn a_correlated_subquery_is_tainted_only_by_what_it_casts() {
         "2"
     );
 }
+
+/// An unnested list carries the taint of what was put in it and no more: a count over the elements
+/// of a clean list answers (the QoS postings view counts buckets out of unnested JSON), and a sum
+/// over a list that held a `TRY_CAST` is still refused.
+#[test]
+fn an_unnested_list_is_tainted_only_by_what_went_into_it() {
+    let (_t, e) = transfers(&[&[("a", "5"), ("b", U256_MAX)]]);
+    assert_eq!(
+        one(
+            &e,
+            "SELECT count(DISTINCT x.v) FROM (SELECT unnest([1, 2, 2]) AS v FROM transfer) x"
+        ),
+        "2"
+    );
+    let why = refused(
+        &e,
+        "SELECT max(x.v) FROM (SELECT unnest([TRY_CAST(value AS HUGEINT)]) AS v FROM transfer) x",
+    );
+    assert!(why.contains("TRY_CAST"), "{why}");
+}
+

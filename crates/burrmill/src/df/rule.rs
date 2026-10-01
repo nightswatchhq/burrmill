@@ -756,6 +756,8 @@ fn lossy_in(plan: &LogicalPlan, work: &std::collections::HashMap<String, Vec<boo
             }
             t
         }
+        // An unnested list's elements are its list's: lossy if anything that went in was.
+        LogicalPlan::Unnest(u) => vec![lossy_in(&u.input, work).into_iter().any(|x| x); n],
         _ => vec![true; n],
     }
 }
