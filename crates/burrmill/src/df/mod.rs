@@ -205,6 +205,7 @@ impl Engine {
     /// Define a view over the nest's tables and earlier views, as nuthatch defines its authored
     /// ones: `body` is the query after `AS`.
     pub fn register_view(&mut self, name: &str, body: &str) -> Result<()> {
+        self.refuse_replacing_a_table(name)?;
         let logical = plan_query(&self.session, body)?;
         self.session.register_table(
             name,
@@ -213,6 +214,23 @@ impl Engine {
         self.session
             .build_information_schema(|n| n.ends_with("__raw"))
             .map_err(df_err)
+    }
+
+    /// A view replaces a view, as `CREATE OR REPLACE VIEW` does, but not a table: DuckDB refuses that,
+    /// and a host that degrades the one view rather than lose the table depends on the refusal.
+    fn refuse_replacing_a_table(&self, name: &str) -> Result<()> {
+        use datafusion_catalog::default_table_source::source_as_provider;
+        let table = self
+            .session
+            .table_source(name)
+            .and_then(|s| source_as_provider(&s).ok())
+            .is_some_and(|p| p.is::<datafusion_catalog::MemTable>());
+        if table {
+            return Err(BurrmillError::Plan(format!(
+                "Catalog Error: Existing object {name} is of type Table, trying to replace with type View"
+            )));
+        }
+        Ok(())
     }
 
     /// A host's own scalar function, as nuthatch registers `nuthatch_abi_tuple` and its kind into

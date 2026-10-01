@@ -798,3 +798,26 @@ fn a_column_only_a_later_segment_carries_is_read_in_either_order() {
         );
     }
 }
+
+/// A view replaces a view but not a host's table, as DuckDB's catalogue has it: nuthatch degrades
+/// the one view on that refusal, where a silent replacement would lose the table.
+#[test]
+fn a_view_does_not_replace_a_table() {
+    let mut e = Engine::open_empty().unwrap();
+    e.create_table_as("t", "SELECT 1 AS x").unwrap();
+    let refused = e.register_view("t", "SELECT 2 AS y").expect_err("a table holds the name");
+    assert!(matches!(refused, burrmill::BurrmillError::Plan(_)), "{refused:?}");
+    assert!(refused.to_string().contains("is of type Table, trying to replace with type View"), "{refused}");
+    assert!(
+        e.register_facts("t", &[("block_number".into(), "BIGINT".into())], vec![], &[], (None, None))
+            .is_err()
+    );
+    assert_eq!(rows(&e, "SELECT x FROM t"), vec![json!({"x": 1})]);
+
+    e.register_view("v", "SELECT 1 AS a").unwrap();
+    e.register_view("v", "SELECT 2 AS a").unwrap();
+    assert_eq!(rows(&e, "SELECT a FROM v"), vec![json!({"a": 2})]);
+    assert!(e.drop_relation("t"));
+    e.register_view("t", "SELECT 3 AS z").unwrap();
+    assert_eq!(rows(&e, "SELECT z FROM t"), vec![json!({"z": 3})]);
+}

@@ -73,6 +73,7 @@ impl Engine {
         hot: &[Value],
         window: (Option<u64>, Option<u64>),
     ) -> Result<()> {
+        self.refuse_replacing_a_table(name)?;
         // Every footer, as DuckDB's `read_parquet` binds them all, so a file that is not Parquet
         // refuses the definition here and a host can define the table from what remains.
         for (path, len) in &files {
