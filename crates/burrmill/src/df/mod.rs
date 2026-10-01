@@ -304,7 +304,7 @@ impl Engine {
             .session
             .create_physical_plan(&logical)
             .await
-            .map_err(df_err)?;
+            .map_err(plan_err)?;
         let mut stream =
             datafusion_physical_plan::execute_stream(physical, self.session.task_ctx())
                 .map_err(df_err)?;
@@ -364,7 +364,7 @@ impl Engine {
         } else {
             std::thread::scope(|s| s.spawn(plan).join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
         }
-            .map_err(df_err)?;
+            .map_err(plan_err)?;
         scans(&physical)
     }
 }
@@ -401,7 +401,7 @@ fn plan_query(session: &MiniSession, sql: &str) -> Result<datafusion_expr::Logic
     refuse_df_statement(&stmt)?;
     refuse_wide_literals(&stmt)?;
     let planner = SqlToRel::new(session);
-    let plan = planner.statement_to_plan(stmt).map_err(df_err)?;
+    let plan = planner.statement_to_plan(stmt).map_err(plan_err)?;
     rename(plan, &names)
 }
 
@@ -561,6 +561,14 @@ fn stmt_kind(s: &SqlStatement) -> &'static str {
         SqlStatement::Update { .. } => "UPDATE",
         SqlStatement::Drop { .. } => "DROP",
         _ => "non-query",
+    }
+}
+
+/// `df_err` for a failure before execution: what would be a substrate error is the plan's.
+fn plan_err(e: datafusion_common::DataFusionError) -> BurrmillError {
+    match df_err(e) {
+        BurrmillError::Substrate(s) => BurrmillError::Plan(s),
+        e => e,
     }
 }
 

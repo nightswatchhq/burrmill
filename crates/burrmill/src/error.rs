@@ -29,6 +29,10 @@ pub enum BurrmillError {
     Seam(String),
     /// The result exceeded `max_rows` or `max_bytes`.
     LimitExceeded(String),
+    /// The statement does not plan: a name it cannot resolve, a type it cannot reconcile, a shape
+    /// a rule refuses. Raised before any page is read, as DuckDB's binder errors are, so a host can
+    /// tell a wrong statement from damaged data.
+    Plan(String),
     /// Something below us - Parquet decode, Arrow, or the filesystem.
     Substrate(String),
     /// SQL that will not parse at all.
@@ -53,6 +57,7 @@ impl fmt::Display for BurrmillError {
             Self::Cancelled => write!(f, "query cancelled"),
             Self::Seam(m) => write!(f, "hot/cold seam violation: {m}"),
             Self::LimitExceeded(m) => write!(f, "limit exceeded: {m}"),
+            Self::Plan(m) => write!(f, "plan error: {m}"),
             Self::Substrate(m) => write!(f, "substrate error: {m}"),
             Self::Parse(m) => write!(f, "parse error: {m}"),
             Self::NoSegments(m) => write!(f, "no segments: {m}"),

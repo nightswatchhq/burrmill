@@ -138,7 +138,7 @@ fn unknown_table_is_refused() {
     let (_tmp, engine) = nest_with_transfer();
     let err = engine.sql(r#"SELECT 1 FROM nosuch"#).unwrap_err();
     match err {
-        BurrmillError::NoSegments(m) | BurrmillError::Substrate(m) | BurrmillError::NotAllowed(m) => {
+        BurrmillError::NoSegments(m) | BurrmillError::Plan(m) | BurrmillError::Substrate(m) | BurrmillError::NotAllowed(m) => {
             assert!(m.contains("nosuch") || m.contains("no table"), "{m}");
         }
         other => panic!("{other:?}"),
@@ -176,7 +176,7 @@ fn read_csv_table_function_is_refused() {
         .sql("SELECT * FROM read_csv('/etc/passwd')")
         .unwrap_err();
     match err {
-        BurrmillError::NotAllowed(_) | BurrmillError::Parse(_) | BurrmillError::Substrate(_) => {}
+        BurrmillError::NotAllowed(_) | BurrmillError::Parse(_) | BurrmillError::Plan(_) | BurrmillError::Substrate(_) => {}
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
@@ -186,7 +186,7 @@ fn replacement_scan_is_refused() {
     let (_tmp, engine) = nest_with_transfer();
     let err = engine.sql("SELECT * FROM '/etc/passwd'").unwrap_err();
     match err {
-        BurrmillError::NotAllowed(_) | BurrmillError::NoSegments(_) | BurrmillError::Substrate(_) | BurrmillError::Parse(_) => {}
+        BurrmillError::NotAllowed(_) | BurrmillError::NoSegments(_) | BurrmillError::Plan(_) | BurrmillError::Substrate(_) | BurrmillError::Parse(_) => {}
         other => panic!("expected a refusal, got {other:?}"),
     }
 }

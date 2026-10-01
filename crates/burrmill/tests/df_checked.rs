@@ -156,7 +156,7 @@ fn refused(e: &Engine, sql: &str) -> String {
                 .unwrap()
                 .to_string()
         ),
-        Err(BurrmillError::NotAllowed(m) | BurrmillError::Substrate(m)) => m,
+        Err(BurrmillError::NotAllowed(m) | BurrmillError::Plan(m) | BurrmillError::Substrate(m)) => m,
         Err(other) => panic!("{sql}: {other:?}"),
     }
 }

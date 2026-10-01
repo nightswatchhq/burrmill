@@ -208,3 +208,18 @@ fn information_schema_follows_the_views() {
         ]
     );
 }
+
+/// A statement that cannot plan is told apart from one that failed reading, as DuckDB's binder
+/// errors are: nuthatch's integrity sweep reads damaged data into the second and only the second.
+#[test]
+fn a_statement_that_does_not_plan_is_a_plan_error() {
+    use burrmill::BurrmillError;
+    let mut engine = Engine::open_empty().unwrap();
+    engine.register_view("t", "SELECT 1 AS x").unwrap();
+    for sql in ["SELECT no_such_column FROM t", "SELECT x + 'a' FROM t", "SELECT * FROM t WHERE x < 'a'"] {
+        let e = engine.sql(sql).expect_err(sql);
+        assert!(matches!(e, BurrmillError::Plan(_)), "{sql}: {e:?}");
+    }
+    let e = engine.sql("SELECT error('at a row') FROM t").expect_err("raised at a row");
+    assert!(matches!(e, BurrmillError::Substrate(_)), "{e:?}");
+}
