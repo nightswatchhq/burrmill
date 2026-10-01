@@ -30,10 +30,12 @@ is gone. 92 files, 971 lines in and 23,988 out. Not merged; Chief merges.
 **What went with DuckDB:** `engine_duck.rs` (1,267 lines), `engine_shadow.rs` (1,074), the shadow
 and checked modes and their replay test, `nuthatch emit dune` with `dune_views.rs` and
 `dune_emit.rs` (Chief, 2026-09-28: Dune support is deprecated), the RFC-0041 spike and
-`bench authored-entity`, the two `duck_oracle` test modules, `tools/df-gate` and one `slice6` crate,
+`bench authored-entity`, the two `duck_oracle` test modules, `tools/df-gate`,
 `tests/duckdb_containment.rs` and `duckdb_extensions_are_static.rs`. `NUTHATCH_ENGINE=duckdb`,
 `shadow` or `checked` is refused at startup; unset or `burrmill` starts. DIPS runs `checked` and
-needs that line changed before it takes the build.
+needs that line changed before it takes the build. One `tools/slice6` crate still names `duckdb`
+in its own manifest: it is outside the workspace and unbuilt, and it stays because its raw logs
+carry terminal escape bytes, which `gh pr diff` refuses to print and Jules therefore cannot review.
 
 **Two things that passed and should not have.** `tests/abi_floors_documented.rs` required the
 README to state a libstdc++ floor "because it embeds DuckDB", and went on passing with DuckDB
