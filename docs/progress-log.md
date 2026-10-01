@@ -8,7 +8,7 @@ Newest first. One entry per RFC-0044 slice.
 
 nuthatch#1626 (`pete/duckdb-removal`, three commits on main): `duckdb` is out of `Cargo.toml` and
 the lockfile, Burrmill is a plain dependency pinned at `17e0a22`, and the `shadow-burrmill` feature
-is gone. 92 files, 971 lines in and 23,988 out. Not merged; Chief merges.
+is gone. 80 files, 971 lines in and 22,639 out. Not merged; Chief merges.
 
 **What Burrmill as the default showed** (1,948 passed and 7 failed before any fix):
 
