@@ -90,6 +90,10 @@ const CORPUS: &[&str] = &[
     "SELECT decode(from_hex('ff'))",
     "SELECT from_hex('zz')",
     "SELECT decode(unhex('68c3a96c6c6f')) a, unhex('4142') b, TRY(unhex('zz')) IS NULL c",
+    "SELECT typeof(CAST(1 AS INTEGER)) a, typeof('x') b, typeof(1.5) c, typeof(TRUE) d, typeof(CAST(1 AS BIGINT)) e, typeof(DATE '2024-01-01') f, typeof(NULL) g, typeof(CAST(1 AS DOUBLE)) h, typeof(CAST(1 AS DECIMAL(38,0))) i",
+    "SELECT typeof(v) AS t, count(*) AS n FROM (VALUES (CAST(1 AS BIGINT)), (2)) x(v) GROUP BY 1",
+    "SELECT typeof(block_number) a, typeof(\"value\") b, typeof(to_timestamp(block_timestamp)) c, typeof(count(*)) d FROM transfer GROUP BY ALL ORDER BY ALL LIMIT 1",
+    "SELECT typeof(1) AS a",
     "SELECT k, count(DISTINCT (a, b)) AS n, count(DISTINCT a) AS m FROM (VALUES (1, 1, 'x'), (1, 1, 'x'), (1, 1, NULL), (1, NULL, NULL), (1, NULL, ''), (2, 2, 'y'), (2, 3, 'y')) t(k, a, b) GROUP BY k ORDER BY k",
     "SELECT DATE '1970-01-01' + CAST(d AS INTEGER) AS day FROM range(106750, 106755) t(d) ORDER BY 1",
     "SELECT DATE '2024-03-01' - 1 AS a, 5 + DATE '2024-02-27' AS b, DATE '1970-01-01' + 115739 AS c, DATE '2024-03-01' + CAST(-366 AS INTEGER) AS d",
@@ -303,6 +307,11 @@ const CORPUS: &[&str] = &[
 
 /// Differences that stand, and why.
 const KNOWN: &[(&str, &str)] = &[
+    (
+        "SELECT typeof(1) AS a",
+        "a whole-number literal is a BIGINT here and an INTEGER in DuckDB; the values agree, the \
+         name of the type does not",
+    ),
     (
         "SELECT year(to_timestamp(block_timestamp)) AS y FROM transfer WHERE 'bob' <> CAST(to_timestamp(block_timestamp) AS VARCHAR) ORDER BY 1",
         "a DuckDB 1.5 bug (docs/upstream/duckdb-cast-comparison-null-constant.md): once the zone is \

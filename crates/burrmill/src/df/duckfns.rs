@@ -36,7 +36,32 @@ pub fn all() -> Vec<Arc<ScalarUDF>> {
         // that merely contains it.
         error_udf(),
         udf(Hex(Signature::user_defined(Volatility::Immutable))),
+        udf(Typeof(Signature::any(1, Volatility::Immutable))),
     ]
+}
+
+/// `typeof(x)`: the type of `x` as DuckDB names it. A `HUGEINT` is carried as `DECIMAL(38,0)` here
+/// and is named so.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Typeof(Signature);
+
+impl ScalarUDFImpl for Typeof {
+    fn name(&self) -> &str {
+        "typeof"
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let name = match args.args[0].data_type() {
+            DataType::Null => "\"NULL\"".to_string(),
+            t => super::tables::duckdb_type(&t),
+        };
+        Ok(ColumnarValue::Scalar(datafusion_common::ScalarValue::Utf8(Some(name))))
+    }
 }
 
 /// `hex(x)` as DuckDB prints it, upper case without leading zeros: an integer as its 64-bit two's
