@@ -27,6 +27,7 @@ mod nullsub;
 mod onerow;
 mod dialect;
 mod distinct;
+mod distinctrows;
 mod doubles;
 mod duckfns;
 pub mod encode;

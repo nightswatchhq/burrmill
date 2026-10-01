@@ -90,6 +90,7 @@ const CORPUS: &[&str] = &[
     "SELECT decode(from_hex('ff'))",
     "SELECT from_hex('zz')",
     "SELECT decode(unhex('68c3a96c6c6f')) a, unhex('4142') b, TRY(unhex('zz')) IS NULL c",
+    "SELECT k, count(DISTINCT (a, b)) AS n, count(DISTINCT a) AS m FROM (VALUES (1, 1, 'x'), (1, 1, 'x'), (1, 1, NULL), (1, NULL, NULL), (1, NULL, ''), (2, 2, 'y'), (2, 3, 'y')) t(k, a, b) GROUP BY k ORDER BY k",
     "SELECT DATE '1970-01-01' + CAST(d AS INTEGER) AS day FROM range(106750, 106755) t(d) ORDER BY 1",
     "SELECT DATE '2024-03-01' - 1 AS a, 5 + DATE '2024-02-27' AS b, DATE '1970-01-01' + 115739 AS c, DATE '2024-03-01' + CAST(-366 AS INTEGER) AS d",
     "SELECT h, TRY(CAST(decode(unhex(substr(h, 3))) AS VARCHAR)) AS s FROM (VALUES ('0x6162'), ('0xzz'), ('0xff'), ('0x'), (NULL)) t(h) ORDER BY h",

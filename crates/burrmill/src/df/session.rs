@@ -256,6 +256,8 @@ impl MiniSession {
                 Arc::new(CheckedArithmetic::default()),
                 Arc::new(super::topn::TopPerGroup),
                 Arc::new(super::extreme::PartitionExtreme),
+                // Before the split, which then sees a distinct count over bytes like any other.
+                Arc::new(super::distinctrows::DistinctRows::default()),
                 Arc::new(super::distinct::DistinctSplit),
                 Arc::new(super::fastcast::FastTextCasts),
                 Arc::new(super::sharing::ShareRepeats),

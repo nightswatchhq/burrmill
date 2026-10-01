@@ -268,8 +268,18 @@ pub fn analyze(root: &str, view: &str) -> anyhow::Result<()> {
         for (n, b) in &views {
             let _ = e.register_view(n, b);
         }
-        let sql = format!("SELECT * FROM \"{view}\"");
-        e.sql_for_each(&sql, |_| Ok(()))?;
+        // A path to a statement instead of a view's name analyses that statement.
+        let sql = match std::fs::read_to_string(&view) {
+            Ok(text) => text.trim().trim_end_matches(';').to_string(),
+            Err(_) => format!("SELECT * FROM \"{view}\""),
+        };
+        let t = std::time::Instant::now();
+        let mut rows = 0usize;
+        e.sql_for_each(&sql, |b| {
+            rows += b.num_rows();
+            Ok(())
+        })?;
+        eprintln!("first run: {rows} rows in {} ms", t.elapsed().as_millis());
         use arrow::array::Array;
         for b in e.sql(&format!("EXPLAIN ANALYZE {sql}"))? {
             let plan = b.column(1);
@@ -299,7 +309,12 @@ pub fn explain(root: &str, view: &str) -> anyhow::Result<()> {
             let _ = e.register_view(n, b);
         }
         use arrow::array::Array;
-        for b in e.sql(&format!("EXPLAIN SELECT * FROM \"{view}\""))? {
+        // A path to a statement instead of a view's name explains that statement.
+        let sql = match std::fs::read_to_string(&view) {
+            Ok(text) => text.trim().trim_end_matches(';').to_string(),
+            Err(_) => format!("SELECT * FROM \"{view}\""),
+        };
+        for b in e.sql(&format!("EXPLAIN {sql}"))? {
             let kind = arrow::compute::cast(b.column(0), &arrow::datatypes::DataType::Utf8)?;
             let kind = kind.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
             let plan = arrow::compute::cast(b.column(1), &arrow::datatypes::DataType::Utf8)?;
