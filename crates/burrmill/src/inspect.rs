@@ -90,6 +90,10 @@ impl Visitor for Walk {
                     self.bad = Some(format!(
                         "`{table}` is not a table name - a quoted path in table position reads a file"
                     ));
+                } else if hidden_table(&table) {
+                    // The parts a registration is built from. The public view
+                    // already carries the window (#10).
+                    self.bad = Some(format!("`{table}` is not a table this surface serves"));
                 } else {
                     self.reach.tables.insert(table.to_ascii_lowercase());
                 }
@@ -112,6 +116,12 @@ impl Visitor for Walk {
             ControlFlow::Continue(())
         }
     }
+}
+
+/// `__raw`, `__hot` and `__union` are how a registration is built, not names a statement can use.
+pub(crate) fn hidden_table(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with("__raw") || lower.ends_with("__hot") || lower.ends_with("__union")
 }
 
 /// The tables `sql` reaches, or why it is refused.

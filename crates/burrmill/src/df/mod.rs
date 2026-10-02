@@ -295,6 +295,7 @@ impl Engine {
         mut f: impl FnMut(RecordBatch) -> Result<()>,
     ) -> Result<()> {
         // Parsed first, so malformed SQL is a syntax error as DuckDB reports it, not a refusal.
+        refuse_hidden_names(sql)?;
         let logical = plan_query(&self.session, sql)?;
         refuse_non_query(sql)?;
         let _pass = self.gate.enter();
@@ -379,6 +380,7 @@ impl Engine {
     /// RFC-0048). An operator not listed refuses, and so does any that can run its input more than
     /// once: a nested-loop join, and a recursive query, which has no static scan count at all.
     pub fn parquet_scans(&self, sql: &str) -> Result<u64> {
+        refuse_hidden_names(sql)?;
         let logical = plan_query(&self.session, sql)?;
         refuse_non_query(sql)?;
         let plan = || self.runtime().block_on(self.session.create_physical_plan(&logical));
@@ -525,6 +527,19 @@ fn leading_keyword(sql: &str) -> &str {
         } else {
             return t;
         }
+    }
+}
+
+/// `__raw`, `__hot` and `__union` are refused when the walk can see them. A statement it cannot
+/// parse is left to the engine parser, which accepts more of DuckDB than the walk does (#10).
+fn refuse_hidden_names(sql: &str) -> Result<()> {
+    match crate::inspect::reach(sql) {
+        Err(BurrmillError::NotAllowed(why))
+            if why.contains("is not a table this surface serves") =>
+        {
+            Err(BurrmillError::NotAllowed(why))
+        }
+        _ => Ok(()),
     }
 }
 
