@@ -98,6 +98,8 @@ impl MiniSession {
             let share = b.memory_bytes / (8 * threads.max(1));
             config.options_mut().execution.sort_spill_reservation_bytes =
                 share.clamp(256 << 10, 10 << 20);
+            // 8,192 rows of a wide cell exist before the caller caps the answer (#1650).
+            config = config.with_batch_size(128);
         }
         let runtime = match budget {
             None => RuntimeEnvBuilder::new().with_cache_manager(
