@@ -138,8 +138,37 @@ fn a_window_bounds_the_rows_and_registration_replaces() {
     assert_eq!(got, vec![json!({"n": 0, "s": null})]);
 }
 
-/// A statement stopped from another thread ends as `Cancelled` at its next batch, and the engine
-/// answers the next statement as if nothing happened.
+/// A cancel armed before the statement is that statement's answer. The host clears the token
+/// before the next one.
+#[test]
+fn a_cancel_armed_before_the_statement_is_not_forgotten() {
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_rows("t", &[json!({"n": "1"})])
+        .unwrap();
+    engine.cancel_token().cancel();
+    let r = engine.sql("SELECT count(*) AS n FROM t");
+    assert!(
+        matches!(r, Err(burrmill::BurrmillError::Cancelled)),
+        "{:?}",
+        r.map(|_| ())
+    );
+    // No batch at all: the refusal is the check before execution, not the one between batches.
+    let r = engine.sql("SELECT * FROM t WHERE false");
+    assert!(
+        matches!(r, Err(burrmill::BurrmillError::Cancelled)),
+        "{:?}",
+        r.map(|_| ())
+    );
+    engine.cancel_token().reset();
+    assert_eq!(
+        rows(&engine, "SELECT count(*) AS n FROM t"),
+        vec![json!({"n": 1})]
+    );
+}
+
+/// A statement stopped from another thread ends as `Cancelled` at its next batch. The host
+/// clears the token; the engine then answers the next statement.
 #[test]
 fn a_cancel_from_another_thread_stops_the_statement_and_not_the_engine() {
     // A cross join of a sealed table with itself, summed: nothing reaches the output until the
@@ -165,6 +194,7 @@ fn a_cancel_from_another_thread_stops_the_statement_and_not_the_engine() {
         r.map(|_| ())
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    engine.cancel_token().reset();
     assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
 }
 
@@ -190,6 +220,7 @@ fn stops_on_cancel(runaway: &str) {
         took < std::time::Duration::from_secs(2),
         "stopped after {took:?}"
     );
+    engine.cancel_token().reset();
     assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
 }
 
@@ -264,6 +295,7 @@ fn a_cancelled_join_returns_its_memory() {
         0,
         "a cancelled statement kept its reservation"
     );
+    engine.cancel_token().reset();
     assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
 }
 
