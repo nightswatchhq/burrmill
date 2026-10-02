@@ -1,18 +1,24 @@
 # Burrmill
 
 **SQL over sealed Parquet segments plus a live tip, in DuckDB's dialect, with exact integer
-arithmetic that refuses rather than wraps. Faster than DuckDB on the queries an indexer actually
-runs, at a third of the memory, in one Rust binary with no C++ in it.**
+arithmetic that refuses rather than wraps. The analytical engine inside
+[nuthatch](https://github.com/nightswatchhq/nuthatch) since 4.1.0, where DuckDB used to be:
+byte-identical to DuckDB on every authored view of the nests it has replaced it on, faster than it on
+the warm view benchmark, slower than it per statement in production, in one Rust binary with no C++
+in it.**
 
-Status, 2026-09-26: **Gate 1 of [RFC-0044 Amendment 2](docs/rfc/RFC-0044-burrmill.md) is taken as passed, and the
-migration of nuthatch from DuckDB to Burrmill is decided.** Every authored view of a real production
-nest is byte-identical to DuckDB's answer, the set runs at 0.65x DuckDB's time, the memory gate
-passes as nuthatch would run it, and the larger build footprint has been accepted as the price of
-taking DuckDB's C++ out of nuthatch. The plan with its tick lists is
-[docs/research/replacing-duckdb/migration.md](docs/research/replacing-duckdb/migration.md); the
-measurements behind every number below are in [docs/progress-log.md](docs/progress-log.md), newest
-first, with transcripts under [docs/bench/](docs/bench/). Nothing in nuthatch runs on Burrmill yet:
-that is phase 2, and it started on 2026-09-26.
+Status, 2026-10-02: **the migration is done.** nuthatch 4.1.0 ships with Burrmill as its only engine,
+DuckDB is out of its tree and its lockfile, and all six production nests run on it. Gate 1 of
+[RFC-0044 Amendment 2](docs/rfc/RFC-0044-burrmill.md) was taken as passed on 2026-09-26: every
+authored view of a real production nest byte-identical, the set at 0.65x DuckDB's time, the memory
+gate as nuthatch would run it, the larger build footprint accepted as the price of taking DuckDB's
+C++ out of nuthatch. Phase 2, the engine trait, shadow mode and the cutover, ran in nuthatch from
+2026-09-26 to 2026-10-02; its tick lists are in
+[docs/research/replacing-duckdb/migration.md](docs/research/replacing-duckdb/migration.md). What a
+week of production then showed is under [where it loses](#what-it-does-not-do-and-where-it-loses).
+The measurements behind every number here are in [docs/progress-log.md](docs/progress-log.md),
+newest first, with transcripts under [docs/bench/](docs/bench/). nuthatch pins a revision of this
+repo in its `Cargo.toml`, so a change here reaches a nest only when that pin moves.
 
 ## What it is
 
@@ -74,6 +80,16 @@ one client and 32.9 against 15.1 at 32**, worst p99 1,350 ms against 7,424, fair
 0.00, and 3.9 GB of process memory against 15.4, all at 32 clients with `ulimit -n` raised, since
 DuckDB fails outright at the default. Not re-run over the 22.
 
+**In production the sign is the other way.** Those are whole views, warm, on a bench harness.
+Through nuthatch's `/sql` on the allocations nest's real dashboard statements (`sql_sweep_over_a_nest`
+on a copy, 2026-10-01), Burrmill at two sessions of 2 GB and eight threads served 11, 26 and 28 qps at
+1, 4 and 8 clients where DuckDB at four sessions of 256 MB served 29, 112 and 123: **about 2.5x
+DuckDB's time a statement**, p99 about 620 ms against 128 to 184. On the QoS nest, Lodestar's eight
+one-day statements take 3.2 to 4.1 s against DuckDB's 0.6 to 0.7, because a date range that arrives
+through a join filter is not pushed to the scan and Burrmill reads every segment where DuckDB read
+the day's. Byte-identical throughout, and the engine's memory limit holds; it is the speed that
+nuthatch's README now quotes, and the swap was not made for speed.
+
 **Exact.** Integer overflow returns an error, never a wrapped number, on both layers. The owned fold
 refuses when an intermediate partial sum leaves `i128`; the engine's `CheckedArithmetic` makes the
 same promise on DataFusion's plans, where stock DataFusion silently wraps
@@ -104,7 +120,7 @@ The confidence comes from running both engines on the same statements, not from 
   DataFusion wrong answer on subqueries used as predicates, then the two DuckDB findings above. The
   last runs: 25,000 cases on five seeds, 8,000 on four, 6,000 on three, each with no differing answer
   (`docs/bench/fuzz.txt`).
-- **Parity harnesses**, all against DuckDB: `dialect-parity` 209/209 statements, `encode-parity`
+- **Parity harnesses**, all against DuckDB: `dialect-parity` 273/273 statements, `encode-parity`
   17/17 (nuthatch's JSON, byte for byte), `error-parity` 14/14 (nuthatch's error classes),
   `reach-parity` 38/46 identical and 8 stricter, `rewrite-parity <nest> <views-dir>` for a rewritten
   view against its original.
@@ -134,10 +150,20 @@ Said plainly, because a README that implies otherwise is the thing this project 
   answers by dropping what did not fit. The fuzzer counts these separately and they are allowed.
 - **What Burrmill computes and DuckDB refuses**: `TIMESTAMPTZ + INTERVAL` and a `TIMESTAMPTZ` to
   `DATE` cast, which nuthatch's DuckDB, built without ICU, will not do.
-- **Four of DuckDB's six roles in nuthatch are still DuckDB's.** The executor is replaced and the
-  parser role partway; the canonical plan for grafting identity, entity lowering, the DuneSQL
-  translation and the `entities.toml` function vocabulary still ask DuckDB's parser. They move in
-  phase 2.
+- **Slower per statement in production**, as the figures above say: about 2.5x DuckDB's time
+  through `/sql` on the allocations nest, and 4.5 s against 0.7 for the QoS nest's eight one-day
+  statements, because a day range arriving through a one-row join side is not pushed into the scan.
+  Day pruning through a join side is the first thing owed.
+- **More memory per session.** The allocations nest's dashboard refuses 12 or 13 of its statements
+  at 1 GB and 18 at 768 MB, so nuthatch runs it at two sessions of 2 GB and eight threads where
+  DuckDB had four of 256 MB. The engine's limit holds; what glibc then kept of a whole-day statement's
+  freed pages took the QoS nest to 7 GB resident, and nuthatch answers that with jemalloc on Linux
+  (nuthatch#1628), not with a change here.
+- **Planning cost on deep views.** A query that plans through about thirty views takes 42 to 47 s in a
+  release build; nuthatch's `graph` CI job went from 13 minutes on DuckDB to 45 on a runner, and its
+  router tests carry a ten-times allowance under `cfg!(test)`. The time sits in DataFusion's physical
+  planning (`equivalence::properties`, `Statistics`), and is the engine's to recover.
+- **Spilling joins.** A whole QoS view at 512 MB still spills past 2 GB or runs to the 600 s wall.
 - **The owned operator alone runs 0 of 65 real statements.** Every fold sub-plan in the workload
   admits (8/8), but each sits inside a CTE or a join, so whole statements run on the engine.
 - **No redb `HotTip`.** The hot/cold seam holds under concurrent seal (COR-1), but the only tip is
@@ -148,8 +174,11 @@ Said plainly, because a README that implies otherwise is the thing this project 
 - **4.2c is still owed**: the earliest `views` bench gave DuckDB no `parquet_metadata_cache`, worth
   about 9% on the curation fold. The Gate 1 harnesses set DuckDB up as nuthatch does; the old
   synthetic sweep has not been re-run with it.
-- **The seven rewritten views** live on the nest's `pete/portable-views` branch on the ThinkPad, not
-  pushed. Two more (`lodestar_delegator_stakes`, `lodestar_delegators`) run unchanged.
+- **Seven of the allocations nest's views had to be rewritten** to run here (`ASOF`, `LATERAL` and
+  list lambdas do not define on Burrmill), each compared whole against its original on DuckDB before
+  the engine changed (23/23, `lodestar_indexer_ledger` 1,678,525 rows). They are on the nest's main
+  (graph-allocations-nest#28). Two more (`lodestar_delegator_stakes`, `lodestar_delegators`) run
+  unchanged.
 
 ## Layout
 
