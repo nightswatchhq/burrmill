@@ -313,7 +313,7 @@ fn window_sums_are_checked() {
     );
 }
 
-// 3a-3f: nuthatch's `_dec`. TRY_CAST drops what does not fit; the sum is made exact instead.
+// 3a-3f: nuthatch's `_dec`. A row the cast reports as NULL is not a term of its sum.
 #[test]
 fn dec_companion_sums_are_exact() {
     let (_t, e) = transfers(&[&[("a", "5"), ("b", "7")], &[("a", "10")]]);
@@ -333,20 +333,22 @@ fn dec_companion_sums_are_exact() {
         DataType::Decimal128(38, 0)
     );
 
-    // One party's value does not fit DECIMAL(38,0). DuckDB drops it and answers 5.
+    // One party's value does not fit DECIMAL(38,0). The column is NULL there, so the sum is 5.
+    // The raw text still sums exactly, and two values that each fit can still overflow the total.
     let (_t, e) = transfers(&[&[("a", "5"), ("a", U256_MAX)]]);
     let total = "115792089237316195423570985008687907853269984665640564039457584007913129639940";
-    let m = refused(&e, "SELECT SUM(value_dec) FROM transfer");
-    assert!(m.contains(total), "{m}");
+    assert_eq!(one(&e, "SELECT SUM(value_dec) FROM transfer"), "5");
     assert_eq!(
         one(&e, "SELECT checked_sum_text(value) FROM transfer"),
         total
     );
-    let m = refused(
-        &e,
-        "SELECT SUM(TRY_CAST(value AS DECIMAL(38,0))) FROM transfer",
+    assert_eq!(
+        one(&e, "SELECT SUM(TRY_CAST(value AS DECIMAL(38,0))) FROM transfer"),
+        "5"
     );
-    assert!(m.contains(total), "{m}");
+    let (_t, e) = transfers(&[&[("a", D38MAX), ("a", D38MAX)]]);
+    let m = refused(&e, "SELECT SUM(value_dec) FROM transfer");
+    assert!(m.contains("does not fit"), "{m}");
 }
 
 /// 10^38 does not fit `DECIMAL(38,0)` and -10^38+5 does. Their exact sum is 5, so summing the
@@ -358,6 +360,14 @@ fn sum_of_a_dec_column_skips_rows_the_column_reports_as_null() {
     let (_t, e) = transfers(&[&[("a", TEN38), ("a", FITS), ("b", U256_MAX), ("b", "7")]]);
     assert_eq!(
         one(&e, "SELECT SUM(value_dec) FROM transfer WHERE party = 'a'"),
+        FITS
+    );
+    assert_eq!(
+        one(
+            &e,
+            "SELECT SUM(value_dec) FILTER (WHERE NOT value_overflow) FROM transfer \
+             WHERE party = 'a'"
+        ),
         FITS
     );
     assert_eq!(one(&e, "SELECT AVG(value_dec) FROM transfer WHERE party = 'a'"), "-1e38");

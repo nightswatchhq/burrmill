@@ -389,20 +389,14 @@ impl CheckedArithmetic {
                 exprs.push(if tainted { rebuilt(params) } else { e.clone() });
                 continue;
             }
-            let (arg, arg_ty) = match exact {
-                Some((new_input, wide, target)) => {
-                    input = new_input;
-                    (wide, target)
-                }
-                None => {
-                    let t = params.args[0].get_type(input.schema())?;
-                    if !is_exact(&t) {
-                        exprs.push(if tainted { rebuilt(params) } else { e.clone() });
-                        continue;
-                    }
-                    (params.args[0].clone(), t)
-                }
-            };
+            // `exact` carries exact_wide of the pre-cast text. Summing that counts rows the
+            // cast reports as NULL, so the cast in `params` is what is summed.
+            let t = params.args[0].get_type(input.schema())?;
+            if !is_exact(&t) {
+                exprs.push(if tainted { rebuilt(params) } else { e.clone() });
+                continue;
+            }
+            let (arg, arg_ty) = (params.args[0].clone(), t);
             let udaf = match func {
                 "sum" => CheckedAgg::udaf(Mode::Sum, sum_type(&arg_ty)),
                 _ => CheckedAgg::udaf(Mode::Avg, Some(DataType::Float64)),
@@ -486,8 +480,8 @@ impl CheckedArithmetic {
         Ok(Some((input, args)))
     }
 
-    /// For a tainted `SUM`/`AVG` argument: the plan with the exact source exposed, the source as
-    /// an `exact_wide` value, and the `TRY_CAST`'s target type.
+    /// `Some` when `arg` is a plain `TRY_CAST`, or a column projected from one. The plan carries
+    /// `exact_wide` of the source; a sum reads the cast, not that value.
     fn exact_source(
         &self,
         input: &LogicalPlan,

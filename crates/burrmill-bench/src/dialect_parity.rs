@@ -40,6 +40,8 @@ const CORPUS: &[&str] = &[
     "SELECT b.block_number, (SELECT to_json(list(t.s)) FROM (SELECT struct_pack(\"id\" := c.\"to\") AS s FROM transfer c WHERE c.\"from\" = b.\"from\" ORDER BY c.block_number LIMIT 0) t) AS j FROM transfer b ORDER BY b.block_number, b.log_index",
     "SELECT count(*) FROM transfer",
     "SELECT sum(value_dec) FROM transfer",
+    // 10^38 does not fit the _dec column; -10^38+5 does. The sum is the column's one value.
+    "SELECT sum(value_dec) FROM wide",
     "SELECT sum(block_number) FROM transfer",
     "SELECT avg(block_number) FROM transfer",
     "SELECT avg(block_number - log_index) AS a, avg(CAST(value AS HUGEINT)) AS b, avg(CAST(\"tokensRewards\" AS DECIMAL(10,2))) AS c, avg(greatest(18, log_index)) AS d FROM transfer",
@@ -361,9 +363,27 @@ fn fixture(root: &std::path::Path) -> anyhow::Result<()> {
     let mut w = parquet::arrow::ArrowWriter::try_new(f, lschema, None)?;
     w.write(&labels)?;
     w.close()?;
+    let wschema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+    let wide = RecordBatch::try_new(
+        wschema.clone(),
+        vec![s(&[
+            "100000000000000000000000000000000000000",
+            "-99999999999999999999999999999999999995",
+        ])],
+    )?;
+    let f = std::fs::File::create(segs.join(format!("wide-{:064x}.parquet", 3)))?;
+    let mut w = parquet::arrow::ArrowWriter::try_new(f, wschema, None)?;
+    w.write(&wide)?;
+    w.close()?;
     std::fs::write(
         root.join("schema.json"),
-        r#"{"tables":[{"table":"transfer","columns":[{"name":"from","storage":"text"},{"name":"to","storage":"text"},{"name":"value","storage":"word32"},{"name":"tokensRewards","storage":"word32"}]}]}"#,
+        concat!(
+            r#"{"tables":[{"table":"transfer","columns":["#,
+            r#"{"name":"from","storage":"text"},{"name":"to","storage":"text"},"#,
+            r#"{"name":"value","storage":"word32"},"#,
+            r#"{"name":"tokensRewards","storage":"word32"}]},"#,
+            r#"{"table":"wide","columns":[{"name":"value","storage":"word32"}]}]}"#,
+        ),
     )?;
     Ok(())
 }
@@ -379,7 +399,10 @@ pub fn run() -> anyhow::Result<()> {
          TRY_CAST(\"tokensRewards\" AS DECIMAL(38,0)) AS \"tokensRewards_dec\", \
          (\"tokensRewards\" IS NOT NULL AND TRY_CAST(\"tokensRewards\" AS DECIMAL(38,0)) IS NULL) AS \"tokensRewards_overflow\" \
          FROM read_parquet('{0}/transfer-*.parquet');
-         CREATE VIEW label AS SELECT * FROM read_parquet('{0}/label-*.parquet');",
+         CREATE VIEW label AS SELECT * FROM read_parquet('{0}/label-*.parquet');
+         CREATE VIEW wide AS SELECT *, \
+         TRY_CAST(\"value\" AS DECIMAL(38,0)) AS \"value_dec\" \
+         FROM read_parquet('{0}/wide-*.parquet');",
         segs.display()
     ))?;
     let root = tmp.path().to_path_buf();
