@@ -4,6 +4,29 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## 4.1.0 released and on every nest — 2026-10-02
+
+Tagged at `79d3180` (#1626, #1627 notes and version, #1628 jemalloc) after two tags on the wrong
+commit: the tag command moves the tag to main, and main had not been merged to. Release run
+36993133979: notes, both targets, container image, published. Linux artifact: 195,005,312 bytes,
+`libc`/`libm`/`libgcc` only, jemalloc in, **glibc floor `GLIBC_2.35`** (`hypot`, `hypotf`), where
+4.0.2 was 2.34; nuthatch#1649 corrects the README, install guide, notes and the pinning test, and
+names RHEL 9 and Amazon Linux 2023 as needing the source build.
+
+Rolled with muster's `roll-fleet-release.sh`: Helsinki's five units at about 11:00 UTC, the QoS
+nest at 11:14, every one ready on first start with no restarts, `typeof(1)` answering `BIGINT`.
+RSS after the roll: DIPS 33 MB, GNS 112 MB, allocations 1,135 MB; QoS 951 MB eight minutes in
+(the glibc build was past 4 GB at that age and 9.5 GB when replaced). Lodestar healthy, no
+failing jobs.
+
+**State of the migration.** Six nests, one engine, no DuckDB in any binary. Open: the public log
+(nuthatch-frontend#68), the retrospective post, #1649, muster uncommitted. Engine work owed: day
+pruning through a one-row join side (QoS statements 4.5 s against DuckDB's 0.7), planning cost on
+deep views (the graph CI job at 37 to 45 minutes), spilling joins, and the seven fee epochs on the
+allocations nest that are the views' and not the engine's.
+
+---
+
 ## Every nest on Burrmill, and the QoS nest's memory — 2026-10-02
 
 **The fleet.** Chief merged nuthatch#1626 at 10:40 UTC through muster's `finish-migration.sh`;
