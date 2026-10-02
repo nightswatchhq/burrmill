@@ -858,4 +858,10 @@ fn a_statement_cannot_name_the_hidden_parts_of_a_registration() {
         "hidden parts stayed registered: {:?}",
         engine.tables()
     );
+
+    // A hidden name registered on its own, not via `register_facts`, is still refused.
+    engine
+        .register_rows("e__raw", &[json!({"a": "1"})])
+        .unwrap();
+    assert!(engine.sql("SELECT a FROM e__raw").is_err());
 }

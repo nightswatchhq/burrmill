@@ -35,7 +35,7 @@ fn counter(name: &str) -> bool {
 }
 
 fn hidden(name: &str) -> bool {
-    name.ends_with("__raw") || name.ends_with("__hot") || name.ends_with("__union")
+    crate::inspect::hidden_table(name)
 }
 
 impl Engine {
@@ -198,9 +198,25 @@ impl Engine {
         let logical = plan_query(&self.session, &sql)?;
         self.session
             .register_table(name, Arc::new(ViewTable::new(logical, Some(sql))));
+        // The view's plan already holds these. Leaving the names registered is how a later
+        // statement reads past the window, or a tip this request did not rebind (#10).
+        self.drop_hidden_registrations();
         self.session
             .build_information_schema(hidden)
             .map_err(df_err)
+    }
+
+    /// Unbind every `__raw`, `__hot` and `__union`. Public views keep the plan they captured.
+    fn drop_hidden_registrations(&mut self) {
+        let names: Vec<String> = self
+            .session
+            .table_names()
+            .into_iter()
+            .filter(|n| hidden(n))
+            .collect();
+        for n in names {
+            let _ = self.drop_relation(&n);
+        }
     }
 
     /// A table of text columns from JSON rows, for the small side inputs a nest carries beside its
