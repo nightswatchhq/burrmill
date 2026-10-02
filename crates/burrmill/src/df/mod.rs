@@ -26,6 +26,8 @@ mod latest;
 mod nullsub;
 mod onerow;
 mod dialect;
+mod depth;
+pub use depth::check_expr_bounds;
 mod distinct;
 mod distinctrows;
 mod doubles;
@@ -417,7 +419,26 @@ fn scans(p: &Arc<dyn datafusion_physical_plan::ExecutionPlan>) -> Result<u64> {
         .try_fold(own, |n, c| Ok(n.saturating_add(scans(c)?)))
 }
 
+/// The planner recurses. The caller's stack is whatever the host gave its worker, and a stack
+/// overflow aborts the process. What the depth bound let through is planned on a stack of a known size.
+const PLAN_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 fn plan_query(session: &MiniSession, sql: &str) -> Result<datafusion_expr::LogicalPlan> {
+    let owned = sql.to_string();
+    std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+            .name("burrmill-plan".into())
+            .stack_size(PLAN_STACK_BYTES)
+            .spawn_scoped(scope, || plan_query_on_stack(session, &owned))
+            .map_err(|e| BurrmillError::Substrate(format!("planner thread: {e}")))?;
+        handle
+            .join()
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    })
+}
+
+fn plan_query_on_stack(session: &MiniSession, sql: &str) -> Result<datafusion_expr::LogicalPlan> {
+    debug_assert_eq!(std::thread::current().name(), Some("burrmill-plan"));
     let (stmt, names) = dialect::parse(sql, &session.known_names())?;
     refuse_df_statement(&stmt)?;
     refuse_wide_literals(&stmt)?;
