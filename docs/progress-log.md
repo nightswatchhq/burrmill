@@ -81,8 +81,20 @@ to fix**: DataFusion 56's `EnsureRequirements` change, and whatever is left afte
 **Three runs were lost** to rsyncing a newer tree under a build still in its second pass; the
 failures belonged to no tree. Memory note `rsync-under-a-running-build`.
 
-**Owed.** The legacy staking archive (3.8.4, `serve`) and `data-services-nest` (3.12.1) are still
-on DuckDB and have not been replayed. The glibc floor (2.34) in the README was measured on the
+**The last two nests, replayed 2026-10-02.** `graph-staking-legacy-history` (102 MB, 58 segments,
+`serve` on 3.8.4) and `data-services-nest` (2.4 MB, `dev` on 3.12.1) were copied to the ThinkPad
+and served there by `4.1.0-pre.1`, a release build of #1626's head (192 MB, sha256 `bf0bffb5…`,
+no libstdc++). Neither has an authored view, so the test is Lodestar's statements: kittiwake's
+`daily_flow_sql` over four ranges, counts and bounds of each table and a grouped sum for the
+archive; `registry_sql` and counts for each of the five data services. The same 24 statements
+were asked of the live nests on DuckDB through their own `/sql`. **24 of 24 agree**: 21 identical,
+three equal to 1.8e-12 relative, which is `DOUBLE` summation order (two Burrmill runs differ from
+each other by 7e-13). Default 512 MB, no refusal, 4 to 97 ms a statement on either engine. Both
+stores opened in place from their older versions. Not rolled: `helsinki/scripts/migrate-last-two.sh`
+in muster does it, asking the same statements before and after and undoing itself on a difference;
+it is Chief's to run.
+
+**Owed.** The roll of those two. The glibc floor (2.34) in the README was measured on the
 4.0 artifact and wants re-measuring on the release build. Release notes for 4.1. Day pruning
 through a one-row join side. muster.
 
