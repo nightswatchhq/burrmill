@@ -565,24 +565,28 @@ fn refuse_non_query(sql: &str) -> Result<()> {
 
 fn refuse_df_statement(stmt: &DfStatement) -> Result<()> {
     match stmt {
-        DfStatement::Statement(s) => match s.as_ref() {
-            SqlStatement::Query(_) => Ok(()),
-            SqlStatement::Explain { .. } => Ok(()),
-            other => Err(BurrmillError::NotAllowed(format!(
-                "statement not admitted: {}",
-                stmt_kind(other)
-            ))),
-        },
+        DfStatement::Statement(s) => refuse_sql_statement(s),
         DfStatement::CreateExternalTable(_) => Err(BurrmillError::NotAllowed(
             "CREATE EXTERNAL TABLE is not in the grammar we expose".into(),
         )),
         DfStatement::CopyTo(_) => Err(BurrmillError::NotAllowed(
             "COPY is not in the grammar we expose".into(),
         )),
-        DfStatement::Explain(_) => Ok(()),
+        DfStatement::Explain(e) => refuse_df_statement(&e.statement),
         DfStatement::Reset(_) => Err(BurrmillError::NotAllowed(
             "RESET is not in the grammar we expose".into(),
         )),
+    }
+}
+
+fn refuse_sql_statement(stmt: &SqlStatement) -> Result<()> {
+    match stmt {
+        SqlStatement::Query(_) => Ok(()),
+        SqlStatement::Explain { statement, .. } => refuse_sql_statement(statement),
+        other => Err(BurrmillError::NotAllowed(format!(
+            "statement not admitted: {}",
+            stmt_kind(other)
+        ))),
     }
 }
 
