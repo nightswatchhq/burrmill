@@ -40,15 +40,21 @@ use sqlparser::dialect::DuckDbDialect;
 
 use crate::error::{BurrmillError, Result};
 
+/// Parse every statement. The set-operation bound is applied here and none of the rewrites are.
+/// A parse error is [`BurrmillError::Parse`]; the depth check leaves those for the planner.
+pub(crate) fn parse_statements(sql: &str) -> Result<Vec<DfStatement>> {
+    // Before the parser: sqlparser rejects `[expr FOR x IN list]`, which the views still write.
+    let expanded = crate::listcomp::before_parse(sql);
+    super::depth::refuse_set_op_tokens(&expanded)?;
+    DFParser::parse_sql_with_dialect(expanded.as_str(), &Duck)
+        .map(|stmts| stmts.into_iter().collect())
+        .map_err(|e| BurrmillError::Parse(super::errors::restate(format!("SQL error: {e:?}"))))
+}
+
 /// Parse with DuckDB's dialect and rewrite into what DataFusion plans. The result columns' DuckDB
 /// names come back too, taken from the statement as written, before any rewrite.
 pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String>>)> {
-    // Before the parser: sqlparser rejects `[expr FOR x IN list]`, which the views still write.
-    let expanded = crate::listcomp::before_parse(sql);
-    let sql = expanded.as_str();
-    let stmts = DFParser::parse_sql_with_dialect(sql, &Duck)
-        .map_err(|e| BurrmillError::Parse(super::errors::restate(format!("SQL error: {e:?}"))))?;
-    let Some(mut stmt) = stmts.into_iter().next() else {
+    let Some(mut stmt) = parse_statements(sql)?.into_iter().next() else {
         return Err(BurrmillError::Parse("empty statement".into()));
     };
     let mut names = match &stmt {
@@ -66,7 +72,7 @@ pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String
 /// right side as a whole expression, so `a IS DISTINCT FROM b OR c = d` became
 /// `a IS DISTINCT FROM (b OR c = d)`; here it stops where `IS` does, as in Postgres.
 #[derive(Debug)]
-struct Duck;
+pub(crate) struct Duck;
 
 macro_rules! as_duckdb {
     ($($f:ident),* $(,)?) => {
@@ -476,6 +482,9 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
         DfStatement::Explain(e) => return rewrite(e.statement.as_mut(), known, &mut []),
         _ => return Ok(()),
     };
+    // Before any visitor. Aliases is the first walk, and a set operation descends its left
+    // spine before a visitor can refuse it.
+    super::depth::check_statement(s)?;
     let mut known = known.clone();
     let _ = sq::Visit::visit(s.as_ref(), &mut Aliases(&mut known));
     let _ = sq::VisitMut::visit(s.as_mut(), &mut CaseFix(&known));

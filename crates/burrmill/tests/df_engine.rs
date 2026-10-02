@@ -326,3 +326,167 @@ fn a_host_function_under_try_is_null_where_it_fails() {
         r#"[{"from":"0xa","v":"ok:0xa"},{"from":"0xb","v":null},{"from":"0xa","v":"ok:0xa"}]"#
     );
 }
+fn chain(n: usize) -> String {
+    let mut expr = String::from("1");
+    for _ in 1..n {
+        expr.push_str("+1");
+    }
+    format!("SELECT {expr} AS n")
+}
+
+fn unions(n: usize) -> String {
+    let mut sql = String::from("SELECT 1 AS n");
+    for _ in 0..n {
+        sql.push_str(" UNION ALL SELECT 1 AS n");
+    }
+    sql
+}
+
+fn nested(n: usize) -> String {
+    let mut sql = String::from("SELECT 1 AS n");
+    for _ in 0..n {
+        sql = format!("({sql})");
+    }
+    sql
+}
+
+fn in_list(n: usize) -> String {
+    let mut sql = String::from("SELECT 1 IN (1");
+    for _ in 1..n {
+        sql.push_str(",1");
+    }
+    sql.push(')');
+    sql
+}
+
+fn value(sql: &str) -> String {
+    let engine = Engine::open_empty().unwrap();
+    let batches = engine.sql(sql).unwrap();
+    serde_json::to_string(&burrmill::df::encode::rows(&batches[0]).unwrap()).unwrap()
+}
+
+fn refusal(sql: &str) -> String {
+    burrmill::df::check_expr_bounds(sql)
+        .unwrap_err()
+        .to_string()
+}
+
+#[test]
+fn a_chain_under_the_depth_bound_plans_to_its_length() {
+    let sql = chain(32);
+    assert!(burrmill::df::check_expr_bounds(&sql).is_ok());
+    assert_eq!(value(&sql), r#"[{"n":32}]"#);
+}
+
+#[test]
+fn depth_allows_64_literals_and_refuses_65() {
+    assert!(burrmill::df::check_expr_bounds(&chain(64)).is_ok());
+    assert_eq!(value(&chain(64)), r#"[{"n":64}]"#);
+    let err = refusal(&chain(65));
+    assert!(err.contains("deeper than 64"), "{err}");
+}
+
+#[test]
+fn a_thousand_term_chain_is_refused_and_the_process_lives() {
+    let sql = chain(1000);
+    let err = Engine::open_empty().unwrap().sql(&sql).unwrap_err();
+    assert!(matches!(err, BurrmillError::NotAllowed(_)), "{err}");
+    assert!(err.to_string().contains("deeper than 64"), "{err}");
+}
+
+#[test]
+fn a_shallow_union_plans_and_a_deep_one_is_refused() {
+    let shallow = unions(19);
+    assert!(burrmill::df::check_expr_bounds(&shallow).is_ok());
+    assert!(Engine::open_empty().unwrap().sql(&shallow).is_ok());
+    assert!(burrmill::df::check_expr_bounds(&unions(64)).is_ok());
+    assert!(Engine::open_empty().unwrap().sql(&unions(64)).is_ok());
+    let err = refusal(&unions(65));
+    assert!(
+        err.contains("more than 64 queries or set operations"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_wide_select_of_shallow_columns_is_one_root_each() {
+    let cols = (0..100)
+        .map(|i| format!("1 AS c{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("SELECT {cols}");
+    assert!(burrmill::df::check_expr_bounds(&sql).is_ok());
+    assert!(Engine::open_empty().unwrap().sql(&sql).is_ok());
+}
+
+#[test]
+fn an_in_list_allows_1024_terms_and_refuses_1025() {
+    // `1 IN (1, …)` is the `IN` node, the left literal, and one node per element.
+    assert!(burrmill::df::check_expr_bounds(&in_list(1022)).is_ok());
+    let err = refusal(&in_list(1023));
+    assert!(err.contains("more than 1024 terms"), "{err}");
+}
+
+#[test]
+fn nested_parentheses_stop_with_the_parser() {
+    // sqlparser's recursion limit is 50, and a parenthesis spends more than one. 48 is that
+    // parse error, not the depth bound.
+    assert_eq!(value(&nested(47)), r#"[{"n":1}]"#);
+    assert!(burrmill::df::check_expr_bounds(&nested(48)).is_ok());
+    let err = Engine::open_empty().unwrap().sql(&nested(48)).unwrap_err();
+    assert!(matches!(err, BurrmillError::Parse(_)), "{err}");
+}
+
+#[test]
+fn subquery_depth_continues_from_the_parent() {
+    let inner = chain(20)
+        .trim_start_matches("SELECT ")
+        .trim_end_matches(" AS n")
+        .to_string();
+    let mut expr = format!("(SELECT {inner})");
+    for _ in 0..20 {
+        expr.push_str(" + 1");
+    }
+    assert!(burrmill::df::check_expr_bounds(&format!("SELECT {expr} AS n")).is_ok());
+    let inner = chain(40)
+        .trim_start_matches("SELECT ")
+        .trim_end_matches(" AS n")
+        .to_string();
+    let mut expr = format!("(SELECT {inner})");
+    for _ in 0..40 {
+        expr.push_str(" + 1");
+    }
+    let err = refusal(&format!("SELECT {expr} AS n"));
+    assert!(err.contains("deeper than 64"), "{err}");
+}
+
+#[test]
+fn union_inside_a_string_is_not_a_set_operation() {
+    let sql = format!("SELECT '{}'", " UNION ".repeat(80));
+    assert!(burrmill::df::check_expr_bounds(&sql).is_ok());
+}
+
+#[test]
+fn sql_the_parser_rejects_is_not_reported_as_too_deep() {
+    assert!(burrmill::df::check_expr_bounds("SELECT ((").is_ok());
+    let err = Engine::open_empty().unwrap().sql("SELECT ((").unwrap_err();
+    assert!(matches!(err, BurrmillError::Parse(_)), "{err}");
+}
+
+#[test]
+fn planning_does_not_use_the_caller_stack() {
+    // Executing this sum takes about a mebibyte. The planner thread is asserted by name.
+    let engine = Engine::open_empty().unwrap();
+    let sql = chain(48);
+    let handle = std::thread::Builder::new()
+        .name("small-stack".into())
+        .stack_size(1024 * 1024)
+        .spawn(move || value_of(engine, &sql))
+        .unwrap();
+    assert_eq!(handle.join().unwrap(), r#"[{"n":48}]"#);
+}
+
+fn value_of(engine: Engine, sql: &str) -> String {
+    let batches = engine.sql(sql).unwrap();
+    serde_json::to_string(&burrmill::df::encode::rows(&batches[0]).unwrap()).unwrap()
+}
