@@ -4,6 +4,37 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Every nest on Burrmill, and the QoS nest's memory — 2026-10-02
+
+**The fleet.** Chief merged nuthatch#1626 at 10:40 UTC through muster's `finish-migration.sh`;
+`data-services-nest` and the legacy archive had rolled to `4.1.0-pre.1` at 07:37 (24 of 24
+recorded answers unchanged), and DIPS went from `checked` to `burrmill`. No nest consults DuckDB.
+`v4.1.0` was tagged before #1627 (notes, version bump) merged, so the release run failed on its
+missing notes and published nothing; the tag is moved after the merge.
+
+**The QoS nest** (ThinkPad, Burrmill alone since 2026-10-01 18:46) was at 7.3 GB resident plus
+4.3 GB swapped by morning, throttled by its 6G/7G cgroup and not answering; kittiwake's
+`ingest-qos-days` failed 20 times overnight. Restarted 07:43 UTC, it was back at 4.7 GB within
+40 minutes with one engine session and 229 statements. Reproduced on a copy with kittiwake's own
+mix (55 indexers x the warmer's four, then the ingest job's four whole-day statements, two clients):
+
+| allocator | after 170 statements | after all 279 |
+|---|---:|---:|
+| glibc | 2.8 GB | **5.6 GB** |
+| glibc, `MALLOC_ARENA_MAX=2` | 2.7 GB (at 130) | |
+| jemalloc | 2.0 GB | under 2.1 GB |
+
+The four whole-day statements alone, fresh server, 2 GB pool: glibc 1.72 GB afterwards and the same
+twenty seconds later; jemalloc 1.28 GB, then 0.95 GB. **The engine's limit holds; glibc keeps what a
+large statement freed**, and the memory is outside DataFusion's pool (decoded pages, the row
+encoding, the JSON answer). nuthatch#1628 makes jemalloc the global allocator on Linux. Until it is
+on the nest, its cgroup is at 14G/16G on a 62 GB box.
+
+**Also measured:** DataFusion's debug-build invariant checks are not why the router tests time out
+unoptimised; the stacks sit in physical planning (`equivalence::properties`, `Statistics`).
+
+---
+
 ## DuckDB out of nuthatch's tree — 2026-10-02
 
 nuthatch#1626 (`pete/duckdb-removal`, three commits on main): `duckdb` is out of `Cargo.toml` and
