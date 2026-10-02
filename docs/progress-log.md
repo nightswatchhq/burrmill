@@ -4,6 +4,41 @@ Newest first. One entry per RFC-0044 slice.
 
 ---
 
+## Where the 195 MB is, and what three profile changes do to it — 2026-10-02
+
+The measurements behind [RFC-0045](rfc/RFC-0045-one-engine-smaller.md). Published artifacts by
+`objdump -h`: 4.0.2 to 4.1.0 is `.text` 82.5 to 147.1 MB, unwinding tables 12.3 to 26.8, file
+108.5 to 195.0. A symbolled host build of nuthatch `79d3180` on this crate at `17e0a22` (aarch64
+macOS, the shipped `lto = "thin"` profile, 124.6 MB text, 213.8 MB file, 268,478 functions), every
+function attributed to the first non-std crate its symbol names: sqlparser 24.6 MiB, std 20.6,
+datafusion 19.2 over 19 crates, arrow 15.6 in two versions, wasmtime and cranelift 9.6, nuthatch 4.2,
+dbsp 3.5, parquet 3.3, stacker 2.9, burrmill 0.8. sqlparser is 0.85 MiB of parser and 23 MiB of
+derived `Hash` (6.3), `drop_in_place` (5.7), `Visit` (3.7), `PartialEq` (3.4), `VisitMut` (1.9) and
+`Clone` (1.5) over the whole grammar; `<Statement as Hash>::hash` is in the binary 45 times and
+`::eq` 55 times at 11 to 26 KB a copy. The graph holds arrow 58 and 59, parquet 58 and 59,
+object_store 0.12 and 0.13; this crate's own `object_store = "0.12"` is the odd one against
+DataFusion 55.
+
+One change at a time, manifest restored after each:
+
+| build | text | file | functions | build |
+|---|---:|---:|---:|---:|
+| shipped | 124.6 MB | 213.8 MB | 268,478 | 224 s |
+| nuthatch on arrow 59, parquet 59 (no code change) | 120.6 | 207.2 | 259,921 | |
+| `lto = "fat"`, `codegen-units = 1` | 91.1 | 145.9 | 137,126 | 778 s |
+| the same, sqlparser at `opt-level = "z"` | 89.3 | 145.2 | 144,070 | 748 s |
+
+Fat LTO halves sqlparser (12.5 MiB) and leaves eleven copies of `Statement::hash`. A link map
+(`-Wl,-map`) puts the copies in the codegen units of `datafusion-expr`, `datafusion-optimizer`,
+`datafusion-functions` and burrmill, six per unit: they are instantiated by hashing DataFusion's
+`Expr`, whose `Wildcard` variant carries sqlparser's `ReplaceSelectElement` and through it a
+sqlparser `Expr`, `Query` and `Statement`. DataFusion's shims for those types sit behind
+`datafusion-expr`'s `sql` feature, which `datafusion-sql` requires on; the fix is an upstream patch. Query time under the fat profile is unmeasured and is S1's gate. cargo-bloat's
+own crate table under thin LTO put sqlparser at 13.7 MiB while its function filter found 1.5, so
+neither of its numbers is quoted.
+
+---
+
 ## 4.1.0 released and on every nest — 2026-10-02
 
 Tagged at `79d3180` (#1626, #1627 notes and version, #1628 jemalloc) after two tags on the wrong
