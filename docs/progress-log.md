@@ -73,7 +73,9 @@ I suspected, is not the bulk of it. The stacks (gdb, six samples) sit in physica
 budget under `cfg!(test)` and their fixtures a 600 s freshness limit, as
 `tests/network_contract.rs` already allows itself for the same views. With that the whole `graph`
 suite passes unoptimised on four cores: 1,989, in 21 minutes of which the network contract is 646 s.
-The graph job was 13 minutes. **This is the planning cost on deep views, and it is the engine's
+On a GitHub runner the same job took 45 minutes (library tests 670 s, `network_contract`
+1,183 s) where it was 13 on DuckDB; its ceiling is raised from 60 to 90. All seventeen checks pass.
+**This is the planning cost on deep views, and it is the engine's
 to fix**: DataFusion 56's `EnsureRequirements` change, and whatever is left after it.
 
 **Three runs were lost** to rsyncing a newer tree under a build still in its second pass; the
