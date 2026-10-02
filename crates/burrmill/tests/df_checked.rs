@@ -349,6 +349,39 @@ fn dec_companion_sums_are_exact() {
     assert!(m.contains(total), "{m}");
 }
 
+/// 10^38 does not fit `DECIMAL(38,0)` and -10^38+5 does. Their exact sum is 5, so summing the
+/// source text answers 5 where the column holds one value.
+#[test]
+fn sum_of_a_dec_column_skips_rows_the_column_reports_as_null() {
+    const TEN38: &str = "100000000000000000000000000000000000000";
+    const FITS: &str = "-99999999999999999999999999999999999995";
+    let (_t, e) = transfers(&[&[("a", TEN38), ("a", FITS), ("b", U256_MAX), ("b", "7")]]);
+    assert_eq!(
+        one(&e, "SELECT SUM(value_dec) FROM transfer WHERE party = 'a'"),
+        FITS
+    );
+    assert_eq!(one(&e, "SELECT AVG(value_dec) FROM transfer WHERE party = 'a'"), "-1e38");
+    assert_eq!(one(&e, "SELECT SUM(value_dec) FROM transfer WHERE party = 'b'"), "7");
+    assert_eq!(
+        one(&e, "SELECT SUM(TRY_CAST(value AS BIGINT)) FROM transfer WHERE party = 'a'"),
+        "NULL"
+    );
+    assert_eq!(
+        rows(
+            &e,
+            "SELECT party, SUM(value_dec) FROM transfer GROUP BY party ORDER BY party"
+        ),
+        vec![
+            vec!["a".to_string(), FITS.into()],
+            vec!["b".to_string(), "7".into()],
+        ]
+    );
+
+    let (_t, e) = transfers(&[&[("a", "1e3"), ("a", "4")]]);
+    assert_eq!(one(&e, "SELECT value_dec FROM transfer WHERE value = '1e3'"), "NULL");
+    assert_eq!(one(&e, "SELECT SUM(value_dec) FROM transfer"), "4");
+}
+
 #[test]
 fn dec_companion_through_subqueries_and_joins() {
     let (_t, e) = transfers(&[&[("a", "5"), ("b", "7")], &[("a", "10")]]);
