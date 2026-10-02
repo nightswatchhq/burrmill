@@ -897,3 +897,46 @@ fn a_statement_cannot_name_the_hidden_parts_of_a_registration() {
         .unwrap();
     assert!(engine.sql("SELECT a FROM e__raw").is_err());
 }
+
+/// #13, #24: a statement refused bare is refused the same way under any EXPLAIN, before it plans,
+/// and `EXPLAIN ANALYZE` cannot write to a host's in-memory tables.
+#[test]
+fn explain_does_not_admit_what_it_wraps() {
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_rows("labels", &[json!({"a": "0x1", "l": "alice"})])
+        .unwrap();
+    let count = |e: &Engine| rows(e, "SELECT count(*) AS n FROM labels");
+    for (bare, kind) in [
+        ("INSERT INTO labels VALUES ('0xz', 'mallory')", "INSERT"),
+        ("DELETE FROM labels", "DELETE"),
+        ("COPY (SELECT 1) TO '/tmp/out.csv'", "COPY"),
+        (
+            "CREATE EXTERNAL TABLE pw STORED AS CSV LOCATION '/etc/passwd'",
+            "CREATE",
+        ),
+    ] {
+        for wrap in [
+            "",
+            "EXPLAIN ANALYZE ",
+            "EXPLAIN ANALYZE VERBOSE ",
+            "EXPLAIN ",
+            "EXPLAIN VERBOSE ",
+        ] {
+            let sql = format!("{wrap}{bare}");
+            let got = engine.sql(&sql);
+            assert_eq!(
+                count(&engine),
+                vec![json!({"n": 1})],
+                "{sql} changed labels"
+            );
+            match got {
+                Err(burrmill::BurrmillError::NotAllowed(m)) => {
+                    assert!(m.contains(kind), "{sql}: {m}")
+                }
+                other => panic!("{sql}: expected a refusal naming {kind}, got {other:?}"),
+            }
+        }
+    }
+    assert!(engine.sql("EXPLAIN SELECT * FROM labels").is_ok());
+}
