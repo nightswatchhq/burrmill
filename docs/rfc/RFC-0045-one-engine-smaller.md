@@ -297,12 +297,15 @@ execute) before touching anything. No gate until the measurement says what to ga
 
 ### 3.5 The audit's host-killers
 
-The cold audit of 2026-10-02 filed burrmill#9 to #24. Two of them end the process rather than the
-query, which breaks the one promise RFC-0044 §1 made that DuckDB could not: #11, `plan_query`
-overflowing the stack on a long chain of binary operators and aborting the host, and #10, hidden
-`__raw`, `__hot` and `__union` registrations addressable by a public statement and bypassing the
-historical window. They are not footprint and they go first in S2 regardless, because an engine
-that can be made to abort its host by a `SELECT` has no business being smaller.
+The cold audit of 2026-10-02 filed burrmill#9 to #24. The one that ended the process rather than
+the query, #11, `plan_query` overflowing the stack on a long chain of binary operators, was closed
+the same day; nuthatch#1655 is its consumer half and stays open until the pin moves. Of the rest,
+#12 (`SUM` and `AVG` over a `_dec` column counting rows the column reports as `NULL`, a wrong
+answer the README advises people to ask for), #9 (a cancel armed before planning erased on entry)
+and #13 (`EXPLAIN ANALYZE` on a write reaching a `MemTable`) go first in S2, because they are
+answers and controls rather than bytes. #10, the hidden `__raw`, `__hot` and `__union` registrations
+addressable by a public statement, is rated low by the audit and goes with them as a one-line
+refusal. The dialect gaps (#14 to #20) are a parity matter and queue behind footprint.
 
 ## §4 Slices and gates
 
@@ -314,7 +317,7 @@ nothing in a later slice assumes an earlier one passed.
 |---|---|---|---|
 | S0 | both | the measurements in §1 and §2 (done), the `EXPLAIN ANALYZE` of §3.1, the `-why_live` chain of §2.3 | numbers in the progress log |
 | S1 | nuthatch | arrow 59, parquet 59; `lto = "fat"`, `codegen-units = 1`; sqlparser at `opt-level = "z"`; the size ratchet in CI | artifact at or under 140 MB; engine-views and serve-views within 2% of 4.1.0; release job within its runner's time |
-| S2 | burrmill | #11 and #10; arrow features off (#6); `object_store` 0.13; the `WildcardOptions` patch filed upstream; `datafusion-functions` audit; re-export arrow | consumer release binary down a further 10 MB on `probes/footprint6`; corpus and views unchanged |
+| S2 | burrmill | #12, #9, #13 and #10; arrow features off (#6); `object_store` 0.13; the `WildcardOptions` patch filed upstream; `datafusion-functions` audit; re-export arrow | consumer release binary down a further 10 MB on `probes/footprint6`; corpus and views unchanged |
 | S3 | burrmill | day pruning (§3.1) | eight QoS statements under 1.05 s, `bytes_scanned` within 2x of the day |
 | S4 | burrmill, nuthatch | the shared pool and derived permits (§3.2); batches across the seam instead of JSON | 103 of 103 admitted at 2 GB, zero busy at four clients, p99 under 2x DuckDB |
 | S5 | burrmill | DataFusion 56; the view plan cache (§3.3) | contract suite under 40 s, `graph` job under 20 minutes |
