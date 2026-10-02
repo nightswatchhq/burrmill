@@ -138,6 +138,28 @@ fn a_window_bounds_the_rows_and_registration_replaces() {
     assert_eq!(got, vec![json!({"n": 0, "s": null})]);
 }
 
+/// A cancel armed before the statement is that statement's answer. The host clears the token
+/// before the next one.
+#[test]
+fn a_cancel_armed_before_the_statement_is_not_forgotten() {
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_rows("t", &[json!({"n": "1"})])
+        .unwrap();
+    engine.cancel_token().cancel();
+    let r = engine.sql("SELECT count(*) AS n FROM t");
+    assert!(
+        matches!(r, Err(burrmill::BurrmillError::Cancelled)),
+        "{:?}",
+        r.map(|_| ())
+    );
+    engine.cancel_token().reset();
+    assert_eq!(
+        rows(&engine, "SELECT count(*) AS n FROM t"),
+        vec![json!({"n": 1})]
+    );
+}
+
 /// A statement stopped from another thread ends as `Cancelled` at its next batch, and the engine
 /// answers the next statement as if nothing happened.
 #[test]
