@@ -821,3 +821,41 @@ fn a_view_does_not_replace_a_table() {
     e.register_view("t", "SELECT 3 AS z").unwrap();
     assert_eq!(rows(&e, "SELECT z FROM t"), vec![json!({"z": 3})]);
 }
+
+/// #10: a statement cannot read `__raw`, `__hot` or `__union`. The public view keeps the window.
+#[test]
+fn a_statement_cannot_name_the_hidden_parts_of_a_registration() {
+    let mut engine = Engine::open_empty().unwrap();
+    let hot = vec![
+        json!({"block_number": 10, "who": "a", "amount": "1"}),
+        json!({"block_number": 30, "who": "b", "amount": "2"}),
+    ];
+    engine
+        .register_facts("t", &declared(), Vec::new(), &hot, (None, Some(10)))
+        .unwrap();
+    assert_eq!(
+        rows(&engine, "SELECT max(block_number) AS m FROM t"),
+        vec![json!({"m": 10})]
+    );
+    let leaked = engine.sql("SELECT max(block_number) AS m FROM t__union");
+    assert!(leaked.is_err(), "t__union answered past the window: {leaked:?}");
+    assert!(engine.sql("SELECT * FROM t__hot").is_err());
+    assert!(engine.sql("SELECT * FROM t__raw").is_err());
+    assert!(engine.sql("SELECT * FROM \"T__UNION\"").is_err());
+    assert!(burrmill::inspect::reach("SELECT * FROM t__union").is_err());
+
+    // A later registration of another table does not rebind `t`, so the old tip must stay unread.
+    engine
+        .register_facts("u", &declared(), Vec::new(), &[], (None, None))
+        .unwrap();
+    assert!(engine.sql("SELECT max(block_number) AS m FROM t__hot").is_err());
+    let hidden = |n: &str| {
+        let l = n.to_ascii_lowercase();
+        l.ends_with("__raw") || l.ends_with("__hot") || l.ends_with("__union")
+    };
+    assert!(
+        !engine.tables().iter().any(|n| hidden(n)),
+        "hidden parts stayed registered: {:?}",
+        engine.tables()
+    );
+}
