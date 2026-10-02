@@ -272,6 +272,7 @@ impl Engine {
     }
 
     /// A handle that stops the statement in flight, from any thread, at its next batch boundary.
+    /// It stays armed until the host calls [`crate::CancelToken::reset`].
     /// A DataFusion join does not yield inside itself (apache/datafusion#19358), so the delay is
     /// bounded by one operator's work, not by one batch; the caller's deadline still stands.
     pub fn cancel_token(&self) -> crate::CancelToken {
@@ -297,8 +298,12 @@ impl Engine {
         // Parsed first, so malformed SQL is a syntax error as DuckDB reports it, not a refusal.
         let logical = plan_query(&self.session, sql)?;
         refuse_non_query(sql)?;
+        // The host arms the token and clears it. Clearing it here would run a statement whose
+        // cancel arrived before it, or while it was still being planned.
+        if self.cancel.is_cancelled() {
+            return Err(BurrmillError::Cancelled);
+        }
         let _pass = self.gate.enter();
-        self.cancel.reset();
         if tokio::runtime::Handle::try_current().is_err() {
             return self.runtime().block_on(self.stream(logical, &mut f));
         }
