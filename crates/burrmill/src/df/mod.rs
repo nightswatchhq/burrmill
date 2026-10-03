@@ -456,6 +456,7 @@ fn scans(p: &Arc<dyn datafusion_physical_plan::ExecutionPlan>) -> Result<u64> {
         | "CastViewsExec"
         | "ChargedWindowExec"
         | "CoalesceExec"
+        | "GatherExec"
         | "RangeJoinExec"
         | "SharedExec" => 0,
         other => {

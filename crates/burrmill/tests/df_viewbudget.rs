@@ -394,6 +394,64 @@ fn sort_at_the_production_budget_answers_in_memory() {
     }
 }
 
+/// #56: a sort too large for the pool spills and answers, and one whose spill outgrows the cap is
+/// stopped by the cap. Over a budget's 128-row batches the spill merged one run per batch, and the
+/// merge took the pool before anything was written: a projection's output always reached the sort
+/// that way, and a cross join's has since #49 copied it into such batches.
+#[test]
+fn a_sort_too_large_for_the_pool_spills() {
+    let open = |memory_bytes: usize, spill: Option<(PathBuf, u64)>| {
+        Engine::open_empty_budgeted(burrmill::Budget {
+            memory_bytes,
+            threads: 2,
+            spill,
+        })
+        .unwrap()
+    };
+    let cross = |rows: u64| {
+        format!(
+            "SELECT a.i FROM range({rows}) a(i), range(120) b(j) \
+             ORDER BY (a.i * 2654435761) % 1000003, b.j"
+        )
+    };
+    let projected = "SELECT i FROM (SELECT range * 3 AS i FROM range(3000000)) \
+                     ORDER BY (i * 2654435761) % 1000003, i";
+    let dir = tempfile::tempdir().unwrap();
+    for sql in [cross(25_000), projected.to_string()] {
+        assert!(
+            open(32 << 20, None).sql(&sql).is_err(),
+            "{sql}: the sort fits in memory, so this does not test its spill"
+        );
+        let batches = open(32 << 20, Some((dir.path().to_path_buf(), 1 << 30)))
+            .sql(&sql)
+            .unwrap_or_else(|m| panic!("{sql}: the sort refused rather than spill: {m}"));
+        let keys: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                let i = b.column(0).as_primitive::<arrow::datatypes::Int64Type>();
+                i.values()
+                    .iter()
+                    .map(|i| (i * 2654435761) % 1000003)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(keys.len(), 3_000_000, "{sql}");
+        assert!(
+            keys.is_sorted(),
+            "{sql}: the spilled sort answered out of order"
+        );
+    }
+
+    let capped = open(128 << 20, Some((dir.path().to_path_buf(), 16 << 20)))
+        .sql(&cross(1_000_000))
+        .map(|_| ())
+        .expect_err("120 million rows answered under a 16 MB spill cap");
+    assert!(
+        capped.to_string().contains("exceeded the allowable limit"),
+        "stopped for something other than the spill cap: {capped}"
+    );
+}
+
 /// DataFusion makes its own directory under the spill directory before it has anything to write.
 fn holds_a_file(dir: &std::path::Path) -> bool {
     std::fs::read_dir(dir).unwrap().any(|e| {
