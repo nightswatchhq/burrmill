@@ -20,6 +20,7 @@ mod cancel;
 mod catalog;
 mod checked;
 mod compactviews;
+mod heldinput;
 pub use textfn::TextFunction;
 mod constants;
 mod correlate;
@@ -452,6 +453,8 @@ fn scans(p: &Arc<dyn datafusion_physical_plan::ExecutionPlan>) -> Result<u64> {
         | "CancelExec"
         | "CompactViewsExec"
         | "CastViewsExec"
+        | "ChargedWindowExec"
+        | "CoalesceExec"
         | "RangeJoinExec"
         | "SharedExec" => 0,
         other => {

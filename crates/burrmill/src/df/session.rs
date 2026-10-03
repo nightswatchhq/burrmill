@@ -311,6 +311,7 @@ impl MiniSession {
                     Arc::new(super::rangejoin::RangeJoin)
                         as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
                     Arc::new(super::smallinputs::SmallInputs),
+                    Arc::new(super::heldinput::HeldInput),
                 ])
                 // Only a bounded pool charges the views; unbounded, the copy buys nothing.
                 .chain(budget.is_some().then(|| {

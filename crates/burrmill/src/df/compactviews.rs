@@ -116,6 +116,7 @@ fn bloats(p: &Arc<dyn ExecutionPlan>) -> bool {
         || p.downcast_ref::<SortMergeJoinExec>().is_some()
         || p.downcast_ref::<PiecewiseMergeJoinExec>().is_some()
         || p.downcast_ref::<AsyncFuncExec>().is_some()
+        || p.downcast_ref::<super::heldinput::CoalesceExec>().is_some()
         || p.downcast_ref::<DataSourceExec>().is_some()
 }
 
