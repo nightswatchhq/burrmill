@@ -279,6 +279,16 @@ fn least_integer_modulo_minus_one_refuses() {
     assert_eq!(one(&e, "SELECT v % 4 FROM t WHERE v < 0"), "0");
     assert_eq!(one(&e, "SELECT CAST(-2147483647 AS INTEGER) % -1"), "0");
     assert_eq!(one(&e, "SELECT v % 0 FROM t WHERE v > 0"), "NULL");
+    // #50: HUGEINT is DECIMAL(38,0), so its least value refuses at the cast (#42), not at the `%`.
+    let m = refused(
+        &e,
+        "SELECT CAST('-170141183460469231731687303715884105728' AS HUGEINT) % -1",
+    );
+    assert!(m.contains("DECIMAL(38,0)"), "{m}");
+    for v in ["-9223372036854775808", &format!("-{D38MAX}")] {
+        let sql = format!("SELECT CAST('{v}' AS HUGEINT) % CAST(-1 AS HUGEINT)");
+        assert_eq!(one(&e, &sql), "0", "{sql}");
+    }
 }
 
 // 2k: a literal past u64 would be a float before any rule saw it.

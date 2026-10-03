@@ -319,6 +319,9 @@ const CORPUS: &[&str] = &[
     "SELECT CAST(-9223372036854775808 AS BIGINT) % -1 AS a",
     "SELECT CAST(-2147483648 AS INTEGER) % -1 AS a",
     "SELECT CAST(-9223372036854775807 AS BIGINT) % -1 AS a, CAST(-7 AS BIGINT) % -2 AS b, CAST(-2147483647 AS INTEGER) % -1 AS c",
+    // HUGEINT's least value overflows `% -1` in DuckDB and refuses at its cast here (#42, #50).
+    "SELECT CAST('-170141183460469231731687303715884105728' AS HUGEINT) % -1 AS a",
+    "SELECT CAST('-9223372036854775808' AS HUGEINT) % -1 AS a, CAST('-99999999999999999999999999999999999999' AS HUGEINT) % CAST(-1 AS HUGEINT) AS b, CAST('-7' AS HUGEINT) % -2 AS c",
     // An ordered aggregate orders its own input, not that of an unordered list() beside it.
     "SELECT string_agg(x, ',' ORDER BY x DESC) AS s, to_json(array_agg(x)) AS l, to_json(list(x)) AS m FROM (VALUES ('a'), ('c'), ('b'), (NULL)) t(x)",
     "SELECT \"from\", string_agg(value, ',' ORDER BY block_number DESC, log_index DESC) AS s, to_json(list(value)) AS m FROM transfer GROUP BY 1 ORDER BY 1",
