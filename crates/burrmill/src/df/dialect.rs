@@ -1150,6 +1150,56 @@ fn rejoin(v: Vec<SqlExpr>) -> SqlExpr {
         .expect("at least one conjunct")
 }
 
+/// DuckDB's LIKE has no escape character unless `ESCAPE` names one, which may be any one character;
+/// Arrow's always takes `\`. The pattern is respelled for Arrow and the clause dropped.
+fn like_pattern(
+    pattern: &mut SqlExpr,
+    escape: &mut Option<sq::ValueWithSpan>,
+) -> std::result::Result<(), String> {
+    let esc = match escape.as_ref().map(|v| &v.value) {
+        None => None,
+        Some(sq::Value::SingleQuotedString(s)) if s.chars().count() <= 1 => s.chars().next(),
+        // Refused by the planner as DuckDB refuses it.
+        Some(_) => return Ok(()),
+    };
+    let lit = |s: String| SqlExpr::Value(sq::Value::SingleQuotedString(s).into());
+    if let SqlExpr::Value(v) = pattern
+        && let sq::Value::SingleQuotedString(p) = &v.value
+    {
+        let mut out = String::with_capacity(p.len());
+        let mut chars = p.chars();
+        while let Some(c) = chars.next() {
+            if Some(c) == esc {
+                let Some(next) = chars.next() else {
+                    return Err("Like pattern must not end with escape character!".into());
+                };
+                out.push('\\');
+                out.push(next);
+            } else if c == '\\' {
+                out.push_str("\\\\");
+            } else {
+                out.push(c);
+            }
+        }
+        *pattern = lit(out);
+    } else {
+        match esc {
+            None => {
+                let p = std::mem::replace(pattern, lit(String::new()));
+                *pattern = call("replace", vec![p, lit("\\".into()), lit("\\\\".into())]);
+            }
+            Some('\\') => return Ok(()),
+            Some(c) => {
+                return Err(format!(
+                    "LIKE ... ESCAPE '{c}' over a pattern that is not a literal is not supported here"
+                ));
+            }
+        }
+    }
+    *escape = None;
+    Ok(())
+}
+
 fn call(name: &str, args: Vec<SqlExpr>) -> SqlExpr {
     SqlExpr::Function(sq::Function {
         name: sq::ObjectName::from(vec![sq::Ident::new(name)]),
@@ -1411,6 +1461,23 @@ impl VisitorMut for Rewriter {
                     (None, None) => {}
                 }
                 *e = call("burrmill_substr", args);
+            }
+            SqlExpr::Like {
+                any: false,
+                pattern,
+                escape_char,
+                ..
+            }
+            | SqlExpr::ILike {
+                any: false,
+                pattern,
+                escape_char,
+                ..
+            } => {
+                if let Err(why) = like_pattern(pattern, escape_char) {
+                    self.refused = Some(why);
+                    return ControlFlow::Break(());
+                }
             }
             SqlExpr::Cast { data_type, .. } => {
                 let hugeint = matches!(data_type, SqlType::HugeInt);

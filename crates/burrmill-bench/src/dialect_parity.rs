@@ -318,6 +318,11 @@ const CORPUS: &[&str] = &[
     // An ordered aggregate orders its own input, not that of an unordered list() beside it.
     "SELECT string_agg(x, ',' ORDER BY x DESC) AS s, to_json(array_agg(x)) AS l, to_json(list(x)) AS m FROM (VALUES ('a'), ('c'), ('b'), (NULL)) t(x)",
     "SELECT \"from\", string_agg(value, ',' ORDER BY block_number DESC, log_index DESC) AS s, to_json(list(value)) AS m FROM transfer GROUP BY 1 ORDER BY 1",
+    // LIKE has no escape character unless ESCAPE names one (#17).
+    r#"SELECT 'ab' LIKE 'a\b' AS a, 'a\b' LIKE 'a\\b' AS b, 'a%' LIKE 'a$%' ESCAPE '$' AS d, 'a$' LIKE 'a$$' ESCAPE '$' AS f, 'a_c' LIKE 'a\_c' ESCAPE '\' AS g, 'A%' ILIKE 'a#%' ESCAPE '#' AS h, 'a' LIKE 'a' ESCAPE '' AS i"#,
+    r#"SELECT "from" LIKE '0x_' AS a, "value" LIKE '25%' AS b, "from" || '\' LIKE '%\' AS c FROM transfer ORDER BY block_number, log_index"#,
+    r#"SELECT s LIKE p AS m FROM (VALUES ('a\b', 'a\b'), ('ab', 'a\b'), ('a\b', 'a\\b'), ('x', NULL)) t(s, p)"#,
+    r#"SELECT 'a$' LIKE 'a$' ESCAPE '$' AS a"#,
 ];
 
 /// Differences that stand, and why.

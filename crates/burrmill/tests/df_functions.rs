@@ -282,3 +282,63 @@ fn a_statement_that_does_not_plan_is_a_plan_error() {
         .expect_err("raised at a row");
     assert!(matches!(e, BurrmillError::Substrate(_)), "{e:?}");
 }
+
+fn one_row(engine: &Engine, sql: &str) -> Vec<serde_json::Value> {
+    let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    got.iter()
+        .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+        .collect()
+}
+
+/// #17: LIKE has no escape character unless `ESCAPE` names one, and then any one character may be
+/// it, as DuckDB 1.5 answers each of these.
+#[test]
+fn like_escapes_only_with_an_escape_clause() {
+    let engine = Engine::open_empty().unwrap();
+    assert_eq!(
+        one_row(
+            &engine,
+            r#"SELECT 'ab' LIKE 'a\b' AS a, 'a\b' LIKE 'a\\b' AS b, 'a\b' LIKE 'a\b' AS c, 'a%' LIKE 'a$%' ESCAPE '$' AS d, 'ab' LIKE 'a$%' ESCAPE '$' AS e, 'a$' LIKE 'a$$' ESCAPE '$' AS f, 'a_c' LIKE 'a\_c' ESCAPE '\' AS g, 'abc' LIKE 'a\_c' ESCAPE '\' AS h"#
+        ),
+        vec![
+            serde_json::json!({"a": false, "b": false, "c": true, "d": true, "e": false, "f": true, "g": true, "h": false})
+        ]
+    );
+    assert_eq!(
+        one_row(
+            &engine,
+            r#"SELECT 'A\B' ILIKE 'a\b' AS a, 'AB' ILIKE 'a\b' AS b, 'A%' ILIKE 'a#%' ESCAPE '#' AS c, 'a\b' NOT LIKE 'a\b' AS d, 'a' LIKE 'a' ESCAPE '' AS e, '%' LIKE '%%' ESCAPE '%' AS f, 'x' LIKE '%%' ESCAPE '%' AS g, 'ab' LIKE 'a$b' ESCAPE '$' AS h"#
+        ),
+        vec![
+            serde_json::json!({"a": true, "b": false, "c": true, "d": false, "e": true, "f": true, "g": false, "h": true})
+        ]
+    );
+    assert_eq!(
+        one_row(
+            &engine,
+            r#"SELECT s LIKE p AS m FROM (VALUES ('a\b', 'a\b'), ('ab', 'a\b'), ('a\b', 'a\\b'), ('x', NULL)) t(s, p)"#
+        ),
+        [true, false, false]
+            .map(|m| serde_json::json!({ "m": m }))
+            .into_iter()
+            .chain([serde_json::json!({ "m": null })])
+            .collect::<Vec<_>>()
+    );
+    for (sql, why) in [
+        (
+            r#"SELECT 'a$' LIKE 'a$' ESCAPE '$' AS a"#,
+            "must not end with escape character",
+        ),
+        (
+            r#"SELECT 'a\' LIKE 'a\' ESCAPE '\' AS a"#,
+            "must not end with escape character",
+        ),
+        (
+            r#"SELECT s LIKE p ESCAPE '$' AS m FROM (VALUES ('a%', 'a$%')) t(s, p)"#,
+            "is not supported here",
+        ),
+    ] {
+        let e = engine.sql(sql).expect_err(sql).to_string();
+        assert!(e.contains(why), "{sql}: {e}");
+    }
+}
