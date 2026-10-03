@@ -1,4 +1,5 @@
-//! Compacts the view columns of every input to a sort-preserving merge, under a memory budget.
+//! Compacts the view columns of every input to a sort-preserving merge, and of the side a join
+//! collects, under a memory budget.
 //!
 //! A string view keeps the buffer its bytes live in, and a sort's merge of spilled runs emits rows
 //! whose views point into every 128 KiB read chunk they came from. DataFusion 55's
@@ -6,6 +7,10 @@
 //! 42-byte addresses cost 15 MB in the pool and a two-thread `ORDER BY` refused under 64 MiB
 //! where the same sort over `Utf8` spilled and finished. Copying the rows out first charges what
 //! they hold.
+//!
+//! A join's collected side meets it by another route: `RepartitionExec` coalesces through arrow's
+//! `BatchCoalescer`, whose copy buffer doubles per batch to 1 MiB and stays there, so each 128-row
+//! batch of addresses arrives in a 1 MiB buffer and a hash join is charged that much per batch.
 
 use std::fmt;
 use std::sync::Arc;
@@ -19,11 +24,14 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
+use datafusion_physical_plan::joins::{CrossJoinExec, HashJoinExec, NestedLoopJoinExec};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_session::PhysicalOptimizerRule;
 use futures::StreamExt;
+
+use super::rangejoin::RangeJoinExec;
 
 #[derive(Debug)]
 pub(super) struct CompactViewsExec {
@@ -92,27 +100,43 @@ fn has_views(p: &Arc<dyn ExecutionPlan>) -> bool {
         .any(|f| matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView))
 }
 
-/// Puts [`CompactViewsExec`] under each input of a `SortPreservingMergeExec` that has view columns.
-#[derive(Debug)]
-pub(super) struct CompactSortedViews;
+/// Whether `p` holds its `i`th input whole before it emits: every input of a merge, the side a
+/// join collects.
+fn holds(p: &Arc<dyn ExecutionPlan>, i: usize) -> bool {
+    p.downcast_ref::<SortPreservingMergeExec>().is_some()
+        || (i == 0
+            && (p.downcast_ref::<HashJoinExec>().is_some()
+                || p.downcast_ref::<NestedLoopJoinExec>().is_some()
+                || p.downcast_ref::<CrossJoinExec>().is_some()
+                || p.downcast_ref::<RangeJoinExec>().is_some()))
+}
 
-impl PhysicalOptimizerRule for CompactSortedViews {
+/// Puts [`CompactViewsExec`] under each input a merge or a join holds that has view columns.
+#[derive(Debug)]
+pub(super) struct CompactHeldViews;
+
+impl PhysicalOptimizerRule for CompactHeldViews {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|p| {
-            if p.downcast_ref::<SortPreservingMergeExec>().is_none()
-                || !p.children().into_iter().any(has_views)
+            let wrap = |i: usize, c: &Arc<dyn ExecutionPlan>| holds(&p, i) && has_views(c);
+            if !p
+                .children()
+                .into_iter()
+                .enumerate()
+                .any(|(i, c)| wrap(i, c))
             {
                 return Ok(Transformed::no(p));
             }
             let children = p
                 .children()
                 .into_iter()
-                .map(|c| {
-                    if has_views(c) {
+                .enumerate()
+                .map(|(i, c)| {
+                    if wrap(i, c) {
                         Arc::new(CompactViewsExec {
                             inner: Arc::clone(c),
                         }) as Arc<dyn ExecutionPlan>
@@ -129,7 +153,7 @@ impl PhysicalOptimizerRule for CompactSortedViews {
     }
 
     fn name(&self) -> &str {
-        "compact_sorted_views"
+        "compact_held_views"
     }
 
     fn schema_check(&self) -> bool {
