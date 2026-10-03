@@ -452,6 +452,7 @@ fn scans(p: &Arc<dyn datafusion_physical_plan::ExecutionPlan>) -> Result<u64> {
         | "ScalarSubqueryExec"
         | "CancelExec"
         | "CompactViewsExec"
+        | "CompactHeldExec"
         | "CastViewsExec"
         | "ChargedWindowExec"
         | "CoalesceExec"
