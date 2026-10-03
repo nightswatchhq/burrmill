@@ -1,16 +1,16 @@
-//! `FastTextCasts`: `CAST(text AS DECIMAL(p,0))` without Arrow's general-purpose string parser.
+//! `FastTextCasts`: `[TRY_]CAST(text AS DECIMAL(p,0))` without Arrow's general-purpose string parser.
 //!
 //! nuthatch's views cast text to HUGEINT at 305 sites, and on graph-allocations the cast was most
 //! of a scan's time. Text that is an optional `-` and at most `p` significant digits is parsed
-//! straight to i128. Anything else, including an error, goes through Arrow's own cast for that
-//! value, so the answer is Arrow's by construction. `TRY_CAST` is never touched: the checked
-//! arithmetic rule finds lossy values by it. This runs last, after the rules that match `CAST`.
+//! straight to i128. Anything else is read as DuckDB reads it ([`super::wide::duck_number`]), which
+//! Arrow's cast does not: `1e3`, `1_000`. This runs last, after the checked arithmetic rule, which
+//! finds lossy values by the `TRY_CAST` this replaces.
 
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, Decimal128Builder};
 use arrow::compute::{CastOptions, cast_with_options};
-use arrow::datatypes::{DataType, Decimal128Type};
+use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result, ScalarValue, exec_datafusion_err, plan_err};
@@ -78,6 +78,19 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
             ScalarFunction::new_udf(udf, vec![expr.as_ref().clone()]),
         )));
     }
+    if let Expr::TryCast(datafusion_expr::TryCast { expr, field }) = &e
+        && let DataType::Decimal128(p, 0) = field.data_type()
+        && is_text(&expr.get_type(schema)?)
+    {
+        let udf = Arc::new(ScalarUDF::from(TextToDecimal {
+            sig: Signature::any(1, Volatility::Immutable),
+            precision: *p,
+            safe: true,
+        }));
+        return Ok(Transformed::yes(Expr::ScalarFunction(
+            ScalarFunction::new_udf(udf, vec![expr.as_ref().clone()]),
+        )));
+    }
     let Expr::Cast(Cast { expr, field }) = &e else {
         return Ok(Transformed::no(e));
     };
@@ -100,6 +113,7 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
     let udf = Arc::new(ScalarUDF::from(TextToDecimal {
         sig: Signature::any(1, Volatility::Immutable),
         precision: *p,
+        safe: false,
     }));
     Ok(Transformed::yes(Expr::ScalarFunction(
         ScalarFunction::new_udf(udf, vec![expr.as_ref().clone()]),
@@ -111,9 +125,16 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
 struct TextToDecimal {
     sig: Signature,
     precision: u8,
+    /// `TRY_CAST`: NULL where `CAST` would refuse.
+    safe: bool,
 }
 
-/// An optional `-` and 1..=p significant digits, as i128; `None` sends the value to Arrow.
+/// Text as DuckDB's DECIMAL(p,0) cast reads it, if the value has at most `p` digits.
+fn duck_decimal(s: &str, precision: u8) -> Option<i128> {
+    duck_int(s).filter(|v| v.unsigned_abs() < 10u128.pow(precision as u32))
+}
+
+/// An optional `-` and 1..=p significant digits, as i128; `None` sends the value to [`duck_decimal`].
 fn plain(s: &str, precision: u8) -> Option<i128> {
     let b = s.as_bytes();
     let (neg, digits) = match b.first()? {
@@ -150,33 +171,20 @@ impl ScalarUDFImpl for TextToDecimal {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
         let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
-        let want = DataType::Decimal128(self.precision, 0);
-        let strict = CastOptions {
-            safe: false,
-            ..Default::default()
-        };
         let mut out = Decimal128Builder::with_capacity(a.len());
-        let mut each = |i: usize, s: Option<&str>| -> Result<()> {
+        let mut each = |_: usize, s: Option<&str>| -> Result<()> {
             let Some(s) = s else {
                 out.append_null();
                 return Ok(());
             };
-            match plain(s, self.precision) {
+            match plain(s, self.precision).or_else(|| duck_decimal(s, self.precision)) {
                 Some(v) => out.append_value(v),
+                None if self.safe => out.append_null(),
                 None => {
-                    // Arrow's message names its default DECIMAL(38,10), whatever the target.
-                    let one = cast_with_options(&a.slice(i, 1), &want, &strict).map_err(|_| {
-                        exec_datafusion_err!(
-                            "Could not convert string '{s}' to DECIMAL({},0)",
-                            self.precision
-                        )
-                    })?;
-                    let one = one.as_primitive::<Decimal128Type>();
-                    if one.is_null(0) {
-                        out.append_null()
-                    } else {
-                        out.append_value(one.value(0))
-                    }
+                    return Err(exec_datafusion_err!(
+                        "Could not convert string '{s}' to DECIMAL({},0)",
+                        self.precision
+                    ));
                 }
             }
             Ok(())

@@ -278,17 +278,25 @@ pub fn duck_number(s: &str) -> Option<DuckNumber> {
         b'+' => (false, &t[1..]),
         _ => (false, t),
     };
-    let (mantissa, exp) = match t.find(['e', 'E']) {
-        Some(i) => (&t[..i], t[i + 1..].parse::<i32>().ok()?),
-        None => (t, 0),
-    };
-    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     let part = |p: &str| {
         p.is_empty()
             || (!p.starts_with('_')
                 && !p.ends_with('_')
+                && !p.contains("__")
                 && p.chars().all(|c| c.is_ascii_digit() || c == '_'))
     };
+    let (mantissa, exp) = match t.find(['e', 'E']) {
+        Some(i) => {
+            let e = &t[i + 1..];
+            let digits = e.strip_prefix(['-', '+']).unwrap_or(e);
+            if digits.is_empty() || !part(digits) {
+                return None;
+            }
+            (&t[..i], e.replace('_', "").parse::<i32>().ok()?)
+        }
+        None => (t, 0),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     if int.is_empty() && frac.is_empty() || !part(int) || !part(frac) {
         return None;
     }

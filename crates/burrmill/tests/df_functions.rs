@@ -342,3 +342,61 @@ fn like_escapes_only_with_an_escape_clause() {
         assert!(e.contains(why), "{sql}: {e}");
     }
 }
+
+/// #18: text to DECIMAL(p,0) and HUGEINT reads every spelling DuckDB 1.5 reads: an exponent,
+/// underscores between digits, a fraction rounded half away from zero; NULL from `TRY_CAST` and a
+/// refusal from `CAST` for what it does not.
+#[test]
+fn text_to_decimal_reads_duckdbs_spellings() {
+    let engine = Engine::open_empty().unwrap();
+    assert_eq!(
+        one_row(
+            &engine,
+            "SELECT TRY_CAST('1e3' AS DECIMAL(38,0)) a, TRY_CAST('1.5e18' AS HUGEINT) b, TRY_CAST('1_000' AS HUGEINT) c, \
+             TRY_CAST(' 12 ' AS HUGEINT) d, TRY_CAST('+7' AS DECIMAL(38,0)) e, TRY_CAST('1.5' AS DECIMAL(38,0)) f, \
+             TRY_CAST('-2.5' AS HUGEINT) g, TRY_CAST('0x10' AS HUGEINT) h, TRY_CAST('abc' AS HUGEINT) i, \
+             TRY_CAST('' AS DECIMAL(38,0)) j"
+        ),
+        vec![
+            serde_json::json!({"a": "1000", "b": "1500000000000000000", "c": "1000", "d": "12", "e": "7",
+            "f": "2", "g": "-3", "h": null, "i": null, "j": null})
+        ]
+    );
+    assert_eq!(
+        one_row(
+            &engine,
+            "SELECT TRY_CAST('1e38' AS DECIMAL(38,0)) a, TRY_CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)) b, \
+             TRY_CAST('99999999999999999999999999999999999999.5' AS DECIMAL(38,0)) c, TRY_CAST('123' AS DECIMAL(2,0)) d, \
+             TRY_CAST('1e2' AS DECIMAL(3,0)) e, TRY_CAST('1_000' AS DECIMAL(38,0)) f, TRY_CAST('2.5' AS HUGEINT) g, \
+             TRY_CAST('1e-1' AS DECIMAL(38,0)) h, TRY_CAST('5e-1' AS HUGEINT) i, TRY_CAST('1E3' AS DECIMAL(38,0)) j, \
+             TRY_CAST('1__0' AS HUGEINT) k, TRY_CAST('inf' AS HUGEINT) l"
+        ),
+        vec![
+            serde_json::json!({"a": null, "b": "99999999999999999999999999999999999999", "c": null, "d": null,
+            "e": "100", "f": "1000", "g": "3", "h": "0", "i": "1", "j": "1000", "k": null, "l": null})
+        ]
+    );
+    assert_eq!(
+        one_row(
+            &engine,
+            "SELECT CAST('1e3' AS DECIMAL(38,0)) a, CAST('1_000' AS HUGEINT) b, CAST(' 7 ' AS HUGEINT) c, \
+             CAST('1.5' AS DECIMAL(38,0)) d"
+        ),
+        vec![serde_json::json!({"a": "1000", "b": "1000", "c": "7", "d": "2"})]
+    );
+    assert_eq!(
+        one_row(
+            &engine,
+            "SELECT TRY_CAST('1__0' AS BIGINT) a, TRY_CAST('1_0.5_5' AS HUGEINT) b, TRY_CAST('1_0e1_0' AS HUGEINT) c, \
+             TRY_CAST('1.0_0' AS DECIMAL(38,0)) d, TRY_CAST('1e_1' AS HUGEINT) e"
+        ),
+        vec![serde_json::json!({"a": null, "b": "11", "c": "100000000000", "d": "1", "e": null})]
+    );
+    for sql in [
+        "SELECT CAST('abc' AS HUGEINT) a",
+        "SELECT CAST('1e39' AS DECIMAL(38,0)) a",
+    ] {
+        let e = engine.sql(sql).expect_err(sql).to_string();
+        assert!(e.contains("Could not convert string"), "{sql}: {e}");
+    }
+}

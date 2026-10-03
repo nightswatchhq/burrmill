@@ -323,6 +323,12 @@ const CORPUS: &[&str] = &[
     r#"SELECT "from" LIKE '0x_' AS a, "value" LIKE '25%' AS b, "from" || '\' LIKE '%\' AS c FROM transfer ORDER BY block_number, log_index"#,
     r#"SELECT s LIKE p AS m FROM (VALUES ('a\b', 'a\b'), ('ab', 'a\b'), ('a\b', 'a\\b'), ('x', NULL)) t(s, p)"#,
     r#"SELECT 'a$' LIKE 'a$' ESCAPE '$' AS a"#,
+    // Text to DECIMAL(p,0) and HUGEINT in every spelling DuckDB reads (#18).
+    "SELECT TRY_CAST('1e3' AS DECIMAL(38,0)) a, TRY_CAST('1.5e18' AS HUGEINT) b, TRY_CAST('1_000' AS HUGEINT) c, TRY_CAST(' 12 ' AS HUGEINT) d, TRY_CAST('+7' AS DECIMAL(38,0)) e, TRY_CAST('1.5' AS DECIMAL(38,0)) f, TRY_CAST('-2.5' AS HUGEINT) g, TRY_CAST('0x10' AS HUGEINT) h, TRY_CAST('abc' AS HUGEINT) i, TRY_CAST('' AS DECIMAL(38,0)) j",
+    "SELECT TRY_CAST('1e38' AS DECIMAL(38,0)) a, TRY_CAST('99999999999999999999999999999999999999.5' AS DECIMAL(38,0)) c, TRY_CAST('123' AS DECIMAL(2,0)) d, TRY_CAST('1e2' AS DECIMAL(3,0)) e, TRY_CAST('1e-1' AS DECIMAL(38,0)) h, TRY_CAST('5e-1' AS HUGEINT) i, TRY_CAST('1E3' AS DECIMAL(38,0)) j, TRY_CAST('1__0' AS HUGEINT) k, TRY_CAST('1__0' AS BIGINT) l, TRY_CAST('1_0e1_0' AS HUGEINT) m, TRY_CAST('1_0.5_5' AS DECIMAL(38,0)) n",
+    "SELECT CAST('1e3' AS DECIMAL(38,0)) a, CAST('1_000' AS HUGEINT) b, CAST(' 7 ' AS HUGEINT) c, CAST('1.5' AS DECIMAL(38,0)) d",
+    "SELECT CAST('1e39' AS DECIMAL(38,0)) a",
+    "SELECT TRY_CAST(\"value\" || 'e1' AS HUGEINT) AS a, TRY_CAST(\"value\" || '.5' AS DECIMAL(38,0)) AS b FROM transfer ORDER BY block_number, log_index",
 ];
 
 /// Differences that stand, and why.
