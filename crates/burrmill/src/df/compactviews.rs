@@ -2,7 +2,8 @@
 //! a memory budget, so nothing downstream holds a batch charged for bytes it does not use.
 //!
 //! A string view keeps the buffer its bytes live in, and the pool charges a batch for every buffer
-//! it references. Two producers make that far larger than the rows at a 128-row batch. Arrow's
+//! it references. Three producers make that far larger than the rows at a 128-row batch. A Parquet
+//! scan's batches point into whole decoded pages, about 1 MiB of addresses per column. Arrow's
 //! `BatchCoalescer`, behind `RepartitionExec`, `FilterExec` and the joins' output, copies into a
 //! buffer that doubles per batch to 1 MiB and stays there, so 5 KB of addresses arrive in 1 MiB;
 //! a hash join's build side and a sort's input held thousands of them and refused at 1.8 GB. A
@@ -18,6 +19,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
@@ -99,8 +101,8 @@ fn has_views(p: &Arc<dyn ExecutionPlan>) -> bool {
         .any(|f| matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView))
 }
 
-/// Whether `p` builds its output batches in a `BatchCoalescer`, or a batch it emits may point into
-/// a spilled run's read chunks.
+/// Whether `p` builds its output batches in a `BatchCoalescer`, reads them out of whole pages, or a
+/// batch it emits may point into a spilled run's read chunks.
 fn bloats(p: &Arc<dyn ExecutionPlan>) -> bool {
     p.downcast_ref::<RepartitionExec>().is_some()
         || p.downcast_ref::<FilterExec>().is_some()
@@ -110,6 +112,7 @@ fn bloats(p: &Arc<dyn ExecutionPlan>) -> bool {
         || p.downcast_ref::<PiecewiseMergeJoinExec>().is_some()
         || p.downcast_ref::<AsyncFuncExec>().is_some()
         || p.downcast_ref::<SortExec>().is_some()
+        || p.downcast_ref::<DataSourceExec>().is_some()
 }
 
 /// Puts [`CompactViewsExec`] over every operator that [`bloats`] and emits view columns.
