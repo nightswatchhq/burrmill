@@ -958,7 +958,7 @@ fn a_statement_cannot_name_the_hidden_parts_of_a_registration() {
     assert!(engine.sql("SELECT a FROM e__raw").is_err());
 }
 
-/// #13, #24: a statement refused bare is refused the same way under any EXPLAIN, before it plans,
+/// #13, #24, #33: a statement refused bare is refused the same way under any EXPLAIN, before it plans,
 /// and `EXPLAIN ANALYZE` cannot write to a host's in-memory tables.
 #[test]
 fn explain_does_not_admit_what_it_wraps() {
@@ -975,6 +975,7 @@ fn explain_does_not_admit_what_it_wraps() {
             "CREATE EXTERNAL TABLE pw STORED AS CSV LOCATION '/etc/passwd'",
             "CREATE",
         ),
+        ("SELECT 100000000000000000000 AS n", "wider than 64 bits"),
     ] {
         for wrap in [
             "",

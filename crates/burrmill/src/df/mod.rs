@@ -619,8 +619,10 @@ fn refuse_sql_statement(stmt: &SqlStatement) -> Result<()> {
 fn refuse_wide_literals(stmt: &DfStatement) -> Result<()> {
     use sqlparser::ast::{Expr as SqlExpr, Value, visit_expressions};
     use std::ops::ControlFlow;
-    let DfStatement::Statement(s) = stmt else {
-        return Ok(());
+    let s = match stmt {
+        DfStatement::Statement(s) => s,
+        DfStatement::Explain(e) => return refuse_wide_literals(&e.statement),
+        _ => return Ok(()),
     };
     let found = visit_expressions(s.as_ref(), |e| {
         if let SqlExpr::Value(v) = e
