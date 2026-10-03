@@ -1146,3 +1146,57 @@ fn integer_widths_that_differ_between_segments_widen() {
         ]
     );
 }
+
+/// A repartition hands every 128-row batch of string views a 1 MiB coalescing buffer, and the sort
+/// above it holds each one: 34 MB of addresses refused at 1 GiB. The same sort over `Utf8`, or
+/// without a budget, answered.
+#[test]
+fn a_budgeted_sort_over_repartitioned_text_is_charged_for_its_rows_not_their_buffers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let who: Vec<String> = (0..400_000u64).map(|i| format!("0x{i:040x}")).collect();
+    let data: Vec<(u64, &str, &str)> = who
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (i as u64, w.as_str(), w.as_str()))
+        .collect();
+    let segs: Vec<_> = data
+        .chunks(25_000)
+        .enumerate()
+        .map(|(n, c)| segment(tmp.path(), n as u64, c))
+        .collect();
+    let engine = |budget: Option<usize>| {
+        let mut e = match budget {
+            Some(bytes) => Engine::open_empty_budgeted(burrmill::Budget {
+                memory_bytes: bytes,
+                threads: 8,
+                spill: None,
+            }),
+            None => Engine::open_empty(),
+        }
+        .unwrap();
+        e.register_facts("t", &declared(), segs.clone(), &[], (None, None))
+            .unwrap();
+        e
+    };
+    let over = |from: &str| {
+        format!(
+            "SELECT count(*) AS n, max(r) AS m FROM (SELECT row_number() OVER \
+             (PARTITION BY who ORDER BY block_number) AS r FROM {from})"
+        )
+    };
+    let views = over("t");
+    let text = over("(SELECT arrow_cast(who, 'Utf8') AS who, block_number FROM t)");
+    let want = vec![json!({"n": 400_000, "m": 1})];
+
+    assert_eq!(rows(&engine(None), &views), want);
+    assert_eq!(rows(&engine(Some(1 << 30)), &text), want);
+    match engine(Some(1 << 30)).sql(&views) {
+        Ok(b) => assert_eq!(
+            b.iter()
+                .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+                .collect::<Vec<_>>(),
+            want
+        ),
+        Err(e) => panic!("the budgeted sort over views refused: {e}"),
+    }
+}
