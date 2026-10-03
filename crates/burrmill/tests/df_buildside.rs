@@ -128,6 +128,11 @@ fn a_semi_or_anti_join_builds_on_the_smaller_input_and_the_answer_is_the_same() 
             .collect::<Vec<_>>()
     };
     for (sql, anti) in [
+        // DataFusion makes this inner join a semi join, the DISTINCT above being blind to duplicates.
+        (
+            "SELECT count(*), coalesce(sum(v), 0) FROM (SELECT DISTINCT b.k, b.v FROM big b JOIN small s ON b.k = s.k)",
+            false,
+        ),
         (
             "SELECT count(*), coalesce(sum(b.v), 0) FROM big b WHERE EXISTS (SELECT 1 FROM small s WHERE s.k = b.k)",
             false,
