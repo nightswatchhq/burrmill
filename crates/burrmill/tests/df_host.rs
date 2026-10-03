@@ -1000,3 +1000,52 @@ fn explain_does_not_admit_what_it_wraps() {
     }
     assert!(engine.sql("EXPLAIN SELECT * FROM labels").is_ok());
 }
+
+/// A budgeted hash join keeps every build-side batch, and the repartition under it handed each
+/// 128-row batch of string views a 1 MiB buffer: 34 MB of addresses refused at 512 MiB, charged
+/// 1 MiB a batch. The same join over `Utf8`, or without a budget, answered.
+#[test]
+fn a_budgeted_hash_join_over_text_is_charged_for_its_rows_not_their_buffers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let who: Vec<String> = (0..400_000u64).map(|i| format!("0x{i:040x}")).collect();
+    let data: Vec<(u64, &str, &str)> = who
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (i as u64, w.as_str(), w.as_str()))
+        .collect();
+    let segs: Vec<_> = data
+        .chunks(25_000)
+        .enumerate()
+        .map(|(n, c)| segment(tmp.path(), n as u64, c))
+        .collect();
+    let engine = |budget: Option<usize>| {
+        let mut e = match budget {
+            Some(bytes) => Engine::open_empty_budgeted(burrmill::Budget {
+                memory_bytes: bytes,
+                threads: 8,
+                spill: None,
+            }),
+            None => Engine::open_empty(),
+        }
+        .unwrap();
+        e.register_facts("t", &declared(), segs.clone(), &[], (None, None))
+            .unwrap();
+        e
+    };
+    let views = "SELECT count(*) AS n, max(b.amount) AS m FROM t a JOIN t b ON a.who = b.who";
+    let text = "WITH s AS (SELECT arrow_cast(who, 'Utf8') AS who, arrow_cast(amount, 'Utf8') AS amount FROM t) \
+                SELECT count(*) AS n, max(b.amount) AS m FROM s a JOIN s b ON a.who = b.who";
+    let want = vec![json!({"n": 400_000, "m": who.last().unwrap()})];
+
+    assert_eq!(rows(&engine(None), views), want);
+    assert_eq!(rows(&engine(Some(512 << 20)), text), want);
+    match engine(Some(512 << 20)).sql(views) {
+        Ok(b) => assert_eq!(
+            b.iter()
+                .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+                .collect::<Vec<_>>(),
+            want
+        ),
+        Err(e) => panic!("the budgeted join over views refused: {e}"),
+    }
+}
