@@ -532,3 +532,129 @@ fn value_of(engine: Engine, sql: &str) -> String {
     let batches = engine.sql(sql).unwrap();
     serde_json::to_string(&burrmill::df::encode::rows(&batches[0]).unwrap()).unwrap()
 }
+
+fn nest_with_dec(values: &[&str]) -> (tempfile::TempDir, Engine) {
+    let tmp = tempfile::tempdir().unwrap();
+    let segs = tmp.path().join("segments");
+    std::fs::create_dir(&segs).unwrap();
+    let rows: Vec<_> = values.iter().map(|v| ("0xa", "0xb", *v)).collect();
+    write_table(&segs, "token__transfer", &rows);
+    std::fs::write(
+        tmp.path().join("schema.json"),
+        r#"{"tables":[{"table":"token__transfer","columns":[{"name":"value","storage":"word32"}]}]}"#,
+    )
+    .unwrap();
+    let engine = Engine::open_nest(tmp.path()).unwrap();
+    (tmp, engine)
+}
+
+#[test]
+fn intdiv_over_a_decimal_is_double_division_and_over_a_hugeint_is_exact() {
+    // DuckDB 1.5's answers: its `//` is integer division for integers and HUGEINT only, and a
+    // DECIMAL of any precision is cast to DOUBLE for it.
+    assert_eq!(
+        value(
+            "SELECT 1::DECIMAL(38,0) // 3 AS a, CAST(7 AS DECIMAL(10,0)) // 2 AS b, \
+             CAST(7 AS HUGEINT) // 2 AS c, CAST(7 AS BIGINT) // 2 AS d, \
+             CAST(7 AS HUGEINT) // CAST(2 AS DECIMAL(38,0)) AS e, -CAST(7 AS DECIMAL(38,0)) // 2 AS f"
+        ),
+        r#"[{"a":0.3333333333333333,"b":3.5,"c":"3","d":3,"e":3.5,"f":-3.5}]"#
+    );
+    let (_tmp, engine) = nest_with_dec(&["10", "4", "2"]);
+    assert_eq!(
+        value_of(
+            engine,
+            "SELECT value_dec // 4 AS a, CAST(value AS HUGEINT) // 4 AS b, \
+             (SELECT sum(value_dec) FROM token__transfer) // 3 AS s, \
+             (SELECT sum(CAST(value AS HUGEINT)) FROM token__transfer) // 3 AS h, \
+             d // 4 AS q FROM (SELECT *, value_dec AS d FROM token__transfer) ORDER BY 1"
+        ),
+        r#"[{"a":0.5,"b":"0","s":5.333333333333333,"h":"5","q":0.5},{"a":1.0,"b":"1","s":5.333333333333333,"h":"5","q":1.0},{"a":2.5,"b":"2","s":5.333333333333333,"h":"5","q":2.5}]"#
+    );
+}
+
+#[test]
+fn order_by_an_expression_over_an_output_alias_reads_the_alias() {
+    // DuckDB 1.5's answers. Where the name is a source column too, the source is read (`v`).
+    let rows = r#"[{"k":"b","s":"5"},{"k":"c","s":"3"},{"k":"a","s":"1"}]"#;
+    let t = "(VALUES ('a', 1), ('b', 5), ('c', 3)) t(k, v)";
+    assert_eq!(
+        value(&format!(
+            "SELECT k, sum(v) AS s FROM {t} GROUP BY k ORDER BY -s"
+        )),
+        rows
+    );
+    assert_eq!(
+        value(&format!(
+            "SELECT k, sum(v) AS s FROM {t} GROUP BY k ORDER BY CAST(s AS VARCHAR) DESC"
+        )),
+        rows
+    );
+    assert_eq!(
+        value(&format!(
+            "SELECT k, max(v) AS s FROM (SELECT k, v FROM {t}) GROUP BY k ORDER BY -s"
+        )),
+        r#"[{"k":"b","s":5},{"k":"c","s":3},{"k":"a","s":1}]"#
+    );
+    assert_eq!(
+        value(
+            "SELECT k, sum(v) AS v FROM (VALUES ('a', 1), ('a', 9), ('b', 5)) t(k, v) \
+             GROUP BY k ORDER BY sum(-v)"
+        ),
+        r#"[{"k":"a","v":"10"},{"k":"b","v":"5"}]"#
+    );
+}
+
+#[test]
+fn modulo_by_zero_is_null_as_duckdb_has_it() {
+    // DuckDB 1.5's answers, a row at a time; Arrow's kernel refused the whole statement.
+    assert_eq!(
+        value(
+            "SELECT x, x % y AS a, 7 % 0 AS b, 7.5 % 0 AS d, CAST(7 AS HUGEINT) % 0 AS e, \
+             CAST(x AS UBIGINT) % CAST(y AS UBIGINT) AS f, -7 % y AS g, 7.5::DOUBLE % y AS h \
+             FROM (VALUES (7, 0), (7, 2), (8, NULL)) t(x, y) ORDER BY y NULLS LAST"
+        ),
+        r#"[{"x":7,"a":null,"b":null,"d":null,"e":null,"f":null,"g":null,"h":null},{"x":7,"a":1,"b":null,"d":null,"e":null,"f":1,"g":-1,"h":1.5},{"x":8,"a":null,"b":null,"d":null,"e":null,"f":null,"g":null,"h":null}]"#
+    );
+}
+
+#[test]
+fn an_ordered_aggregate_leaves_an_unordered_list_beside_it_in_source_order() {
+    // DuckDB 1.5's answers: string_agg's ORDER BY orders its own input, not list()'s.
+    assert_eq!(
+        value(
+            "SELECT string_agg(x, ',' ORDER BY x DESC) AS s, to_json(array_agg(x)) AS l, \
+             to_json(list(x)) AS m FROM (VALUES ('a'), ('c'), ('b'), (NULL)) t(x)"
+        ),
+        r#"[{"s":"c,b,a","l":"[\"a\",\"c\",\"b\",null]","m":"[\"a\",\"c\",\"b\",null]"}]"#
+    );
+    assert_eq!(
+        value(
+            "SELECT k, string_agg(x, ',' ORDER BY x DESC) AS s, to_json(list(x ORDER BY x)) AS o, \
+             to_json(list(x)) AS m FROM (VALUES (1, 'a'), (1, 'c'), (2, 'z'), (1, 'b'), (2, 'y')) \
+             t(k, x) GROUP BY k ORDER BY k"
+        ),
+        r#"[{"k":1,"s":"c,b,a","o":"[\"a\",\"b\",\"c\"]","m":"[\"a\",\"c\",\"b\"]"},{"k":2,"s":"z,y","o":"[\"y\",\"z\"]","m":"[\"z\",\"y\"]"}]"#
+    );
+}
+
+#[test]
+fn a_string_agg_over_input_already_sorted_the_other_way_plans() {
+    // DuckDB 1.5's answers. Reversed to the built-in, the aggregate would be refused by
+    // DataFusion's OptimizeAggregateOrder.
+    assert_eq!(
+        value(
+            "SELECT string_agg(x, ',' ORDER BY x DESC) AS s FROM \
+             (SELECT x FROM (VALUES ('a'), ('c'), ('b')) t(x) ORDER BY x LIMIT 10)"
+        ),
+        r#"[{"s":"c,b,a"}]"#
+    );
+    assert_eq!(
+        value(
+            "SELECT k, string_agg(x, ',' ORDER BY x DESC) AS s FROM (SELECT k, x FROM \
+             (VALUES (1, 'a'), (1, 'c'), (2, 'b')) t(k, x) ORDER BY k, x LIMIT 10) \
+             GROUP BY k ORDER BY k"
+        ),
+        r#"[{"k":1,"s":"c,a"},{"k":2,"s":"b"}]"#
+    );
+}

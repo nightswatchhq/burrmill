@@ -25,7 +25,7 @@ use arrow::datatypes::{
     UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, Result as DFResult, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     BinaryExpr, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator,
@@ -326,11 +326,13 @@ pub const DUP: char = '\u{1}';
 
 /// DuckDB allows two result columns of one name (`SELECT *, value`); DataFusion's projection does
 /// not. Repeated top-level items get a private suffix here and lose it again on the result.
-fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
+fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>], known: &Known) {
     // `ORDER BY s.x` beside `... AS x`: DuckDB sorts by the source column, DataFusion adds it to
     // the projection and then refuses `s.x` beside `x` as ambiguous. The alias is suffixed instead.
     // The same inside an expression: `ORDER BY sum(CAST(x AS HUGEINT))` beside `... AS x` reads the
-    // source `x`, as DuckDB and Postgres do, where only a bare `ORDER BY x` means the alias.
+    // source `x`, as DuckDB and Postgres do, where only a bare `ORDER BY x` means the alias. With no
+    // source `x`, as in `ORDER BY -x`, the alias it is.
+    let sources = leftmost_select(&q.body).and_then(|s| from_columns(s, q.with.as_ref(), known));
     let mut ordered: std::collections::HashSet<String> = Default::default();
     if let Some(sq::OrderBy {
         kind: sq::OrderByKind::Expressions(items),
@@ -344,12 +346,120 @@ fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
                     ordered.extend(v.last().map(|i| i.value.to_lowercase()));
                 }
                 e => {
-                    let _ = sq::Visit::visit(e, &mut Named(&mut ordered));
+                    let mut named = Default::default();
+                    let _ = sq::Visit::visit(e, &mut Named(&mut named));
+                    ordered.extend(
+                        named
+                            .into_iter()
+                            .filter(|n| sources.as_ref().is_none_or(|s| s.contains(n))),
+                    );
                 }
             }
         }
     }
     dedupe_set(q.body.as_mut(), names, &ordered, true);
+}
+
+fn leftmost_select(b: &sq::SetExpr) -> Option<&sq::Select> {
+    match b {
+        sq::SetExpr::Select(s) => Some(s),
+        sq::SetExpr::SetOperation { left, .. } => leftmost_select(left),
+        sq::SetExpr::Query(q) => leftmost_select(&q.body),
+        _ => None,
+    }
+}
+
+/// The columns a select's `FROM` provides, lowercased; `None` where a source's columns cannot be
+/// told from the statement and the nest's tables.
+fn from_columns(
+    s: &sq::Select,
+    with: Option<&sq::With>,
+    known: &Known,
+) -> Option<std::collections::HashSet<String>> {
+    fn factor(
+        t: &sq::TableFactor,
+        with: Option<&sq::With>,
+        known: &Known,
+        out: &mut std::collections::HashSet<String>,
+    ) -> Option<()> {
+        let listed = |a: &Option<sq::TableAlias>| {
+            a.as_ref().filter(|a| !a.columns.is_empty()).map(|a| {
+                a.columns
+                    .iter()
+                    .map(|c| c.name.value.to_lowercase())
+                    .collect::<Vec<_>>()
+            })
+        };
+        match t {
+            sq::TableFactor::Table { alias, .. } | sq::TableFactor::Derived { alias, .. }
+                if listed(alias).is_some() =>
+            {
+                out.extend(listed(alias)?);
+            }
+            sq::TableFactor::Table {
+                name, args: None, ..
+            } => {
+                let sq::ObjectNamePart::Identifier(n) = name.0.last()? else {
+                    return None;
+                };
+                let cte = with
+                    .into_iter()
+                    .flat_map(|w| &w.cte_tables)
+                    .find(|c| c.alias.name.value.eq_ignore_ascii_case(&n.value));
+                match cte {
+                    Some(c) if !c.alias.columns.is_empty() => {
+                        out.extend(c.alias.columns.iter().map(|c| c.name.value.to_lowercase()));
+                    }
+                    Some(c) => out.extend(output_columns(&c.query, known)?),
+                    None => out.extend(
+                        known
+                            .columns(&n.value.to_lowercase())?
+                            .iter()
+                            .map(|c| c.to_lowercase()),
+                    ),
+                }
+            }
+            sq::TableFactor::Derived { subquery, .. } => {
+                out.extend(output_columns(subquery, known)?)
+            }
+            sq::TableFactor::NestedJoin {
+                table_with_joins, ..
+            } => {
+                factor(&table_with_joins.relation, with, known, out)?;
+                for j in &table_with_joins.joins {
+                    factor(&j.relation, with, known, out)?;
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+    let mut out = std::collections::HashSet::new();
+    for t in &s.from {
+        factor(&t.relation, with, known, &mut out)?;
+        for j in &t.joins {
+            factor(&j.relation, with, known, &mut out)?;
+        }
+    }
+    Some(out)
+}
+
+/// A query's result columns, lowercased, where the statement tells them.
+fn output_columns(q: &sq::Query, known: &Known) -> Option<Vec<String>> {
+    let s = leftmost_select(&q.body)?;
+    let mut out = Vec::new();
+    for item in &s.projection {
+        match item {
+            sq::SelectItem::ExprWithAlias { alias, .. } => out.push(alias.value.to_lowercase()),
+            sq::SelectItem::UnnamedExpr(SqlExpr::Identifier(i)) => out.push(i.value.to_lowercase()),
+            sq::SelectItem::UnnamedExpr(SqlExpr::CompoundIdentifier(v)) => {
+                out.push(v.last()?.value.to_lowercase())
+            }
+            sq::SelectItem::UnnamedExpr(_) => {}
+            _ => out.extend(from_columns(s, q.with.as_ref(), known)?),
+        }
+    }
+    Some(out)
 }
 
 /// What an unaliased item will be called in the plan: DataFusion names a cast after what it casts,
@@ -361,16 +471,16 @@ fn planned_name(e: &SqlExpr) -> String {
     }
 }
 
-struct DedupeInner;
+struct DedupeInner<'a>(&'a Known);
 
-impl VisitorMut for DedupeInner {
+impl VisitorMut for DedupeInner<'_> {
     type Break = ();
     fn pre_visit_query(&mut self, q: &mut sq::Query) -> ControlFlow<()> {
         // Only under a column list: elsewhere a repeat keeps DuckDB's `_1` name, which a query may
         // select by (`subqueries::name`).
         for cte in q.with.iter_mut().flat_map(|w| w.cte_tables.iter_mut()) {
             if !cte.alias.columns.is_empty() {
-                dedupe_output_names(&mut cte.query, &mut []);
+                dedupe_output_names(&mut cte.query, &mut [], self.0);
             }
         }
         ControlFlow::Continue(())
@@ -489,9 +599,9 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
     let _ = sq::Visit::visit(s.as_ref(), &mut Aliases(&mut known));
     let _ = sq::VisitMut::visit(s.as_mut(), &mut CaseFix(&known));
     if let sq::Statement::Query(q) = s.as_mut() {
-        dedupe_output_names(q, names);
+        dedupe_output_names(q, names, &known);
         // A CTE whose column list names its output may repeat an expression, as DuckDB allows.
-        let _ = sq::VisitMut::visit(q.as_mut(), &mut DedupeInner);
+        let _ = sq::VisitMut::visit(q.as_mut(), &mut DedupeInner(&known));
         super::subqueries::name(q, &known);
     }
     let mut ctes = std::collections::HashSet::new();
@@ -1501,6 +1611,112 @@ impl ScalarUDFImpl for IntDiv {
     }
 }
 
+/// `a // b` beside a DuckDB DECIMAL, of any scale, is division in DOUBLE: DuckDB's `//` takes
+/// integers and HUGEINT only. Both are `DECIMAL(38,0)` here, so which one an operand is comes from
+/// what was written, read before coercion adds casts of its own.
+fn decimal_intdiv(
+    e: Expr,
+    schema: &DFSchema,
+    inputs: &[&LogicalPlan],
+) -> DFResult<Transformed<Expr>> {
+    let Expr::ScalarFunction(f) = &e else {
+        return Ok(Transformed::no(e));
+    };
+    if f.func.name() != "burrmill_intdiv" || !f.args.iter().any(|a| duck_decimal(a, schema, inputs))
+    {
+        return Ok(Transformed::no(e));
+    }
+    let args = f
+        .args
+        .iter()
+        .map(|a| a.clone().cast_to(&DataType::Float64, schema))
+        .collect::<DFResult<Vec<_>>>()?;
+    Ok(Transformed::yes(Expr::ScalarFunction(
+        datafusion_expr::expr::ScalarFunction::new_udf(Arc::clone(&f.func), args),
+    )))
+}
+
+/// Whether `e`, a scale-0 DECIMAL here, is a DECIMAL in DuckDB rather than a HUGEINT: a cast not
+/// written as HUGEINT, or computed from one. A column is followed to what produced it.
+fn duck_decimal(e: &Expr, schema: &DFSchema, inputs: &[&LogicalPlan]) -> bool {
+    if !matches!(e.get_type(schema), Ok(DataType::Decimal128(_, 0))) {
+        return false;
+    }
+    let any = |v: Vec<&Expr>| v.into_iter().any(|x| duck_decimal(x, schema, inputs));
+    match e {
+        Expr::Alias(a) => duck_decimal(&a.expr, schema, inputs),
+        Expr::Cast(_) | Expr::TryCast(_) => true,
+        Expr::ScalarFunction(f) if f.func.name() == "burrmill_hugeint" => false,
+        Expr::ScalarFunction(f) => any(f.args.iter().collect()),
+        Expr::AggregateFunction(f) => any(f.params.args.iter().collect()),
+        Expr::Negative(x) => duck_decimal(x, schema, inputs),
+        Expr::BinaryExpr(b) => any(vec![&b.left, &b.right]),
+        Expr::Case(c) => any(c
+            .when_then_expr
+            .iter()
+            .map(|(_, t)| t.as_ref())
+            .chain(c.else_expr.as_deref())
+            .collect()),
+        Expr::Column(c) => inputs.iter().any(|p| {
+            p.schema()
+                .maybe_index_of_column(c)
+                .is_some_and(|i| decimal_output(p, i))
+        }),
+        Expr::ScalarSubquery(s) => decimal_output(&s.subquery, 0),
+        _ => false,
+    }
+}
+
+/// Whether output column `i` of `p` is a DuckDB DECIMAL, by [`duck_decimal`].
+fn decimal_output(p: &LogicalPlan, i: usize) -> bool {
+    let produced = |e: Option<&Expr>, input: &LogicalPlan| {
+        e.is_some_and(|e| duck_decimal(e, input.schema(), &[input]))
+    };
+    match p {
+        LogicalPlan::Projection(x) => produced(x.expr.get(i), &x.input),
+        LogicalPlan::Aggregate(x) => {
+            if x.group_expr
+                .iter()
+                .any(|g| matches!(g, Expr::GroupingSet(_)))
+            {
+                return false;
+            }
+            let g = x.group_expr.len();
+            let e = if i < g {
+                x.group_expr.get(i)
+            } else {
+                x.aggr_expr.get(i - g)
+            };
+            produced(e, &x.input)
+        }
+        LogicalPlan::Window(x) => {
+            let n = x.input.schema().fields().len();
+            if i < n {
+                decimal_output(&x.input, i)
+            } else {
+                produced(x.window_expr.get(i - n), &x.input)
+            }
+        }
+        LogicalPlan::Join(j) => {
+            use datafusion_expr::JoinType::*;
+            let n = j.left.schema().fields().len();
+            match j.join_type {
+                RightSemi | RightAnti | RightMark => decimal_output(&j.right, i),
+                Inner | Left | Right | Full if i >= n => decimal_output(&j.right, i - n),
+                _ => decimal_output(&j.left, i),
+            }
+        }
+        LogicalPlan::Union(u) => u.inputs.iter().any(|x| decimal_output(x, i)),
+        LogicalPlan::SubqueryAlias(_)
+        | LogicalPlan::Filter(_)
+        | LogicalPlan::Sort(_)
+        | LogicalPlan::Limit(_)
+        | LogicalPlan::Distinct(datafusion_expr::Distinct::All(_))
+        | LogicalPlan::Repartition(_) => p.inputs().first().is_some_and(|x| decimal_output(x, i)),
+        _ => false,
+    }
+}
+
 /// `xor(a, b)`, bitwise, typed as DuckDB types it: a literal takes its partner's integer type,
 /// and mixed signs take the union (`xor` of `BIGINT` and `UBIGINT` is HUGEINT).
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1643,6 +1859,7 @@ impl AnalyzerRule for DuckSemantics {
                 let name = e.schema_name().to_string();
                 let t = e.transform_up(|e| {
                     let t = divide_as_double(e, &schema)?;
+                    let t = t.transform_data(|e| modulo_by_zero(e, &schema))?;
                     let t = t.transform_data(|e| timestamp_as_duckdb(e, &schema))?;
                     let t = t.transform_data(|e| round_before_int_cast(e, &schema, &self.round))?;
                     let t = t.transform_data(|e| timestamp_as_text(e, &schema))?;
@@ -1934,6 +2151,40 @@ fn numeric(t: &DataType) -> bool {
         || matches!(t, DataType::Decimal128(..) | DataType::Decimal256(..))
 }
 
+/// `x % 0` is NULL in DuckDB, where Arrow's kernel refuses the statement; the divisor becomes
+/// `nullif(y, 0)`, which the kernel skips. A non-zero literal divisor is left as written.
+fn modulo_by_zero(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
+    let Expr::BinaryExpr(BinaryExpr {
+        left,
+        op: Operator::Modulo,
+        right,
+    }) = e
+    else {
+        return Ok(Transformed::no(e));
+    };
+    let rt = right.get_type(schema)?;
+    let zero = numeric(&rt)
+        .then(|| ScalarValue::new_zero(&rt))
+        .transpose()?;
+    let Some(zero) = zero.filter(|z| !matches!(right.as_ref(), Expr::Literal(v, _) if v != z))
+    else {
+        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Modulo,
+            right,
+        })));
+    };
+    let divisor = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+        datafusion_functions::core::nullif(),
+        vec![*right, Expr::Literal(zero, None)],
+    ));
+    Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+        left,
+        Operator::Modulo,
+        Box::new(divisor),
+    ))))
+}
+
 fn divide_as_double(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
     let Expr::BinaryExpr(BinaryExpr {
         left,
@@ -1970,7 +2221,8 @@ fn divide_as_double(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
 ///
 /// - ordering (`<`, `>`, `<=`, `>=`, `BETWEEN`) between text and a number is refused, as DuckDB
 ///   refuses it; equality casts, as DuckDB does, and DataFusion already agrees;
-/// - text beside a boolean, or under `AND`/`OR`/`NOT`, is cast to BOOLEAN, as DuckDB casts it.
+/// - text beside a boolean, or under `AND`/`OR`/`NOT`, is cast to BOOLEAN, as DuckDB casts it;
+/// - `//` beside a DuckDB DECIMAL divides in DOUBLE ([`decimal_intdiv`]).
 #[derive(Debug, Default)]
 pub struct DuckComparisons;
 
@@ -2023,9 +2275,30 @@ impl TreeNodeRewriter for Comparisons {
                 p,
                 LogicalPlan::Projection(_) | LogicalPlan::Aggregate(_) | LogicalPlan::Window(_)
             );
+            let mut intdiv = false;
+            p.apply_expressions(|e| {
+                e.apply(|x| {
+                    intdiv |=
+                        matches!(x, Expr::ScalarFunction(f) if f.func.name() == "burrmill_intdiv");
+                    Ok(if intdiv {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
+                })
+            })?;
+            let inputs: Vec<LogicalPlan> = if intdiv {
+                p.inputs().into_iter().cloned().collect()
+            } else {
+                vec![]
+            };
+            let inputs: Vec<&LogicalPlan> = inputs.iter().collect();
             let t = p.map_expressions(|e| {
                 let name = names_matter.then(|| e.schema_name().to_string());
-                let t = e.transform_up(|e| compare_as_duckdb(e, &schema))?;
+                let t = e.transform_up(|e| {
+                    compare_as_duckdb(e, &schema)?
+                        .transform_data(|e| decimal_intdiv(e, &schema, &inputs))
+                })?;
                 match name {
                     Some(name) if t.transformed && t.data.schema_name().to_string() != name => {
                         Ok(Transformed::yes(t.data.alias(name)))
