@@ -572,3 +572,35 @@ fn intdiv_over_a_decimal_is_double_division_and_over_a_hugeint_is_exact() {
         r#"[{"a":0.5,"b":"0","s":5.333333333333333,"h":"5","q":0.5},{"a":1.0,"b":"1","s":5.333333333333333,"h":"5","q":1.0},{"a":2.5,"b":"2","s":5.333333333333333,"h":"5","q":2.5}]"#
     );
 }
+
+#[test]
+fn order_by_an_expression_over_an_output_alias_reads_the_alias() {
+    // DuckDB 1.5's answers. Where the name is a source column too, the source is read (`v`).
+    let rows = r#"[{"k":"b","s":"5"},{"k":"c","s":"3"},{"k":"a","s":"1"}]"#;
+    let t = "(VALUES ('a', 1), ('b', 5), ('c', 3)) t(k, v)";
+    assert_eq!(
+        value(&format!(
+            "SELECT k, sum(v) AS s FROM {t} GROUP BY k ORDER BY -s"
+        )),
+        rows
+    );
+    assert_eq!(
+        value(&format!(
+            "SELECT k, sum(v) AS s FROM {t} GROUP BY k ORDER BY CAST(s AS VARCHAR) DESC"
+        )),
+        rows
+    );
+    assert_eq!(
+        value(&format!(
+            "SELECT k, max(v) AS s FROM (SELECT k, v FROM {t}) GROUP BY k ORDER BY -s"
+        )),
+        r#"[{"k":"b","s":5},{"k":"c","s":3},{"k":"a","s":1}]"#
+    );
+    assert_eq!(
+        value(
+            "SELECT k, sum(v) AS v FROM (VALUES ('a', 1), ('a', 9), ('b', 5)) t(k, v) \
+             GROUP BY k ORDER BY sum(-v)"
+        ),
+        r#"[{"k":"a","v":"10"},{"k":"b","v":"5"}]"#
+    );
+}

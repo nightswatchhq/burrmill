@@ -309,6 +309,10 @@ const CORPUS: &[&str] = &[
     "SELECT value_dec // 1000000000000000000 AS a FROM transfer ORDER BY block_number, log_index",
     "SELECT sum(value_dec) // 3 AS a, 1::DECIMAL(38,0) // 3 AS b, CAST(7 AS HUGEINT) // 2 AS c, CAST(7 AS DECIMAL(10,0)) // 2 AS d, CAST(7 AS BIGNUM) // 2 AS e, sum(block_number) // 2 AS f FROM transfer",
     "SELECT value_dec // 3 AS a, value_dec // 0 AS b FROM wide",
+    // An ORDER BY expression over an output alias with no source column of that name reads the alias.
+    "SELECT \"from\" AS who, sum(value_dec) AS s FROM transfer GROUP BY who ORDER BY -s",
+    "SELECT \"from\" AS who, sum(value_dec) AS s FROM transfer GROUP BY who ORDER BY s::DOUBLE DESC, who",
+    "SELECT \"from\" AS who, sum(value_dec) AS s FROM transfer GROUP BY who ORDER BY CAST(s AS VARCHAR), who",
 ];
 
 /// Differences that stand, and why.

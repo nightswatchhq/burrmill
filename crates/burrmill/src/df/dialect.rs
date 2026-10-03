@@ -326,11 +326,13 @@ pub const DUP: char = '\u{1}';
 
 /// DuckDB allows two result columns of one name (`SELECT *, value`); DataFusion's projection does
 /// not. Repeated top-level items get a private suffix here and lose it again on the result.
-fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
+fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>], known: &Known) {
     // `ORDER BY s.x` beside `... AS x`: DuckDB sorts by the source column, DataFusion adds it to
     // the projection and then refuses `s.x` beside `x` as ambiguous. The alias is suffixed instead.
     // The same inside an expression: `ORDER BY sum(CAST(x AS HUGEINT))` beside `... AS x` reads the
-    // source `x`, as DuckDB and Postgres do, where only a bare `ORDER BY x` means the alias.
+    // source `x`, as DuckDB and Postgres do, where only a bare `ORDER BY x` means the alias. With no
+    // source `x`, as in `ORDER BY -x`, the alias it is.
+    let sources = leftmost_select(&q.body).and_then(|s| from_columns(s, q.with.as_ref(), known));
     let mut ordered: std::collections::HashSet<String> = Default::default();
     if let Some(sq::OrderBy {
         kind: sq::OrderByKind::Expressions(items),
@@ -344,12 +346,120 @@ fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>]) {
                     ordered.extend(v.last().map(|i| i.value.to_lowercase()));
                 }
                 e => {
-                    let _ = sq::Visit::visit(e, &mut Named(&mut ordered));
+                    let mut named = Default::default();
+                    let _ = sq::Visit::visit(e, &mut Named(&mut named));
+                    ordered.extend(
+                        named
+                            .into_iter()
+                            .filter(|n| sources.as_ref().is_none_or(|s| s.contains(n))),
+                    );
                 }
             }
         }
     }
     dedupe_set(q.body.as_mut(), names, &ordered, true);
+}
+
+fn leftmost_select(b: &sq::SetExpr) -> Option<&sq::Select> {
+    match b {
+        sq::SetExpr::Select(s) => Some(s),
+        sq::SetExpr::SetOperation { left, .. } => leftmost_select(left),
+        sq::SetExpr::Query(q) => leftmost_select(&q.body),
+        _ => None,
+    }
+}
+
+/// The columns a select's `FROM` provides, lowercased; `None` where a source's columns cannot be
+/// told from the statement and the nest's tables.
+fn from_columns(
+    s: &sq::Select,
+    with: Option<&sq::With>,
+    known: &Known,
+) -> Option<std::collections::HashSet<String>> {
+    fn factor(
+        t: &sq::TableFactor,
+        with: Option<&sq::With>,
+        known: &Known,
+        out: &mut std::collections::HashSet<String>,
+    ) -> Option<()> {
+        let listed = |a: &Option<sq::TableAlias>| {
+            a.as_ref().filter(|a| !a.columns.is_empty()).map(|a| {
+                a.columns
+                    .iter()
+                    .map(|c| c.name.value.to_lowercase())
+                    .collect::<Vec<_>>()
+            })
+        };
+        match t {
+            sq::TableFactor::Table { alias, .. } | sq::TableFactor::Derived { alias, .. }
+                if listed(alias).is_some() =>
+            {
+                out.extend(listed(alias)?);
+            }
+            sq::TableFactor::Table {
+                name, args: None, ..
+            } => {
+                let sq::ObjectNamePart::Identifier(n) = name.0.last()? else {
+                    return None;
+                };
+                let cte = with
+                    .into_iter()
+                    .flat_map(|w| &w.cte_tables)
+                    .find(|c| c.alias.name.value.eq_ignore_ascii_case(&n.value));
+                match cte {
+                    Some(c) if !c.alias.columns.is_empty() => {
+                        out.extend(c.alias.columns.iter().map(|c| c.name.value.to_lowercase()));
+                    }
+                    Some(c) => out.extend(output_columns(&c.query, known)?),
+                    None => out.extend(
+                        known
+                            .columns(&n.value.to_lowercase())?
+                            .iter()
+                            .map(|c| c.to_lowercase()),
+                    ),
+                }
+            }
+            sq::TableFactor::Derived { subquery, .. } => {
+                out.extend(output_columns(subquery, known)?)
+            }
+            sq::TableFactor::NestedJoin {
+                table_with_joins, ..
+            } => {
+                factor(&table_with_joins.relation, with, known, out)?;
+                for j in &table_with_joins.joins {
+                    factor(&j.relation, with, known, out)?;
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+    let mut out = std::collections::HashSet::new();
+    for t in &s.from {
+        factor(&t.relation, with, known, &mut out)?;
+        for j in &t.joins {
+            factor(&j.relation, with, known, &mut out)?;
+        }
+    }
+    Some(out)
+}
+
+/// A query's result columns, lowercased, where the statement tells them.
+fn output_columns(q: &sq::Query, known: &Known) -> Option<Vec<String>> {
+    let s = leftmost_select(&q.body)?;
+    let mut out = Vec::new();
+    for item in &s.projection {
+        match item {
+            sq::SelectItem::ExprWithAlias { alias, .. } => out.push(alias.value.to_lowercase()),
+            sq::SelectItem::UnnamedExpr(SqlExpr::Identifier(i)) => out.push(i.value.to_lowercase()),
+            sq::SelectItem::UnnamedExpr(SqlExpr::CompoundIdentifier(v)) => {
+                out.push(v.last()?.value.to_lowercase())
+            }
+            sq::SelectItem::UnnamedExpr(_) => {}
+            _ => out.extend(from_columns(s, q.with.as_ref(), known)?),
+        }
+    }
+    Some(out)
 }
 
 /// What an unaliased item will be called in the plan: DataFusion names a cast after what it casts,
@@ -361,16 +471,16 @@ fn planned_name(e: &SqlExpr) -> String {
     }
 }
 
-struct DedupeInner;
+struct DedupeInner<'a>(&'a Known);
 
-impl VisitorMut for DedupeInner {
+impl VisitorMut for DedupeInner<'_> {
     type Break = ();
     fn pre_visit_query(&mut self, q: &mut sq::Query) -> ControlFlow<()> {
         // Only under a column list: elsewhere a repeat keeps DuckDB's `_1` name, which a query may
         // select by (`subqueries::name`).
         for cte in q.with.iter_mut().flat_map(|w| w.cte_tables.iter_mut()) {
             if !cte.alias.columns.is_empty() {
-                dedupe_output_names(&mut cte.query, &mut []);
+                dedupe_output_names(&mut cte.query, &mut [], self.0);
             }
         }
         ControlFlow::Continue(())
@@ -489,9 +599,9 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
     let _ = sq::Visit::visit(s.as_ref(), &mut Aliases(&mut known));
     let _ = sq::VisitMut::visit(s.as_mut(), &mut CaseFix(&known));
     if let sq::Statement::Query(q) = s.as_mut() {
-        dedupe_output_names(q, names);
+        dedupe_output_names(q, names, &known);
         // A CTE whose column list names its output may repeat an expression, as DuckDB allows.
-        let _ = sq::VisitMut::visit(q.as_mut(), &mut DedupeInner);
+        let _ = sq::VisitMut::visit(q.as_mut(), &mut DedupeInner(&known));
         super::subqueries::name(q, &known);
     }
     let mut ctes = std::collections::HashSet::new();
