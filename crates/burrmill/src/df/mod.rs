@@ -56,6 +56,7 @@ pub use tables::duckdb_type;
 mod subqueries;
 mod textfn;
 mod tojson;
+mod topkfilter;
 mod topn;
 mod wide;
 
