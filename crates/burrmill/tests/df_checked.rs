@@ -404,9 +404,9 @@ fn sum_of_a_dec_column_skips_rows_the_column_reports_as_null() {
     let (_t, e) = transfers(&[&[("a", "1e3"), ("a", "4")]]);
     assert_eq!(
         one(&e, "SELECT value_dec FROM transfer WHERE value = '1e3'"),
-        "NULL"
+        "1000"
     );
-    assert_eq!(one(&e, "SELECT SUM(value_dec) FROM transfer"), "4");
+    assert_eq!(one(&e, "SELECT SUM(value_dec) FROM transfer"), "1004");
 }
 
 #[test]

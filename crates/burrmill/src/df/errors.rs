@@ -69,7 +69,29 @@ pub fn duckdb_phrase(msg: &str) -> Option<String> {
             ),
         });
     }
+    if msg.contains("For SELECT DISTINCT, ORDER BY expressions") {
+        return Some(
+            "SELECT DISTINCT ordered by an expression it does not select is not supported here"
+                .into(),
+        );
+    }
+    // Arrives under "Optimizer rule ... failed", which says nothing on its own.
+    if let Some(rest) = after(msg, "Unsupported CAST from ") {
+        let (from, to) = rest.split_once(" to ")?;
+        let from = from.split('(').next().unwrap_or(from);
+        let to = to.lines().next().unwrap_or(to);
+        return Some(format!(
+            "CAST from {from} to {} is not supported here",
+            duck_type(to)
+        ));
+    }
     if msg.contains("ParserError(") {
+        if let Some(why) = after(msg, "ParserError(\"")
+            .and_then(|r| r.split('"').next())
+            .filter(|w| w.ends_with("is not supported here"))
+        {
+            return Some(format!("Parser Error: {why}"));
+        }
         let found = after(msg, "found: ").map(|r| {
             r.split(" at Line")
                 .next()

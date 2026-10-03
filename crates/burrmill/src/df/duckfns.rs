@@ -87,7 +87,7 @@ impl ScalarUDFImpl for Typeof {
 }
 
 /// `hex(x)` as DuckDB prints it, upper case without leading zeros: an integer as its 64-bit two's
-/// complement, text or bytes as their bytes.
+/// complement (a HUGEINT as its 128-bit one), text or bytes as their bytes.
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct Hex(Signature);
 
@@ -101,6 +101,7 @@ impl ScalarUDFImpl for Hex {
     fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
         match args {
             [t] if t.is_integer() || t.is_null() => Ok(vec![DataType::Int64]),
+            [t @ DataType::Decimal128(_, 0)] => Ok(vec![t.clone()]),
             [DataType::Binary | DataType::LargeBinary | DataType::BinaryView] => {
                 Ok(vec![DataType::Binary])
             }
@@ -119,6 +120,17 @@ impl ScalarUDFImpl for Hex {
         match a.data_type() {
             DataType::Int64 => {
                 let a = a.as_primitive::<arrow::datatypes::Int64Type>();
+                for i in 0..a.len() {
+                    if a.is_null(i) {
+                        b.append_null()
+                    } else {
+                        b.append_value(format!("{:X}", a.value(i)))
+                    }
+                }
+            }
+            // HUGEINT, as its 128-bit two's complement.
+            DataType::Decimal128(..) => {
+                let a = a.as_primitive::<arrow::datatypes::Decimal128Type>();
                 for i in 0..a.len() {
                     if a.is_null(i) {
                         b.append_null()

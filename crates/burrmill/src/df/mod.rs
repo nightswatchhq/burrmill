@@ -580,7 +580,7 @@ fn refuse_non_query(sql: &str) -> Result<()> {
         .collect::<String>()
         .to_ascii_uppercase();
     match head.as_str() {
-        "SELECT" | "WITH" | "VALUES" | "EXPLAIN" => Ok(()),
+        "SELECT" | "WITH" | "VALUES" | "EXPLAIN" | "FROM" => Ok(()),
         other => Err(BurrmillError::NotAllowed(format!(
             "only SELECT/WITH is admitted, not `{other}`"
         ))),
@@ -619,8 +619,10 @@ fn refuse_sql_statement(stmt: &SqlStatement) -> Result<()> {
 fn refuse_wide_literals(stmt: &DfStatement) -> Result<()> {
     use sqlparser::ast::{Expr as SqlExpr, Value, visit_expressions};
     use std::ops::ControlFlow;
-    let DfStatement::Statement(s) = stmt else {
-        return Ok(());
+    let s = match stmt {
+        DfStatement::Statement(s) => s,
+        DfStatement::Explain(e) => return refuse_wide_literals(&e.statement),
+        _ => return Ok(()),
     };
     let found = visit_expressions(s.as_ref(), |e| {
         if let SqlExpr::Value(v) = e
@@ -664,7 +666,9 @@ fn plan_err(e: datafusion_common::DataFusionError) -> BurrmillError {
 
 fn df_err(e: datafusion_common::DataFusionError) -> BurrmillError {
     let s = errors::restate(e.to_string());
-    if s.contains("not yet implemented") || s.contains("Table Functions are not supported") {
+    if s.contains("not yet implemented")
+        || (s.contains("table function ") && s.contains("is not supported here"))
+    {
         BurrmillError::NotAllowed(s)
     } else if s.contains("no table") {
         BurrmillError::NoSegments(s)
