@@ -173,6 +173,11 @@ path = "tests/df_viewbudget.rs"
 required-features = ["datafusion"]
 
 [[test]]
+name = "df_topkfilter"
+path = "tests/df_topkfilter.rs"
+required-features = ["datafusion"]
+
+[[test]]
 name = "df_windowbudget"
 path = "tests/df_windowbudget.rs"
 required-features = ["datafusion"]

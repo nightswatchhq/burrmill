@@ -22,6 +22,9 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_plan::filter_pushdown::{
+    ChildPushdownResult, FilterDescription, FilterPushdownPhase, FilterPushdownPropagation,
+};
 use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, NestedLoopJoinExecBuilder,
@@ -78,6 +81,33 @@ impl ExecutionPlan for CancelExec {
             inner: children.pop().expect("one child"),
             token: self.token.clone(),
         }))
+    }
+    // Passes a top-k's dynamic filter through, which would otherwise stop here short of the scan.
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        match phase {
+            FilterPushdownPhase::Post => {
+                FilterDescription::from_children(parent_filters, &self.children())
+            }
+            // A `WHERE` reached the scan by the table's own pushdown. Pushed again, it left a lambda
+            // above reading its variable against the scan's columns, and refused.
+            FilterPushdownPhase::Pre => Ok(FilterDescription::all_unsupported(
+                &parent_filters,
+                &self.children(),
+            )),
+        }
+    }
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
     fn execute(
         &self,

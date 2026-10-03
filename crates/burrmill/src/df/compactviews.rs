@@ -359,9 +359,14 @@ fn with_keys_as_planned(
                     .update_data(|e| PhysicalSortExpr::new(e, k.options)))
             })
             .collect::<Result<Vec<_>>>()?;
-        if keys.iter().any(|k| k.transformed) {
-            // A fresh top-k filter: the scan's copy of the old one matches its keys by equality, and
-            // a predicate over these would reach the scan unmapped.
+        let bare_view = s.expr().iter().any(|k| {
+            k.expr
+                .downcast_ref::<Column>()
+                .is_some_and(|c| offsets(planned.field(c.index()).data_type()).is_some())
+        });
+        if bare_view || keys.iter().any(|k| k.transformed) {
+            // A fresh top-k filter: the scan's copy of the old one holds views where this sort's
+            // thresholds are offsets, and Arrow will not compare the two. That copy stays `true`.
             let ordering =
                 LexOrdering::new(keys.into_iter().map(|k| k.data)).expect("a sort has keys");
             let sort = SortExec::new(ordering, child)
