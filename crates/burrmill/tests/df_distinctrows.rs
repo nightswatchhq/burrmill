@@ -21,7 +21,8 @@ fn lcg(seed: &mut u64) -> u64 {
 
 fn fixture() -> (tempfile::TempDir, Engine, Vec<Row>) {
     let mut s = 11;
-    let text = |s: &mut u64, n: u64| (lcg(s) % 9 != 0).then(|| format!("v{}", lcg(s) % n));
+    let text =
+        |s: &mut u64, n: u64| (!lcg(s).is_multiple_of(9)).then(|| format!("v{}", lcg(s) % n));
     // The empty string beside NULL, and values that would collide if fields were only concatenated.
     let mut rows: Vec<Row> = (0..4000)
         .map(|_| ((lcg(&mut s) % 7) as i64, text(&mut s, 12), text(&mut s, 5)))
@@ -84,7 +85,8 @@ fn counts(e: &Engine, sql: &str) -> BTreeMap<i64, (i64, i64)> {
 fn a_distinct_row_is_counted_by_its_key_and_the_count_is_the_same() {
     let (_tmp, e, rows) = fixture();
     let sql = "SELECT k, count(DISTINCT (a, b)) AS n, count(DISTINCT a) AS m FROM t GROUP BY k";
-    let mut pairs: BTreeMap<i64, BTreeSet<(Option<String>, Option<String>)>> = BTreeMap::new();
+    type Pair = (Option<String>, Option<String>);
+    let mut pairs: BTreeMap<i64, BTreeSet<Pair>> = BTreeMap::new();
     let mut firsts: BTreeMap<i64, BTreeSet<String>> = BTreeMap::new();
     for (k, a, b) in &rows {
         pairs.entry(*k).or_default().insert((a.clone(), b.clone()));

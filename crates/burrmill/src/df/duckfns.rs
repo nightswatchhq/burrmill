@@ -104,9 +104,7 @@ impl ScalarUDFImpl for Hex {
             [DataType::Binary | DataType::LargeBinary | DataType::BinaryView] => {
                 Ok(vec![DataType::Binary])
             }
-            [t] if matches!(t, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
-                Ok(vec![DataType::Utf8])
-            }
+            [DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View] => Ok(vec![DataType::Utf8]),
             _ => plan_err!("hex takes an integer, text or bytes"),
         }
     }
@@ -1592,7 +1590,7 @@ mod tests {
             1
         );
         assert_eq!(
-            timestamp_text(1704067200_000_000, true).unwrap(),
+            timestamp_text(1_704_067_200 * 1_000_000, true).unwrap(),
             "2024-01-01 00:00:00+00"
         );
         let re = regex::Regex::new("^s").unwrap();
@@ -1605,11 +1603,11 @@ mod tests {
             Some("bb[b]\\")
         );
         assert_eq!(
-            timestamp_text(1704067200_500_000, true).unwrap(),
+            timestamp_text(1_704_067_200 * 1_000_000 + 500_000, true).unwrap(),
             "2024-01-01 00:00:00.5+00"
         );
         assert_eq!(
-            timestamp_text(1704071_523_000_120, false).unwrap(),
+            timestamp_text(1_704_071_523 * 1_000_000 + 120, false).unwrap(),
             "2024-01-01 01:12:03.00012"
         );
         // Negative start counts from the end; a start before the first character shortens the

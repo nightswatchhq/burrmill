@@ -399,11 +399,12 @@ impl<'a> SignedFoldExec<'a> {
             // has to be free when it is not used; it was not, twice in this item alone.
             let mut simple1: Vec<(&crate::plan::FoldValue, StringArray, usize)> = Vec::new();
             let mut simple: Vec<(&crate::plan::FoldBranch, StringArray, Vec<usize>)> = Vec::new();
-            let mut composite: Vec<(
-                &crate::plan::FoldBranch,
+            type Composite<'b> = (
+                &'b crate::plan::FoldBranch,
                 Vec<Vec<Option<StringArray>>>,
                 Vec<usize>,
-            )> = Vec::new();
+            );
+            let mut composite: Vec<Composite<'_>> = Vec::new();
             for i in arms {
                 let b = &self.plan.branches[*i];
                 // Where each of this arm's summed columns landed in the decoded set.

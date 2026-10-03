@@ -174,41 +174,19 @@ impl RangeJoinExec {
             b_strict: b.1 == Operator::Lt,
         };
         let projection = j.projection().as_ref().map(|p| p.to_vec());
-        Ok(Some(Self::new(
-            Arc::clone(j.left()),
-            Arc::clone(j.right()),
+        Ok(Some(Self {
+            left: Arc::clone(j.left()),
+            right: Arc::clone(j.right()),
             bounds,
-            *j.join_type(),
+            join_type: *j.join_type(),
             projection,
-            j.schema(),
-            filter.expression().to_string(),
+            schema: j.schema(),
+            filter_text: filter.expression().to_string(),
+            built: Arc::new(tokio::sync::OnceCell::new()),
             // What the nested loop promised downstream, ordering included: rows still leave in the
             // right side's order.
-            Arc::clone(j.properties()),
-        )))
-    }
-
-    fn new(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
-        bounds: Bounds,
-        join_type: JoinType,
-        projection: Option<Vec<usize>>,
-        schema: SchemaRef,
-        filter_text: String,
-        properties: Arc<PlanProperties>,
-    ) -> Self {
-        Self {
-            left,
-            right,
-            bounds,
-            join_type,
-            projection,
-            schema,
-            filter_text,
-            built: Arc::new(tokio::sync::OnceCell::new()),
-            properties,
-        }
+            properties: Arc::clone(j.properties()),
+        }))
     }
 }
 
@@ -430,22 +408,23 @@ impl ExecutionPlan for RangeJoinExec {
         let right = children.pop().expect("two children");
         let left = children.pop().expect("two children");
         let right_partitioning = right.properties().output_partitioning().clone();
-        Ok(Arc::new(Self::new(
+        Ok(Arc::new(Self {
             left,
             right,
-            self.bounds,
-            self.join_type,
-            self.projection.clone(),
-            Arc::clone(&self.schema),
-            self.filter_text.clone(),
+            bounds: self.bounds,
+            join_type: self.join_type,
+            projection: self.projection.clone(),
+            schema: Arc::clone(&self.schema),
+            filter_text: self.filter_text.clone(),
+            built: Arc::new(tokio::sync::OnceCell::new()),
             // The right side's partitions are this operator's; a rule below may have changed them.
-            Arc::new(
+            properties: Arc::new(
                 self.properties
                     .as_ref()
                     .clone()
                     .with_partitioning(right_partitioning),
             ),
-        )))
+        }))
     }
     fn execute(
         &self,

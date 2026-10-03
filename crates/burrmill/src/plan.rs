@@ -22,10 +22,11 @@ use crate::error::{BurrmillError, Result};
 /// The one plan shape Burrmill owns today.
 ///
 /// It is deliberately parameterised over the columns rather than hardcoded to `to`/`from`/`value`.
-/// The #987 operator was written for `net_balances`; the shape it implements is *signed union fold*
-/// - one table read twice, one column crediting and one debiting the same signed value, grouped by
-/// the party - and every balance-like fold in a nest is an instance of it. Owning the shape rather
-/// than the query is what makes the coverage ratchet (§4.6) move by more than one query at a time.
+/// The #987 operator was written for `net_balances`; the shape it implements is
+/// *signed union fold* - one table read twice, one column crediting and one debiting the same signed
+/// value, grouped by the party - and every balance-like fold in a nest is an instance of it. Owning
+/// the shape rather than the query is what makes the coverage ratchet (§4.6) move by more than one
+/// query at a time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedFold {
     /// The arms of the `UNION ALL`, in the order written.
@@ -508,11 +509,12 @@ fn cast_to_i128(expr: &Expr) -> Result<(String, bool)> {
     // `DECIMAL(38,0)` is DataFusion's and the standard's, `INT128` is nobody's in particular. They
     // all denote exactly i128, so all three plan to the same operator: a migration should not have
     // to rewrite its queries to change engine, and neither incumbent's vocabulary is authoritative.
-    let width_ok = match data_type {
-        DataType::HugeInt | DataType::Int128 => true,
-        DataType::Decimal(ExactNumberInfo::PrecisionAndScale(38, 0)) => true,
-        _ => false,
-    };
+    let width_ok = matches!(
+        data_type,
+        DataType::HugeInt
+            | DataType::Int128
+            | DataType::Decimal(ExactNumberInfo::PrecisionAndScale(38, 0))
+    );
     if !width_ok {
         return Err(not_allowed(format!(
             "the value cast must be a 128-bit exact integer (HUGEINT or DECIMAL(38,0)); got `{data_type}`"
@@ -756,15 +758,9 @@ fn strip_varchar_cast(expr: &Expr) -> &Expr {
     match expr {
         Expr::Cast {
             expr: inner,
-            data_type,
+            data_type: DataType::Varchar(_) | DataType::Text | DataType::String(_),
             ..
-        } if matches!(
-            data_type,
-            DataType::Varchar(_) | DataType::Text | DataType::String(_)
-        ) =>
-        {
-            inner.as_ref()
-        }
+        } => inner.as_ref(),
         other => other,
     }
 }

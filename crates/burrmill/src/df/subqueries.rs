@@ -248,12 +248,11 @@ fn item_names(item: &SelectItem, relations: &[Relation]) -> Option<Vec<(String, 
 fn select(s: &mut Select, known: &Known, ctes: &mut Ctes, rename: bool) -> Option<Vec<String>> {
     let mut relations = Vec::new();
     from(&mut s.from, known, ctes, &mut relations);
-    let items: Vec<Option<Vec<(String, Option<String>)>>> = s
+    let items: Vec<Vec<(String, Option<String>)>> = s
         .projection
         .iter()
         .map(|i| item_names(i, &relations))
-        .collect();
-    let items: Vec<Vec<(String, Option<String>)>> = items.into_iter().collect::<Option<_>>()?;
+        .collect::<Option<_>>()?;
     let written: Vec<String> = items.iter().flatten().map(|(n, _)| n.clone()).collect();
     let finals = dedupe(&written);
     if !rename {
