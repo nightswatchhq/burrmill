@@ -2,6 +2,7 @@
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -20,6 +21,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion_execution::memory_pool::{GreedyMemoryPool, PeakRecordingPool, TrackConsumersPool};
 use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
@@ -111,7 +113,12 @@ impl MiniSession {
                 .with_cache_manager(
                     CacheManagerConfig::default().with_metadata_cache_limit(b.memory_bytes / 8),
                 )
-                .with_memory_limit(b.memory_bytes - b.memory_bytes / 8, 1.0)
+                .with_memory_pool(Arc::new(PeakRecordingPool::new(Arc::new(
+                    TrackConsumersPool::new(
+                        GreedyMemoryPool::new(b.memory_bytes - b.memory_bytes / 8),
+                        NonZeroUsize::new(5).expect("five"),
+                    ),
+                ))))
                 .with_disk_manager_builder(match &b.spill {
                     None => DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
                     Some((dir, cap)) => DiskManagerBuilder::default()

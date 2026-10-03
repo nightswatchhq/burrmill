@@ -260,6 +260,27 @@ fn scalars_refuse() {
     );
 }
 
+// #41: the least signed integer modulo -1 overflows in DuckDB, where Arrow's kernel wraps it to 0.
+#[test]
+fn least_integer_modulo_minus_one_refuses() {
+    let (_t, e) = engine(&[("t", vec![i64s(&[i64::MIN, 7])])]);
+    for sql in [
+        "SELECT CAST(-9223372036854775808 AS BIGINT) % -1",
+        "SELECT v % -1 FROM t",
+        "SELECT v % CAST(-1 AS INTEGER) FROM t",
+        "SELECT CAST(-2147483648 AS INTEGER) % -1",
+        "SELECT CAST(-128 AS TINYINT) % CAST(-1 AS TINYINT)",
+    ] {
+        let m = refused(&e, sql);
+        assert!(m.contains("Overflow in division"), "{sql}: {m}");
+    }
+    assert_eq!(one(&e, "SELECT v % -1 FROM t WHERE v > 0"), "0");
+    assert_eq!(one(&e, "SELECT v % -2 FROM t WHERE v > 0"), "1");
+    assert_eq!(one(&e, "SELECT v % 4 FROM t WHERE v < 0"), "0");
+    assert_eq!(one(&e, "SELECT CAST(-2147483647 AS INTEGER) % -1"), "0");
+    assert_eq!(one(&e, "SELECT v % 0 FROM t WHERE v > 0"), "NULL");
+}
+
 // 2k: a literal past u64 would be a float before any rule saw it.
 #[test]
 fn wide_literals_refused_at_the_surface() {

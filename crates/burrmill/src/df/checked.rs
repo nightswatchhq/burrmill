@@ -610,6 +610,7 @@ impl ScalarUDFImpl for CheckedBinary {
             Some(Operator::Plus) => "checked_add",
             Some(Operator::Minus) => "checked_sub",
             Some(Operator::Multiply) => "checked_mul",
+            Some(Operator::Modulo) => "checked_rem",
             _ => "checked_neg",
         }
     }
@@ -642,6 +643,10 @@ impl ScalarUDFImpl for CheckedBinary {
             Some(Operator::Plus) => numeric::add(&arrays[0], &arrays[1])?,
             Some(Operator::Minus) => numeric::sub(&arrays[0], &arrays[1])?,
             Some(Operator::Multiply) => numeric::mul(&arrays[0], &arrays[1])?,
+            Some(Operator::Modulo) => {
+                least_modulo_minus_one(&arrays[0], &arrays[1])?;
+                numeric::rem(&arrays[0], &arrays[1])?
+            }
             _ => numeric::neg(&arrays[0])?,
         };
         validate_precision(&out)?;
@@ -666,6 +671,23 @@ impl ScalarUDFImpl for CheckedBinary {
             Ok(ColumnarValue::Array(out))
         }
     }
+}
+
+/// Arrow wraps the least signed integer `% -1` to 0; DuckDB refuses it, as it does that `//`.
+fn least_modulo_minus_one(l: &ArrayRef, r: &ArrayRef) -> Result<()> {
+    let bits = l.data_type().primitive_width().unwrap_or(8) * 8;
+    let least = i64::MIN >> (64 - bits);
+    let wide = |a: &ArrayRef| cast_with_options(a, &DataType::Int64, &CastOptions::default());
+    let (l, r) = (wide(l)?, wide(r)?);
+    let (l, r) = (l.as_primitive::<Int64Type>(), r.as_primitive::<Int64Type>());
+    for (x, y) in l.iter().zip(r) {
+        if let (Some(x), Some(-1)) = (x, y)
+            && x == least
+        {
+            return exec_err!("Overflow in division of {x} % -1");
+        }
+    }
+    Ok(())
 }
 
 /// `checked_shl` / `checked_shr`: an integer shift as DuckDB 1.5 does it. Arrow takes the count

@@ -77,6 +77,7 @@ const SAFE_SCALARS: &[&str] = &[
     "checked_add",
     "checked_sub",
     "checked_mul",
+    "checked_rem",
     "checked_neg",
     "checked_shl",
     "checked_shr",
@@ -116,6 +117,7 @@ pub struct CheckedArithmetic {
     add: Arc<ScalarUDF>,
     sub: Arc<ScalarUDF>,
     mul: Arc<ScalarUDF>,
+    rem: Arc<ScalarUDF>,
     neg: Arc<ScalarUDF>,
     wide: Arc<ScalarUDF>,
     wide_neg: Arc<ScalarUDF>,
@@ -130,6 +132,7 @@ impl Default for CheckedArithmetic {
             add: CheckedBinary::udf(Some(Operator::Plus)),
             sub: CheckedBinary::udf(Some(Operator::Minus)),
             mul: CheckedBinary::udf(Some(Operator::Multiply)),
+            rem: CheckedBinary::udf(Some(Operator::Modulo)),
             neg: CheckedBinary::udf(None),
             wide: ExactWide::udf(false, false),
             wide_neg: ExactWide::udf(true, false),
@@ -363,6 +366,17 @@ impl CheckedArithmetic {
                         right,
                     })))
                 }
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Modulo,
+                right,
+            }) if left.get_type(schema)?.is_signed_integer()
+                && right.get_type(schema)?.is_signed_integer() =>
+            {
+                Ok(Transformed::yes(Expr::ScalarFunction(
+                    ScalarFunction::new_udf(Arc::clone(&self.rem), vec![*left, *right]),
+                )))
             }
             Expr::Negative(inner) if is_exact(&inner.get_type(schema)?) => Ok(Transformed::yes(
                 Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&self.neg), vec![*inner])),
