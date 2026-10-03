@@ -2146,7 +2146,8 @@ impl AnalyzerRule for DuckSemantics {
                     let t = t.transform_data(|e| dates_as_duckdb(e, &schema))?;
                     let t = t.transform_data(|e| case_nullability(e, &schema))?;
                     let t = t.transform_data(try_as_duckdb)?;
-                    t.transform_data(|e| hugeint_rounding(e, &schema, &self.round))
+                    let t = t.transform_data(|e| hugeint_rounding(e, &schema, &self.round))?;
+                    t.transform_data(hugeint_null_test)
                 })?;
                 if t.transformed && names_matter && t.data.schema_name().to_string() != name {
                     Ok(Transformed::yes(t.data.alias(name)))
@@ -3565,8 +3566,39 @@ fn hugeint_rounding(
         Expr::TryCast(TryCast { expr, field }) if expr.get_type(schema)?.is_floating() => {
             Expr::TryCast(TryCast::new(rounded(expr), field.data_type().clone()))
         }
+        Expr::TryCast(TryCast { expr, field }) if is_text(&expr.get_type(schema)?) => {
+            let marked = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+                super::fastcast::HugeintText::udf(false),
+                vec![expr.as_ref().clone()],
+            ));
+            Expr::TryCast(TryCast::new(Box::new(marked), field.data_type().clone()))
+        }
         other => other.clone(),
     }))
+}
+
+/// `TRY_CAST(x AS HUGEINT) IS [NOT] NULL` over text, answered for DuckDB's whole HUGEINT rather than
+/// refused where the value itself could not be held.
+fn hugeint_null_test(e: Expr) -> DFResult<Transformed<Expr>> {
+    let (inner, null) = match &e {
+        Expr::IsNull(x) => (x, true),
+        Expr::IsNotNull(x) => (x, false),
+        _ => return Ok(Transformed::no(e)),
+    };
+    let Expr::TryCast(TryCast { expr, .. }) = inner.as_ref() else {
+        return Ok(Transformed::no(e));
+    };
+    let Expr::ScalarFunction(f) = expr.as_ref() else {
+        return Ok(Transformed::no(e));
+    };
+    if f.func.name() != super::fastcast::HUGEINT_TEXT {
+        return Ok(Transformed::no(e));
+    }
+    let fits = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+        super::fastcast::HugeintText::udf(true),
+        f.args.clone(),
+    ));
+    Ok(Transformed::yes(if null { !fits } else { fits }))
 }
 
 /// Marks a cast written as HUGEINT until [`hugeint_rounding`] takes it off; returns its argument.

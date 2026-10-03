@@ -79,6 +79,21 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
         )));
     }
     if let Expr::TryCast(datafusion_expr::TryCast { expr, field }) = &e
+        && let Expr::ScalarFunction(f) = expr.as_ref()
+        && f.func.name() == HUGEINT_TEXT
+        && let DataType::Decimal128(p, 0) = field.data_type()
+    {
+        let udf = Arc::new(ScalarUDF::from(TextToDecimal {
+            sig: Signature::any(1, Volatility::Immutable),
+            precision: *p,
+            safe: true,
+            hugeint: true,
+        }));
+        return Ok(Transformed::yes(Expr::ScalarFunction(
+            ScalarFunction::new_udf(udf, f.args.clone()),
+        )));
+    }
+    if let Expr::TryCast(datafusion_expr::TryCast { expr, field }) = &e
         && let DataType::Decimal128(p, 0) = field.data_type()
         && is_text(&expr.get_type(schema)?)
     {
@@ -86,6 +101,7 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
             sig: Signature::any(1, Volatility::Immutable),
             precision: *p,
             safe: true,
+            hugeint: false,
         }));
         return Ok(Transformed::yes(Expr::ScalarFunction(
             ScalarFunction::new_udf(udf, vec![expr.as_ref().clone()]),
@@ -114,6 +130,7 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
         sig: Signature::any(1, Volatility::Immutable),
         precision: *p,
         safe: false,
+        hugeint: false,
     }));
     Ok(Transformed::yes(Expr::ScalarFunction(
         ScalarFunction::new_udf(udf, vec![expr.as_ref().clone()]),
@@ -127,6 +144,8 @@ struct TextToDecimal {
     precision: u8,
     /// `TRY_CAST`: NULL where `CAST` would refuse.
     safe: bool,
+    /// Written as HUGEINT: what DuckDB's HUGEINT holds past 38 digits refuses rather than reading NULL.
+    hugeint: bool,
 }
 
 /// Text as DuckDB's DECIMAL(p,0) cast reads it, if the value has at most `p` digits.
@@ -179,6 +198,7 @@ impl ScalarUDFImpl for TextToDecimal {
             };
             match plain(s, self.precision).or_else(|| duck_decimal(s, self.precision)) {
                 Some(v) => out.append_value(v),
+                None if self.hugeint && duck_hugeint(s).is_some() => return Err(past_decimal(s)),
                 None if self.safe => out.append_null(),
                 None => {
                     return Err(exec_datafusion_err!(
@@ -455,5 +475,109 @@ pub(crate) fn literal_as(s: &str, to: &DataType) -> Option<ScalarValue> {
             Some(ScalarValue::Decimal128(Some(duck_decimal(s, *p)?), *p, 0))
         }
         t => ScalarValue::Utf8(Some(s.to_string())).cast_to(t).ok(),
+    }
+}
+
+/// Text as DuckDB's HUGEINT cast reads it: all of i128, where DECIMAL(38,0) stops at 38 digits.
+pub(crate) fn duck_hugeint(s: &str) -> Option<i128> {
+    super::wide::Wide::<3>::parse_integer(s)
+        .ok()
+        .flatten()?
+        .to_i128()
+}
+
+fn past_decimal(s: &str) -> datafusion_common::DataFusionError {
+    exec_datafusion_err!(
+        "TRY_CAST('{s}' AS HUGEINT): DuckDB's HUGEINT holds it and HUGEINT here is DECIMAL(38,0), \
+         which does not, so it is refused rather than read as NULL"
+    )
+}
+
+pub(crate) fn each_text(a: &ArrayRef, mut f: impl FnMut(Option<&str>) -> Result<()>) -> Result<()> {
+    match a.data_type() {
+        DataType::Utf8View => {
+            let s = a.as_string_view();
+            (0..s.len()).try_for_each(|i| f(s.is_valid(i).then(|| s.value(i))))
+        }
+        DataType::Utf8 => {
+            let s = a.as_string::<i32>();
+            (0..s.len()).try_for_each(|i| f(s.is_valid(i).then(|| s.value(i))))
+        }
+        DataType::LargeUtf8 => {
+            let s = a.as_string::<i64>();
+            (0..s.len()).try_for_each(|i| f(s.is_valid(i).then(|| s.value(i))))
+        }
+        t => plan_err!("expected text, got {t}"),
+    }
+}
+
+pub(crate) const HUGEINT_TEXT: &str = "burrmill_hugeint_text";
+
+/// The text under a `TRY_CAST(x AS HUGEINT)`, so the rules after `DuckSemantics` can still tell it
+/// from `AS DECIMAL(38,0)`. Passes `x` through, refusing what HUGEINT holds past 38 digits; with
+/// `fits`, whether `x` reads as a HUGEINT at all, which is that cast's `IS NOT NULL`.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(crate) struct HugeintText {
+    sig: Signature,
+    fits: bool,
+}
+
+impl HugeintText {
+    pub(crate) fn udf(fits: bool) -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(Self {
+            sig: Signature::any(1, Volatility::Immutable),
+            fits,
+        }))
+    }
+}
+
+impl ScalarUDFImpl for HugeintText {
+    fn name(&self) -> &str {
+        if self.fits {
+            "burrmill_fits_hugeint"
+        } else {
+            HUGEINT_TEXT
+        }
+    }
+    fn signature(&self) -> &Signature {
+        &self.sig
+    }
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        if !is_text(&args[0]) {
+            return plan_err!("{} takes text, not {}", self.name(), args[0]);
+        }
+        Ok(if self.fits {
+            DataType::Boolean
+        } else {
+            args[0].clone()
+        })
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
+        let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        let out: ArrayRef = if self.fits {
+            let mut b = arrow::array::BooleanBuilder::with_capacity(a.len());
+            each_text(&a, |s| {
+                b.append_value(s.is_some_and(|s| duck_hugeint(s).is_some()));
+                Ok(())
+            })?;
+            Arc::new(b.finish())
+        } else {
+            each_text(&a, |s| match s {
+                Some(s) if plain(s, 38).is_none() && duck_decimal(s, 38).is_none() => {
+                    match duck_hugeint(s) {
+                        Some(_) => Err(past_decimal(s)),
+                        None => Ok(()),
+                    }
+                }
+                _ => Ok(()),
+            })?;
+            a
+        };
+        if scalar {
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(&out, 0)?))
+        } else {
+            Ok(ColumnarValue::Array(out))
+        }
     }
 }

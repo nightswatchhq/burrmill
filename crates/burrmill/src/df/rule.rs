@@ -123,6 +123,8 @@ pub struct CheckedArithmetic {
     wide_neg: Arc<ScalarUDF>,
     wide_hex: Arc<ScalarUDF>,
     wide_neg_hex: Arc<ScalarUDF>,
+    wide_hugeint: Arc<ScalarUDF>,
+    wide_neg_hugeint: Arc<ScalarUDF>,
     fresh: AtomicUsize,
 }
 
@@ -138,6 +140,8 @@ impl Default for CheckedArithmetic {
             wide_neg: ExactWide::udf(true, false),
             wide_hex: ExactWide::udf(false, true),
             wide_neg_hex: ExactWide::udf(true, true),
+            wide_hugeint: ExactWide::hugeint_udf(false),
+            wide_neg_hugeint: ExactWide::hugeint_udf(true),
             fresh: AtomicUsize::new(0),
         }
     }
@@ -429,6 +433,10 @@ impl CheckedArithmetic {
                 false => None,
             };
             let mut params = af.params.clone();
+            if let Some((p, w, _, true)) = &exact {
+                input = p.clone();
+                params.args = vec![w.clone()];
+            }
             if tainted && exact.is_none() {
                 let Some((new_input, args)) = self.guarded(&input, &params.args, func)? else {
                     return plan_err!(
@@ -457,8 +465,12 @@ impl CheckedArithmetic {
                 continue;
             }
             // `exact` carries exact_wide of the pre-cast text. Summing that counts rows the
-            // cast reports as NULL, so the cast in `params` is what is summed.
-            let t = params.args[0].get_type(input.schema())?;
+            // cast reports as NULL, so the cast in `params` is what is summed, unless the wide is
+            // NULL where the cast is and has replaced it.
+            let t = match &exact {
+                Some((_, _, t, true)) => t.clone(),
+                _ => params.args[0].get_type(input.schema())?,
+            };
             if !is_exact(&t) {
                 exprs.push(if tainted { rebuilt(params) } else { e.clone() });
                 continue;
@@ -507,7 +519,7 @@ impl CheckedArithmetic {
                     "__burrmill_exact_{}",
                     self.fresh.fetch_add(1, Ordering::Relaxed)
                 );
-                let Some((p, source, _)) = self.expose(&input, idx, &name)? else {
+                let Some((p, source, _, _)) = self.expose(&input, idx, &name)? else {
                     return Ok(None);
                 };
                 input = p;
@@ -559,12 +571,13 @@ impl CheckedArithmetic {
     }
 
     /// `Some` when `arg` is a plain `TRY_CAST`, or a column projected from one. The plan carries
-    /// `exact_wide` of the source; a sum reads the cast, not that value.
+    /// `exact_wide` of the source; a sum reads the cast, not that value, unless the last field says
+    /// the wide is NULL exactly where the cast is.
     fn exact_source(
         &self,
         input: &LogicalPlan,
         arg: &Expr,
-    ) -> Result<Option<(LogicalPlan, Expr, DataType)>> {
+    ) -> Result<Option<(LogicalPlan, Expr, DataType, bool)>> {
         if let Expr::Column(c) = unalias(arg) {
             let idx = input.schema().index_of_column(c)?;
             let name = format!(
@@ -573,16 +586,23 @@ impl CheckedArithmetic {
             );
             return Ok(self
                 .expose(input, idx, &name)?
-                .map(|(p, c, t)| (p, Expr::Column(c), t)));
+                .map(|(p, c, t, h)| (p, Expr::Column(c), t, h)));
         }
         Ok(self
             .wide_of(arg, input.schema(), &lossy(input))
-            .map(|(w, t)| (input.clone(), w, t)))
+            .map(|(w, t, h)| (input.clone(), w, t, h)))
     }
 
     /// `TRY_CAST(src AS D)`, its negation, or an exact expression that is not lossy at all, as a
-    /// 320-bit `exact_wide` of the true value, with `D`. Scale 0 only: text carries no scale.
-    fn wide_of(&self, e: &Expr, schema: &DFSchema, taint: &[bool]) -> Option<(Expr, DataType)> {
+    /// 320-bit `exact_wide` of the true value, with `D`. Scale 0 only: text carries no scale. True
+    /// when the wide is NULL exactly where the cast is: text cast to HUGEINT, which past 38 digits
+    /// the cast cannot hold.
+    fn wide_of(
+        &self,
+        e: &Expr,
+        schema: &DFSchema,
+        taint: &[bool],
+    ) -> Option<(Expr, DataType, bool)> {
         let (inner, neg) = match unalias(e) {
             Expr::ScalarFunction(f) if f.func.name() == "checked_neg" => {
                 (unalias(&f.args[0]), true)
@@ -598,6 +618,17 @@ impl CheckedArithmetic {
         if !is_exact(&target) || scale(&target) != 0 || expr_lossy(source, schema, taint) {
             return None;
         }
+        if let Expr::ScalarFunction(f) = source
+            && f.func.name() == super::fastcast::HUGEINT_TEXT
+        {
+            let w = if neg {
+                &self.wide_neg_hugeint
+            } else {
+                &self.wide_hugeint
+            };
+            let call = ScalarFunction::new_udf(Arc::clone(w), f.args.clone());
+            return Some((Expr::ScalarFunction(call), target, true));
+        }
         let source_ty = source.get_type(schema).ok()?;
         if !(is_text(&source_ty) || is_exact(&source_ty) && scale(&source_ty) == 0) {
             return None;
@@ -610,7 +641,7 @@ impl CheckedArithmetic {
             (true, true) => &self.wide_neg_hex,
         };
         let call = ScalarFunction::new_udf(Arc::clone(f), vec![source.clone()]);
-        Some((Expr::ScalarFunction(call), target))
+        Some((Expr::ScalarFunction(call), target, false))
     }
 
     fn window(&self, p: &LogicalPlan) -> Result<()> {
@@ -847,15 +878,16 @@ impl CheckedArithmetic {
         plan: &LogicalPlan,
         idx: usize,
         name: &str,
-    ) -> Result<Option<(LogicalPlan, Column, DataType)>> {
-        let with_input =
-            |input: &LogicalPlan, i: usize| -> Result<Option<(LogicalPlan, Column, DataType)>> {
-                let Some((ni, col, target)) = self.expose(input, i, name)? else {
-                    return Ok(None);
-                };
-                let rebuilt = plan.with_new_exprs(plan.expressions(), vec![ni])?;
-                Ok(Some((rebuilt, col, target)))
+    ) -> Result<Option<(LogicalPlan, Column, DataType, bool)>> {
+        let with_input = |input: &LogicalPlan,
+                          i: usize|
+         -> Result<Option<(LogicalPlan, Column, DataType, bool)>> {
+            let Some((ni, col, target, h)) = self.expose(input, i, name)? else {
+                return Ok(None);
             };
+            let rebuilt = plan.with_new_exprs(plan.expressions(), vec![ni])?;
+            Ok(Some((rebuilt, col, target, h)))
+        };
         match plan {
             LogicalPlan::Projection(p) => {
                 let (inner, neg) = match unalias(&p.expr[idx]) {
@@ -865,10 +897,10 @@ impl CheckedArithmetic {
                     Expr::Negative(x) => (unalias(x), true),
                     x => (x, false),
                 };
-                let (source, target, input) = match inner {
+                let (source, target, h, input) = match inner {
                     Expr::Column(c) => {
                         let i = p.input.schema().index_of_column(c)?;
-                        let Some((ni, col, target)) = self.expose(&p.input, i, name)? else {
+                        let Some((ni, col, target, h)) = self.expose(&p.input, i, name)? else {
                             return Ok(None);
                         };
                         let source = if neg {
@@ -880,15 +912,15 @@ impl CheckedArithmetic {
                         } else {
                             Expr::Column(col)
                         };
-                        (source, target, Arc::new(ni))
+                        (source, target, h, Arc::new(ni))
                     }
                     _ => {
                         let taint = lossy(&p.input);
                         let e = &p.expr[idx];
-                        let Some((w, target)) = self.wide_of(e, p.input.schema(), &taint) else {
+                        let Some((w, target, h)) = self.wide_of(e, p.input.schema(), &taint) else {
                             return Ok(None);
                         };
-                        (w, target, Arc::clone(&p.input))
+                        (w, target, h, Arc::clone(&p.input))
                     }
                 };
                 let mut exprs = p.expr.clone();
@@ -898,10 +930,11 @@ impl CheckedArithmetic {
                     LogicalPlan::Projection(np),
                     Column::new_unqualified(name),
                     target,
+                    h,
                 )))
             }
             LogicalPlan::SubqueryAlias(s) => {
-                let Some((ni, _, target)) = self.expose(&s.input, idx, name)? else {
+                let Some((ni, _, target, h)) = self.expose(&s.input, idx, name)? else {
                     return Ok(None);
                 };
                 let na = SubqueryAlias::try_new(Arc::new(ni), s.alias.clone())?;
@@ -909,27 +942,28 @@ impl CheckedArithmetic {
                     LogicalPlan::SubqueryAlias(na),
                     Column::new(Some(s.alias.clone()), name),
                     target,
+                    h,
                 )))
             }
             LogicalPlan::Union(u) => {
                 let mut inputs = Vec::with_capacity(u.inputs.len());
-                let mut first: Option<(Column, DataType)> = None;
+                let mut first: Option<(Column, DataType, bool)> = None;
                 for i in &u.inputs {
-                    let Some((ni, col, target)) = self.expose(i, idx, name)? else {
+                    let Some((ni, col, target, h)) = self.expose(i, idx, name)? else {
                         return Ok(None);
                     };
-                    match &first {
-                        Some((_, t)) if *t != target => return Ok(None),
-                        Some(_) => {}
-                        None => first = Some((col, target)),
+                    match &mut first {
+                        Some((_, t, _)) if *t != target => return Ok(None),
+                        Some((_, _, all)) => *all &= h,
+                        None => first = Some((col, target, h)),
                     }
                     inputs.push(Arc::new(ni));
                 }
-                let Some((col, target)) = first else {
+                let Some((col, target, h)) = first else {
                     return Ok(None);
                 };
                 let nu = Union::try_new_with_loose_types(inputs)?;
-                Ok(Some((LogicalPlan::Union(nu), col, target)))
+                Ok(Some((LogicalPlan::Union(nu), col, target, h)))
             }
             LogicalPlan::Filter(f) => with_input(&f.input, idx),
             LogicalPlan::Sort(s) => with_input(&s.input, idx),
@@ -942,19 +976,19 @@ impl CheckedArithmetic {
             {
                 let nl = j.left.schema().fields().len();
                 let (left, right) = (j.left.as_ref().clone(), j.right.as_ref().clone());
-                let (inputs, col, target) = if idx < nl {
-                    let Some((ni, col, t)) = self.expose(&j.left, idx, name)? else {
+                let (inputs, col, target, h) = if idx < nl {
+                    let Some((ni, col, t, h)) = self.expose(&j.left, idx, name)? else {
                         return Ok(None);
                     };
-                    (vec![ni, right], col, t)
+                    (vec![ni, right], col, t, h)
                 } else {
-                    let Some((ni, col, t)) = self.expose(&j.right, idx - nl, name)? else {
+                    let Some((ni, col, t, h)) = self.expose(&j.right, idx - nl, name)? else {
                         return Ok(None);
                     };
-                    (vec![left, ni], col, t)
+                    (vec![left, ni], col, t, h)
                 };
                 let rebuilt = plan.with_new_exprs(plan.expressions(), inputs)?;
-                Ok(Some((rebuilt, col, target)))
+                Ok(Some((rebuilt, col, target, h)))
             }
             _ => Ok(None),
         }
