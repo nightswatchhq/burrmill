@@ -532,3 +532,43 @@ fn value_of(engine: Engine, sql: &str) -> String {
     let batches = engine.sql(sql).unwrap();
     serde_json::to_string(&burrmill::df::encode::rows(&batches[0]).unwrap()).unwrap()
 }
+
+fn nest_with_dec(values: &[&str]) -> (tempfile::TempDir, Engine) {
+    let tmp = tempfile::tempdir().unwrap();
+    let segs = tmp.path().join("segments");
+    std::fs::create_dir(&segs).unwrap();
+    let rows: Vec<_> = values.iter().map(|v| ("0xa", "0xb", *v)).collect();
+    write_table(&segs, "token__transfer", &rows);
+    std::fs::write(
+        tmp.path().join("schema.json"),
+        r#"{"tables":[{"table":"token__transfer","columns":[{"name":"value","storage":"word32"}]}]}"#,
+    )
+    .unwrap();
+    let engine = Engine::open_nest(tmp.path()).unwrap();
+    (tmp, engine)
+}
+
+#[test]
+fn intdiv_over_a_decimal_is_double_division_and_over_a_hugeint_is_exact() {
+    // DuckDB 1.5's answers: its `//` is integer division for integers and HUGEINT only, and a
+    // DECIMAL of any precision is cast to DOUBLE for it.
+    assert_eq!(
+        value(
+            "SELECT 1::DECIMAL(38,0) // 3 AS a, CAST(7 AS DECIMAL(10,0)) // 2 AS b, \
+             CAST(7 AS HUGEINT) // 2 AS c, CAST(7 AS BIGINT) // 2 AS d, \
+             CAST(7 AS HUGEINT) // CAST(2 AS DECIMAL(38,0)) AS e, -CAST(7 AS DECIMAL(38,0)) // 2 AS f"
+        ),
+        r#"[{"a":0.3333333333333333,"b":3.5,"c":"3","d":3,"e":3.5,"f":-3.5}]"#
+    );
+    let (_tmp, engine) = nest_with_dec(&["10", "4", "2"]);
+    assert_eq!(
+        value_of(
+            engine,
+            "SELECT value_dec // 4 AS a, CAST(value AS HUGEINT) // 4 AS b, \
+             (SELECT sum(value_dec) FROM token__transfer) // 3 AS s, \
+             (SELECT sum(CAST(value AS HUGEINT)) FROM token__transfer) // 3 AS h, \
+             d // 4 AS q FROM (SELECT *, value_dec AS d FROM token__transfer) ORDER BY 1"
+        ),
+        r#"[{"a":0.5,"b":"0","s":5.333333333333333,"h":"5","q":0.5},{"a":1.0,"b":"1","s":5.333333333333333,"h":"5","q":1.0},{"a":2.5,"b":"2","s":5.333333333333333,"h":"5","q":2.5}]"#
+    );
+}

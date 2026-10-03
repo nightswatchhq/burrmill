@@ -25,7 +25,7 @@ use arrow::datatypes::{
     UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, Result as DFResult, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     BinaryExpr, Cast, ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator,
@@ -1501,6 +1501,112 @@ impl ScalarUDFImpl for IntDiv {
     }
 }
 
+/// `a // b` beside a DuckDB DECIMAL, of any scale, is division in DOUBLE: DuckDB's `//` takes
+/// integers and HUGEINT only. Both are `DECIMAL(38,0)` here, so which one an operand is comes from
+/// what was written, read before coercion adds casts of its own.
+fn decimal_intdiv(
+    e: Expr,
+    schema: &DFSchema,
+    inputs: &[&LogicalPlan],
+) -> DFResult<Transformed<Expr>> {
+    let Expr::ScalarFunction(f) = &e else {
+        return Ok(Transformed::no(e));
+    };
+    if f.func.name() != "burrmill_intdiv" || !f.args.iter().any(|a| duck_decimal(a, schema, inputs))
+    {
+        return Ok(Transformed::no(e));
+    }
+    let args = f
+        .args
+        .iter()
+        .map(|a| a.clone().cast_to(&DataType::Float64, schema))
+        .collect::<DFResult<Vec<_>>>()?;
+    Ok(Transformed::yes(Expr::ScalarFunction(
+        datafusion_expr::expr::ScalarFunction::new_udf(Arc::clone(&f.func), args),
+    )))
+}
+
+/// Whether `e`, a scale-0 DECIMAL here, is a DECIMAL in DuckDB rather than a HUGEINT: a cast not
+/// written as HUGEINT, or computed from one. A column is followed to what produced it.
+fn duck_decimal(e: &Expr, schema: &DFSchema, inputs: &[&LogicalPlan]) -> bool {
+    if !matches!(e.get_type(schema), Ok(DataType::Decimal128(_, 0))) {
+        return false;
+    }
+    let any = |v: Vec<&Expr>| v.into_iter().any(|x| duck_decimal(x, schema, inputs));
+    match e {
+        Expr::Alias(a) => duck_decimal(&a.expr, schema, inputs),
+        Expr::Cast(_) | Expr::TryCast(_) => true,
+        Expr::ScalarFunction(f) if f.func.name() == "burrmill_hugeint" => false,
+        Expr::ScalarFunction(f) => any(f.args.iter().collect()),
+        Expr::AggregateFunction(f) => any(f.params.args.iter().collect()),
+        Expr::Negative(x) => duck_decimal(x, schema, inputs),
+        Expr::BinaryExpr(b) => any(vec![&b.left, &b.right]),
+        Expr::Case(c) => any(c
+            .when_then_expr
+            .iter()
+            .map(|(_, t)| t.as_ref())
+            .chain(c.else_expr.as_deref())
+            .collect()),
+        Expr::Column(c) => inputs.iter().any(|p| {
+            p.schema()
+                .maybe_index_of_column(c)
+                .is_some_and(|i| decimal_output(p, i))
+        }),
+        Expr::ScalarSubquery(s) => decimal_output(&s.subquery, 0),
+        _ => false,
+    }
+}
+
+/// Whether output column `i` of `p` is a DuckDB DECIMAL, by [`duck_decimal`].
+fn decimal_output(p: &LogicalPlan, i: usize) -> bool {
+    let produced = |e: Option<&Expr>, input: &LogicalPlan| {
+        e.is_some_and(|e| duck_decimal(e, input.schema(), &[input]))
+    };
+    match p {
+        LogicalPlan::Projection(x) => produced(x.expr.get(i), &x.input),
+        LogicalPlan::Aggregate(x) => {
+            if x.group_expr
+                .iter()
+                .any(|g| matches!(g, Expr::GroupingSet(_)))
+            {
+                return false;
+            }
+            let g = x.group_expr.len();
+            let e = if i < g {
+                x.group_expr.get(i)
+            } else {
+                x.aggr_expr.get(i - g)
+            };
+            produced(e, &x.input)
+        }
+        LogicalPlan::Window(x) => {
+            let n = x.input.schema().fields().len();
+            if i < n {
+                decimal_output(&x.input, i)
+            } else {
+                produced(x.window_expr.get(i - n), &x.input)
+            }
+        }
+        LogicalPlan::Join(j) => {
+            use datafusion_expr::JoinType::*;
+            let n = j.left.schema().fields().len();
+            match j.join_type {
+                RightSemi | RightAnti | RightMark => decimal_output(&j.right, i),
+                Inner | Left | Right | Full if i >= n => decimal_output(&j.right, i - n),
+                _ => decimal_output(&j.left, i),
+            }
+        }
+        LogicalPlan::Union(u) => u.inputs.iter().any(|x| decimal_output(x, i)),
+        LogicalPlan::SubqueryAlias(_)
+        | LogicalPlan::Filter(_)
+        | LogicalPlan::Sort(_)
+        | LogicalPlan::Limit(_)
+        | LogicalPlan::Distinct(datafusion_expr::Distinct::All(_))
+        | LogicalPlan::Repartition(_) => p.inputs().first().is_some_and(|x| decimal_output(x, i)),
+        _ => false,
+    }
+}
+
 /// `xor(a, b)`, bitwise, typed as DuckDB types it: a literal takes its partner's integer type,
 /// and mixed signs take the union (`xor` of `BIGINT` and `UBIGINT` is HUGEINT).
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1970,7 +2076,8 @@ fn divide_as_double(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
 ///
 /// - ordering (`<`, `>`, `<=`, `>=`, `BETWEEN`) between text and a number is refused, as DuckDB
 ///   refuses it; equality casts, as DuckDB does, and DataFusion already agrees;
-/// - text beside a boolean, or under `AND`/`OR`/`NOT`, is cast to BOOLEAN, as DuckDB casts it.
+/// - text beside a boolean, or under `AND`/`OR`/`NOT`, is cast to BOOLEAN, as DuckDB casts it;
+/// - `//` beside a DuckDB DECIMAL divides in DOUBLE ([`decimal_intdiv`]).
 #[derive(Debug, Default)]
 pub struct DuckComparisons;
 
@@ -2023,9 +2130,30 @@ impl TreeNodeRewriter for Comparisons {
                 p,
                 LogicalPlan::Projection(_) | LogicalPlan::Aggregate(_) | LogicalPlan::Window(_)
             );
+            let mut intdiv = false;
+            p.apply_expressions(|e| {
+                e.apply(|x| {
+                    intdiv |=
+                        matches!(x, Expr::ScalarFunction(f) if f.func.name() == "burrmill_intdiv");
+                    Ok(if intdiv {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
+                })
+            })?;
+            let inputs: Vec<LogicalPlan> = if intdiv {
+                p.inputs().into_iter().cloned().collect()
+            } else {
+                vec![]
+            };
+            let inputs: Vec<&LogicalPlan> = inputs.iter().collect();
             let t = p.map_expressions(|e| {
                 let name = names_matter.then(|| e.schema_name().to_string());
-                let t = e.transform_up(|e| compare_as_duckdb(e, &schema))?;
+                let t = e.transform_up(|e| {
+                    compare_as_duckdb(e, &schema)?
+                        .transform_data(|e| decimal_intdiv(e, &schema, &inputs))
+                })?;
                 match name {
                     Some(name) if t.transformed && t.data.schema_name().to_string() != name => {
                         Ok(Transformed::yes(t.data.alias(name)))

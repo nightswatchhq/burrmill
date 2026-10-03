@@ -305,6 +305,10 @@ const CORPUS: &[&str] = &[
     // An aggregate aliased to its own source column, then repeated in ORDER BY: inside the
     // aggregate, `value` is the base column, not the alias (the dashboard's tally statements).
     "SELECT lower(\"to\") AS p, CAST(SUM(CAST(\"value\" AS HUGEINT)) AS VARCHAR) AS value FROM transfer GROUP BY 1 ORDER BY SUM(CAST(\"value\" AS HUGEINT)) DESC",
+    // `//` is integer division for integers and HUGEINT; beside a DECIMAL it divides in DOUBLE.
+    "SELECT value_dec // 1000000000000000000 AS a FROM transfer ORDER BY block_number, log_index",
+    "SELECT sum(value_dec) // 3 AS a, 1::DECIMAL(38,0) // 3 AS b, CAST(7 AS HUGEINT) // 2 AS c, CAST(7 AS DECIMAL(10,0)) // 2 AS d, CAST(7 AS BIGNUM) // 2 AS e, sum(block_number) // 2 AS f FROM transfer",
+    "SELECT value_dec // 3 AS a, value_dec // 0 AS b FROM wide",
 ];
 
 /// Differences that stand, and why.
