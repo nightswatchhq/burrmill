@@ -41,14 +41,19 @@ use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use fixture::FixtureSpec;
 
 fn env_usize(key: &str, default: usize) -> usize {
-    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 /// `is_ok()` alone is true for an **empty** value, so `FLAG=` would read as set. That exact bug
 /// silently forced one ordering for a whole sweep, and it was found by the ordering control - which
 /// is the point of having one.
 fn env_flag(key: &str) -> bool {
-    std::env::var(key).map(|v| !matches!(v.trim(), "" | "0" | "false")).unwrap_or(false)
+    std::env::var(key)
+        .map(|v| !matches!(v.trim(), "" | "0" | "false"))
+        .unwrap_or(false)
 }
 
 /// **Peak** resident set size, not current.
@@ -92,7 +97,10 @@ fn main() -> anyhow::Result<()> {
     // which switches on a DuckDB bug (docs/upstream/duckdb-cast-comparison-null-constant.md) that
     // nuthatch meets only in queries that consult it themselves.
     std::env::set_var("TZ", "UTC");
-    tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(bench_main())
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(bench_main())
 }
 
 async fn bench_main() -> anyhow::Result<()> {
@@ -107,7 +115,10 @@ async fn bench_main() -> anyhow::Result<()> {
         let mb = |b: usize| b / (1024 * 1024);
         eprintln!(
             "ATPEAK\trss_mb={}\tfile_mb={}\tanon_mb={}\tlive_mb={}",
-            mb(rss), mb(file), mb(rss - file), mb(live)
+            mb(rss),
+            mb(file),
+            mb(rss - file),
+            mb(live)
         );
     }
     r
@@ -124,50 +135,87 @@ async fn run() -> anyhow::Result<()> {
         Some("dialect-parity") => dialect_parity::run(),
         Some("reach-parity") => reach_parity::run(),
         Some("scan-parity") => scan_parity::run(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: scan-parity <nest>"))?,
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: scan-parity <nest>"))?,
         ),
         Some("refs-parity") => reach_parity::run_refs(std::env::args().nth(2).as_deref()),
         Some("engine-analyze") => engine_views::analyze(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,
-            &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,
+            &std::env::args()
+                .nth(3)
+                .ok_or_else(|| anyhow::anyhow!("usage: engine-analyze <nest> <view>"))?,
         ),
         Some("engine-explain") => engine_views::explain(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-explain <nest> <view>"))?,
-            &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: engine-explain <nest> <view>"))?,
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: engine-explain <nest> <view>"))?,
+            &std::env::args()
+                .nth(3)
+                .ok_or_else(|| anyhow::anyhow!("usage: engine-explain <nest> <view>"))?,
         ),
         Some("engine-sql") => engine_views::sql_files(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-sql <nest> <file>..."))?,
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: engine-sql <nest> <file>..."))?,
             &std::env::args().skip(3).collect::<Vec<_>>(),
         ),
         Some("serve-views") => serve::run_views(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: serve-views <nest>"))?,
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: serve-views <nest>"))?,
         ),
         Some("rewrite-parity") => engine_views::rewrite_parity(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: rewrite-parity <nest> <views-dir>"))?,
-            &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: rewrite-parity <nest> <views-dir>"))?,
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: rewrite-parity <nest> <views-dir>"))?,
+            &std::env::args()
+                .nth(3)
+                .ok_or_else(|| anyhow::anyhow!("usage: rewrite-parity <nest> <views-dir>"))?,
         ),
         Some("engine-views") => engine_views::run(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: engine-views <nest>"))?,
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: engine-views <nest>"))?,
         ),
         Some("duck-keywords") => dialect_parity::duck_keywords(),
         Some("fuzz") => fuzz::run(),
         Some("duck-eval") => dialect_parity::duck_eval(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: duck-eval <sql>"))?,
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: duck-eval <sql>"))?,
         ),
         Some("duck-names") => dialect_parity::duck_names(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: duck-names <sql>"))?,
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: duck-names <sql>"))?,
         ),
         Some("nest") => nest(),
         Some("gen") => generated(),
         Some("cast") => cast_table(),
-        Some("serve") => serve::run(&std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: serve <fixture-dir>"))?),
-        Some("views") => views::run(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: views <segments> <views>"))?,
-            &std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: views <segments> <views>"))?,
+        Some("serve") => serve::run(
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: serve <fixture-dir>"))?,
         ),
-        Some("df-views") => df_views::run(
-            &std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: df-views <nest-dir>"))?,
-        ).await,
+        Some("views") => views::run(
+            &std::env::args()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("usage: views <segments> <views>"))?,
+            &std::env::args()
+                .nth(3)
+                .ok_or_else(|| anyhow::anyhow!("usage: views <segments> <views>"))?,
+        ),
+        Some("df-views") => {
+            df_views::run(
+                &std::env::args()
+                    .nth(2)
+                    .ok_or_else(|| anyhow::anyhow!("usage: df-views <nest-dir>"))?,
+            )
+            .await
+        }
         Some("shapes") => shapes::run(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some("slt") => slt_against_duckdb(),
         Some("duckdb-gaps") => duckdb_gaps(),
@@ -180,7 +228,9 @@ async fn run() -> anyhow::Result<()> {
 /// failure that looks like an engine bug.
 fn inspect() -> anyhow::Result<()> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    let path = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: inspect <file|dir>"))?;
+    let path = std::env::args()
+        .nth(2)
+        .ok_or_else(|| anyhow::anyhow!("usage: inspect <file|dir>"))?;
     let p = PathBuf::from(&path);
     let file = if p.is_dir() {
         std::fs::read_dir(&p)?
@@ -204,7 +254,9 @@ fn inspect() -> anyhow::Result<()> {
 
 /// `EXPLAIN` against a directory of segments, without running anything.
 fn explain() -> anyhow::Result<()> {
-    let dir = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: explain <dir>"))?;
+    let dir = std::env::args()
+        .nth(2)
+        .ok_or_else(|| anyhow::anyhow!("usage: explain <dir>"))?;
     let db = burrmill::Burrmill::open_segments("t", Path::new(&dir))?;
     let sql = std::env::args().nth(3).unwrap_or_else(|| {
         "SELECT addr, SUM(d) AS net FROM (\
@@ -245,7 +297,11 @@ async fn bench() -> anyhow::Result<()> {
     );
     let t = Instant::now();
     let written = fixture::write(&seg, &spec)?;
-    println!("fixture: {written} files in {:?} (rss {} MB)", t.elapsed(), rss_mb());
+    println!(
+        "fixture: {written} files in {:?} (rss {} MB)",
+        t.elapsed(),
+        rss_mb()
+    );
 
     // ---- parity, first, untimed ------------------------------------------------------------
     let (duck0, _) = oracles::duckdb(&seg)?;
@@ -331,7 +387,9 @@ async fn bench() -> anyhow::Result<()> {
 /// `try` the `TRY_CAST` form that becomes an exact text sum, and `stock` is DataFusion unhosted,
 /// whose sum wraps: the baseline the checked state is paid against.
 async fn df_fold() -> anyhow::Result<()> {
-    let dir = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: df-fold <dir>"))?;
+    let dir = std::env::args()
+        .nth(2)
+        .ok_or_else(|| anyhow::anyhow!("usage: df-fold <dir>"))?;
     let mode = std::env::var("MODE").unwrap_or_else(|_| "cast".into());
     // One fold by default: allocator retention builds across folds in a process, so the peak of
     // five is not the peak of one. Take latency medians with REPEATS=5 in a separate run.
@@ -352,8 +410,13 @@ async fn df_fold() -> anyhow::Result<()> {
         // dropped as they arrive: the like-for-like of `STREAM=1`.
         use std::hash::Hasher;
         let conn = duckdb::Connection::open_in_memory()?;
-        conn.execute_batch(&format!("SET threads TO {};", burrmill::Limits::default().max_threads))?;
-        conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{dir}/*.parquet');"))?;
+        conn.execute_batch(&format!(
+            "SET threads TO {};",
+            burrmill::Limits::default().max_threads
+        ))?;
+        conn.execute_batch(&format!(
+            "CREATE VIEW t AS SELECT * FROM read_parquet('{dir}/*.parquet');"
+        ))?;
         // In DuckDB's idiom, as the views write it: its text-to-DECIMAL(38,0) cast is ~15x slower
         // than to HUGEINT on this fold, which would make the incumbent look worse than it is.
         let duck_sql = sql.replace("DECIMAL(38,0)", "HUGEINT");
@@ -373,10 +436,13 @@ async fn df_fold() -> anyhow::Result<()> {
                         .iter()
                         .map(|c| duckdb::arrow::compute::cast(c, &utf8))
                         .collect::<Result<_, _>>()?;
-                    let cols: Vec<&StringArray> =
-                        cols.iter().map(|c| c.as_any().downcast_ref().unwrap()).collect();
+                    let cols: Vec<&StringArray> = cols
+                        .iter()
+                        .map(|c| c.as_any().downcast_ref().unwrap())
+                        .collect();
                     for i in 0..b.num_rows() {
-                        cols.iter().for_each(|c| c.is_valid(i).then(|| c.value(i)).hash(&mut h));
+                        cols.iter()
+                            .for_each(|c| c.is_valid(i).then(|| c.value(i)).hash(&mut h));
                     }
                 }
             }
@@ -385,8 +451,10 @@ async fn df_fold() -> anyhow::Result<()> {
         }
     } else if mode == "stock" {
         let threads = burrmill::Limits::default().max_threads;
-        let ctx = SessionContext::new_with_config(SessionConfig::new().with_target_partitions(threads));
-        ctx.register_parquet("t", &dir, ParquetReadOptions::default()).await?;
+        let ctx =
+            SessionContext::new_with_config(SessionConfig::new().with_target_partitions(threads));
+        ctx.register_parquet("t", &dir, ParquetReadOptions::default())
+            .await?;
         for _ in 0..repeats {
             let t = Instant::now();
             let b = ctx.sql(&sql).await?.collect().await?;
@@ -444,7 +512,9 @@ async fn df_fold() -> anyhow::Result<()> {
 
 /// With `PARITY=1`, an order-sensitive hash of every cell as text; off by default because the
 /// copy it makes would sit inside the RSS figure it is printed next to.
-fn parity_digest(batches: &[datafusion::arrow::record_batch::RecordBatch]) -> anyhow::Result<Option<u64>> {
+fn parity_digest(
+    batches: &[datafusion::arrow::record_batch::RecordBatch],
+) -> anyhow::Result<Option<u64>> {
     use std::hash::Hasher;
     if !env_flag("PARITY") {
         return Ok(None);
@@ -468,9 +538,13 @@ fn digest_batch(
         .iter()
         .map(|c| datafusion::arrow::compute::cast(c, &datafusion::arrow::datatypes::DataType::Utf8))
         .collect::<Result<_, _>>()?;
-    let cols: Vec<&StringArray> = cols.iter().map(|c| c.as_any().downcast_ref().unwrap()).collect();
+    let cols: Vec<&StringArray> = cols
+        .iter()
+        .map(|c| c.as_any().downcast_ref().unwrap())
+        .collect();
     for i in 0..b.num_rows() {
-        cols.iter().for_each(|c| c.is_valid(i).then(|| c.value(i)).hash(h));
+        cols.iter()
+            .for_each(|c| c.is_valid(i).then(|| c.value(i)).hash(h));
     }
     Ok(())
 }
@@ -484,7 +558,9 @@ fn digest_batch(
 /// in the wrong direction, but a number that does not measure what it claims is no better for being
 /// pessimistic.
 fn fold_only() -> anyhow::Result<()> {
-    let dir = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: fold <dir>"))?;
+    let dir = std::env::args()
+        .nth(2)
+        .ok_or_else(|| anyhow::anyhow!("usage: fold <dir>"))?;
     let repeats = env_usize("REPEATS", 3).max(1);
     // **THREADS, not RAYON_NUM_THREADS.** The fold runs in its own bounded pool as of roadmap
     // 1.2c, so the ambient rayon pool no longer decides anything and setting it would silently
@@ -563,8 +639,12 @@ fn fold_only() -> anyhow::Result<()> {
 /// makes `list` against Burrmill's existing figure the like-for-like comparison, and the glob
 /// figure a measurement of how much a nest directory costs to enumerate.
 fn nest() -> anyhow::Result<()> {
-    let dir = std::env::args().nth(2).ok_or_else(|| anyhow::anyhow!("usage: nest <dir> <prefix>"))?;
-    let prefix = std::env::args().nth(3).ok_or_else(|| anyhow::anyhow!("usage: nest <dir> <prefix>"))?;
+    let dir = std::env::args()
+        .nth(2)
+        .ok_or_else(|| anyhow::anyhow!("usage: nest <dir> <prefix>"))?;
+    let prefix = std::env::args()
+        .nth(3)
+        .ok_or_else(|| anyhow::anyhow!("usage: nest <dir> <prefix>"))?;
     let credit = std::env::var("CREDIT").unwrap_or_else(|_| "receiver".into());
     let debit = std::env::var("DEBIT").unwrap_or_else(|_| "payer".into());
     let value = std::env::var("VALUE").unwrap_or_else(|_| "tokens".into());
@@ -620,7 +700,9 @@ fn nest() -> anyhow::Result<()> {
 
     let run_duck = || -> anyhow::Result<(oracles::Rows, u128)> {
         let conn = duckdb::Connection::open_in_memory()?;
-        conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"))?;
+        conn.execute_batch(&format!(
+            "CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"
+        ))?;
         let t = std::time::Instant::now();
         let mut stmt = conn.prepare(&duck_sql)?;
         let mut out = Vec::new();
@@ -637,7 +719,9 @@ fn nest() -> anyhow::Result<()> {
     // and unifies the schema across every matched file; execution is where it reads rows.
     let run_duck_split = || -> anyhow::Result<(u128, u128)> {
         let conn = duckdb::Connection::open_in_memory()?;
-        conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"))?;
+        conn.execute_batch(&format!(
+            "CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"
+        ))?;
         let t = std::time::Instant::now();
         let mut stmt = conn.prepare(&duck_sql)?;
         let bind_ms = t.elapsed().as_millis();
@@ -675,7 +759,9 @@ fn nest() -> anyhow::Result<()> {
             .collect::<Vec<_>>()
             .join(",");
         let conn = duckdb::Connection::open_in_memory()?;
-        conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet([{list}]);"))?;
+        conn.execute_batch(&format!(
+            "CREATE VIEW t AS SELECT * FROM read_parquet([{list}]);"
+        ))?;
         let t = std::time::Instant::now();
         let mut stmt = conn.prepare(&duck_sql)?;
         let mut n = 0u64;
@@ -721,7 +807,11 @@ fn nest() -> anyhow::Result<()> {
         let t = std::time::Instant::now();
         let a = db.query(&sql, burrmill::Limits::default())?;
         let ms = t.elapsed().as_millis();
-        Ok((a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect(), ms, a.metrics()))
+        Ok((
+            a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            ms,
+            a.metrics(),
+        ))
     };
 
     // Burrmill paying for its own catalog, which the previous harness did outside the timer.
@@ -810,8 +900,7 @@ fn nest() -> anyhow::Result<()> {
     let (dm, bm) = (median(&mut ds), median(&mut bs));
     let (bind_m, exec_m) = (median(&mut binds), median(&mut execs));
     let (glob_m, list_m, cold_m) = (median(&mut globs), median(&mut lists), median(&mut colds));
-    let (plan_m, scan_m, merge_m) =
-        (median(&mut plans), median(&mut scans), median(&mut merges));
+    let (plan_m, scan_m, merge_m) = (median(&mut plans), median(&mut scans), median(&mut merges));
     // **The scale check (roadmap 1.1b).** Halve the input and see whether the time follows. An
     // engine whose time barely moves is not being measured on the query; it is being measured on
     // something fixed, and that is exactly how the real-nest ratios came to be a statement about a
@@ -842,7 +931,11 @@ fn nest() -> anyhow::Result<()> {
     // holds, and it is the one the scale check measured.
     let safe = |frac_d: f64, frac_b: f64, num: f64| -> String {
         if frac_d > 0.5 || frac_b > 0.5 {
-            format!("UNSAFE_fixed_duck={:.0}pct_burr={:.0}pct", frac_d * 100.0, frac_b * 100.0)
+            format!(
+                "UNSAFE_fixed_duck={:.0}pct_burr={:.0}pct",
+                frac_d * 100.0,
+                frac_b * 100.0
+            )
         } else {
             format!("{num:.2}")
         }
@@ -877,7 +970,9 @@ fn nest() -> anyhow::Result<()> {
         bm as f64 / list_m.max(1) as f64,
         cold_m as f64 / dm.max(1) as f64
     );
-    println!("duck_all={ds:?}\nburrmill_all={bs:?}\nduck_list_all={lists:?}\nduck_glob_all={globs:?}");
+    println!(
+        "duck_all={ds:?}\nburrmill_all={bs:?}\nduck_list_all={lists:?}\nduck_glob_all={globs:?}"
+    );
     Ok(())
 }
 
@@ -900,7 +995,9 @@ fn generated() -> anyhow::Result<()> {
 
     let (mut agreed, mut both_refused, mut order_dependent) = (0usize, 0usize, 0usize);
     for case in 0..cases {
-        let seed = start.wrapping_add(case as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let seed = start
+            .wrapping_add(case as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
         let mut rng = generate::Rng(seed);
         let rows = generate::gen_rows(&mut rng);
         let splits = 1 + rng.below(6);
@@ -909,11 +1006,18 @@ fn generated() -> anyhow::Result<()> {
 
         let ours = burrmill::Burrmill::open_segments("t", dir.path())?
             .query(sql, burrmill::Limits::default())
-            .map(|a| a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect::<Vec<_>>());
+            .map(|a| {
+                a.rows()
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect::<Vec<_>>()
+            });
 
         let glob = format!("{}/seg-*.parquet", dir.path().display());
         let conn = duckdb::Connection::open_in_memory()?;
-        conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"))?;
+        conn.execute_batch(&format!(
+            "CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"
+        ))?;
         let theirs: Result<Vec<(String, i128)>, String> = (|| {
             let mut stmt = conn.prepare(&duck_sql).map_err(|e| e.to_string())?;
             let mut out = Vec::new();
@@ -946,8 +1050,9 @@ fn generated() -> anyhow::Result<()> {
             // weaker than it reads is the refusal: it fires when an intermediate partial sum leaves
             // the range, not when the answer does. Counted and reported rather than failed, because
             // deciding what it should do instead has a memory cost - roadmap 2.1b.
-            (Err(burrmill::BurrmillError::Overflow(_)), Ok(_))
-            | (Ok(_), Err(_)) => order_dependent += 1,
+            (Err(burrmill::BurrmillError::Overflow(_)), Ok(_)) | (Ok(_), Err(_)) => {
+                order_dependent += 1
+            }
             // Anything other than an overflow, on data DuckDB answered, is a real refusal to
             // explain. The compiler insisted on this arm and was right to: folding it into the
             // order-dependent bucket would have quietly excused a NotAllowed or a Substrate error.
@@ -973,16 +1078,38 @@ fn generated() -> anyhow::Result<()> {
 /// and different on the edges, which is exactly the shape of bug that survives a benchmark.
 fn cast_table() -> anyhow::Result<()> {
     let lits = [
-        " 7", "7 ", "+7", "1e18", "0x10", "", "not a number", "  -5  ", "7.0", "7.9", "007",
-        "1_000", "+-7", "9223372036854775808", "170141183460469231731687303715884105727",
-        "-170141183460469231731687303715884105728", "170141183460469231731687303715884105728",
-        "1,000", " ", "\t7",
+        " 7",
+        "7 ",
+        "+7",
+        "1e18",
+        "0x10",
+        "",
+        "not a number",
+        "  -5  ",
+        "7.0",
+        "7.9",
+        "007",
+        "1_000",
+        "+-7",
+        "9223372036854775808",
+        "170141183460469231731687303715884105727",
+        "-170141183460469231731687303715884105728",
+        "170141183460469231731687303715884105728",
+        "1,000",
+        " ",
+        "\t7",
     ];
     let conn = duckdb::Connection::open_in_memory()?;
-    println!("{:<45} {:<24} duckdb TRY_CAST", "literal", "rust parse::<i128>");
+    println!(
+        "{:<45} {:<24} duckdb TRY_CAST",
+        "literal", "rust parse::<i128>"
+    );
     let mut diffs = 0;
     for l in lits {
-        let ours = l.parse::<i128>().map(|v| v.to_string()).unwrap_or_else(|_| "NULL".into());
+        let ours = l
+            .parse::<i128>()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|_| "NULL".into());
         let mut stmt = conn.prepare("SELECT TRY_CAST(? AS HUGEINT)::VARCHAR")?;
         let theirs: Option<String> = stmt.query_row([l], |r| r.get(0))?;
         let theirs = theirs.unwrap_or_else(|| "NULL".into());
@@ -1046,19 +1173,44 @@ fn slt_against_duckdb() -> anyhow::Result<()> {
     // The same tables the Burrmill runner builds, written as Parquet and exposed as views.
     let max = "170141183460469231731687303715884105727";
     let tables: Vec<(&str, Vec<generate::Row>)> = vec![
-        ("t", vec![("0xaa", "0xbb", "100"), ("0xbb", "0xcc", "30"), ("0xaa", "0xcc", "5")]),
-        ("zeros", vec![("0xaa", "0xbb", "50"), ("0xbb", "0xaa", "50")]),
-        ("nulls", vec![("0xaa", "0xbb", "not a number"), ("0xaa", "0xbb", ""), ("0xaa", "0xbb", " 7")]),
+        (
+            "t",
+            vec![
+                ("0xaa", "0xbb", "100"),
+                ("0xbb", "0xcc", "30"),
+                ("0xaa", "0xcc", "5"),
+            ],
+        ),
+        (
+            "zeros",
+            vec![("0xaa", "0xbb", "50"), ("0xbb", "0xaa", "50")],
+        ),
+        (
+            "nulls",
+            vec![
+                ("0xaa", "0xbb", "not a number"),
+                ("0xaa", "0xbb", ""),
+                ("0xaa", "0xbb", " 7"),
+            ],
+        ),
         ("boundary", vec![("0xaa", "0xbb", max)]),
-        ("overflow", vec![("0xaa", "0xbb", max), ("0xaa", "0xbb", "1")]),
+        (
+            "overflow",
+            vec![("0xaa", "0xbb", max), ("0xaa", "0xbb", "1")],
+        ),
     ]
     .into_iter()
     .map(|(n, rows)| {
-        (n, rows.into_iter().map(|(f, t, v)| generate::Row {
-            from: f.into(),
-            to: t.into(),
-            value: v.into(),
-        }).collect())
+        (
+            n,
+            rows.into_iter()
+                .map(|(f, t, v)| generate::Row {
+                    from: f.into(),
+                    to: t.into(),
+                    value: v.into(),
+                })
+                .collect(),
+        )
     })
     .collect();
 
@@ -1089,12 +1241,21 @@ fn slt_against_duckdb() -> anyhow::Result<()> {
                 sqllogictest::Runner::new(|| std::future::ready(Ok(Duck(c.try_clone().unwrap()))));
             if let Err(e) = runner.run_file(file) {
                 failures += 1;
-                eprintln!("DuckDB disagrees with {} at {splits} segment(s):\n{e}", file.display());
+                eprintln!(
+                    "DuckDB disagrees with {} at {splits} segment(s):\n{e}",
+                    file.display()
+                );
             }
         }
     }
-    println!("SLT\tengine=duckdb\tfiles={}\tlayouts=3\tfailures={failures}", files.len());
-    anyhow::ensure!(failures == 0, "{failures} corpus expectation(s) are not the standard's answers");
+    println!(
+        "SLT\tengine=duckdb\tfiles={}\tlayouts=3\tfailures={failures}",
+        files.len()
+    );
+    anyhow::ensure!(
+        failures == 0,
+        "{failures} corpus expectation(s) are not the standard's answers"
+    );
     Ok(())
 }
 
@@ -1116,10 +1277,20 @@ fn slt_against_duckdb() -> anyhow::Result<()> {
 fn duckdb_gaps() -> anyhow::Result<()> {
     let max = "170141183460469231731687303715884105727";
     let rows = vec![
-        generate::Row { from: "0xaa".into(), to: "0xbb".into(), value: max.into() },
-        generate::Row { from: "0xaa".into(), to: "0xbb".into(), value: "1".into() },
+        generate::Row {
+            from: "0xaa".into(),
+            to: "0xbb".into(),
+            value: max.into(),
+        },
+        generate::Row {
+            from: "0xaa".into(),
+            to: "0xbb".into(),
+            value: "1".into(),
+        },
     ];
-    println!("true sum for 0xbb is MAX+1 = 170141183460469231731687303715884105728, NOT representable");
+    println!(
+        "true sum for 0xbb is MAX+1 = 170141183460469231731687303715884105728, NOT representable"
+    );
     println!("i128::MIN                  = {}\n", i128::MIN);
     for threads in [1, 2, 4] {
         for splits in [1usize, 2, 3] {

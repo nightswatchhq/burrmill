@@ -14,13 +14,14 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, SortField};
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::Result;
 use datafusion_expr::expr::{AggregateFunction, ScalarFunction};
 use datafusion_expr::logical_plan::Aggregate;
 use datafusion_expr::{
-    ColumnarValue, Expr, LogicalPlan, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, LogicalPlan, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_optimizer::analyzer::AnalyzerRule;
 
@@ -41,7 +42,10 @@ impl ScalarUDFImpl for RowKey {
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let columns: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args.args)?;
-        let fields = columns.iter().map(|c| SortField::new(c.data_type().clone())).collect();
+        let fields = columns
+            .iter()
+            .map(|c| SortField::new(c.data_type().clone()))
+            .collect();
         let converter = RowConverter::new(fields)?;
         let rows = converter.convert_columns(&columns)?;
         Ok(ColumnarValue::Array(Arc::new(rows.try_into_binary()?)))
@@ -56,7 +60,9 @@ pub struct DistinctRows {
 impl Default for DistinctRows {
     fn default() -> Self {
         Self {
-            key: Arc::new(ScalarUDF::from(RowKey { sig: Signature::variadic_any(Volatility::Immutable) })),
+            key: Arc::new(ScalarUDF::from(RowKey {
+                sig: Signature::variadic_any(Volatility::Immutable),
+            })),
         }
     }
 }
@@ -115,7 +121,9 @@ impl DistinctRows {
         };
         // `named_struct` alternates names and values; `struct` and `row` are values alone.
         let values: Vec<Expr> = match s.func.name() {
-            "named_struct" if s.args.len() % 2 == 0 => s.args.iter().skip(1).step_by(2).cloned().collect(),
+            "named_struct" if s.args.len() % 2 == 0 => {
+                s.args.iter().skip(1).step_by(2).cloned().collect()
+            }
             "struct" | "row" => s.args.clone(),
             _ => return None,
         };
@@ -123,8 +131,14 @@ impl DistinctRows {
             return None;
         }
         let mut params = f.params.clone();
-        params.args = vec![Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&self.key), values))];
-        let counted = Expr::AggregateFunction(AggregateFunction { func: Arc::clone(&f.func), params });
+        params.args = vec![Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::clone(&self.key),
+            values,
+        ))];
+        let counted = Expr::AggregateFunction(AggregateFunction {
+            func: Arc::clone(&f.func),
+            params,
+        });
         Some(counted.alias(e.schema_name().to_string()))
     }
 }

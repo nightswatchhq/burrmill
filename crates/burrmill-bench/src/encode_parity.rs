@@ -86,14 +86,19 @@ pub(crate) fn nuthatch_rows(conn: &duckdb::Connection, sql: &str) -> anyhow::Res
                 }
             })
             .collect();
-        format!("SELECT {} FROM ({sql}) AS \"__nuthatch_decimal_source\"", proj.join(", "))
+        format!(
+            "SELECT {} FROM ({sql}) AS \"__nuthatch_decimal_source\"",
+            proj.join(", ")
+        )
     } else {
         sql.to_owned()
     };
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query([])?;
-    let names: Vec<String> =
-        rows.as_ref().map(|s| s.column_names().iter().map(|c| c.to_string()).collect()).unwrap_or_default();
+    let names: Vec<String> = rows
+        .as_ref()
+        .map(|s| s.column_names().iter().map(|c| c.to_string()).collect())
+        .unwrap_or_default();
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
         let mut obj = Map::new();
@@ -143,7 +148,11 @@ pub fn run() -> anyhow::Result<()> {
         } else {
             failed += 1;
             let (w, g): (Vec<char>, Vec<char>) = (want.chars().collect(), got.chars().collect());
-            let at = w.iter().zip(&g).position(|(a, b)| a != b).unwrap_or(w.len().min(g.len()));
+            let at = w
+                .iter()
+                .zip(&g)
+                .position(|(a, b)| a != b)
+                .unwrap_or(w.len().min(g.len()));
             println!("MISMATCH  {}", clip(sql, 0, 70));
             println!("  nuthatch: …{}…", clip(&want, at.saturating_sub(60), 140));
             println!("  burrmill: …{}…", clip(&got, at.saturating_sub(60), 140));
@@ -158,7 +167,10 @@ pub fn run() -> anyhow::Result<()> {
             }
         }
     }
-    println!("ENCODE\tqueries={}\tfailed={failed}", CORPUS.len() + NESTED.len());
+    println!(
+        "ENCODE\tqueries={}\tfailed={failed}",
+        CORPUS.len() + NESTED.len()
+    );
     anyhow::ensure!(failed == 0, "{failed} encoder mismatches");
     Ok(())
 }

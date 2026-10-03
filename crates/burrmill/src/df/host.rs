@@ -80,9 +80,12 @@ impl Engine {
             if self.bound_segments.contains_key(&(path.clone(), *len)) {
                 continue;
             }
-            let bound = std::fs::File::open(path).map_err(|e| e.to_string()).and_then(|f| {
-                ArrowReaderMetadata::load(&f, ArrowReaderOptions::new()).map_err(|e| e.to_string())
-            });
+            let bound = std::fs::File::open(path)
+                .map_err(|e| e.to_string())
+                .and_then(|f| {
+                    ArrowReaderMetadata::load(&f, ArrowReaderOptions::new())
+                        .map_err(|e| e.to_string())
+                });
             match bound {
                 Ok(meta) => {
                     let schema = Arc::new(view_schema(meta.schema()));

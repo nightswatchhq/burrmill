@@ -23,6 +23,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use super::schema_equivalence::schema_satisfied_by;
 use datafusion_catalog::default_table_source::{DefaultTableSource, source_as_provider};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -50,10 +51,9 @@ use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::unnest::UnnestExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{
-    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr, WindowExpr,
-    displayable, windows,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr, WindowExpr, displayable,
+    windows,
 };
-use super::schema_equivalence::schema_satisfied_by;
 
 use arrow::array::{RecordBatch, builder::StringBuilder};
 use arrow::compute::SortOptions;
@@ -64,22 +64,17 @@ use datafusion_common::Column;
 use datafusion_common::HashMap as DFHashMap;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
     DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
     not_impl_err, plan_err,
 };
-use datafusion_common::{
-    TableReference, assert_eq_or_internal_err, assert_or_internal_err,
-};
+use datafusion_common::{TableReference, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
-    Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams,
-    physical_name,
+    Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams, physical_name,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::Subquery;
@@ -89,17 +84,15 @@ use datafusion_expr::physical_planning_context::{
 };
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
-    Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
-    FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
-    WindowFrame, WindowFrameBound, WriteOp,
+    Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
+    Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
+    WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
 };
 use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_expr::{
-    LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
-};
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, create_physical_sort_exprs};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
@@ -398,8 +391,7 @@ impl DefaultPhysicalPlanner {
             // Because of how we extend the visit stack here, we visit the children
             // in reverse order of how they appear, so later we need to reverse
             // the order of children when building the nodes.
-            dfs_visit_stack
-                .extend(node.inputs().iter().map(|&n| (Some(current_index), n)));
+            dfs_visit_stack.extend(node.inputs().iter().map(|&n| (Some(current_index), n)));
             let state = match node.inputs().len() {
                 0 => {
                     flat_tree_leaf_indices.push(current_index);
@@ -465,9 +457,7 @@ impl DefaultPhysicalPlanner {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // We always start with a leaf, so can ignore status and pass empty children
         let mut node = flat_tree.get(leaf_starter_index).ok_or_else(|| {
-            internal_datafusion_err!(
-                "Invalid index whilst creating initial physical plan"
-            )
+            internal_datafusion_err!("Invalid index whilst creating initial physical plan")
         })?;
         let mut plan = self
             .map_logical_node_to_physical(
@@ -481,9 +471,7 @@ impl DefaultPhysicalPlanner {
         // parent_index is None only for root
         while let Some(parent_index) = node.parent_index {
             node = flat_tree.get(parent_index).ok_or_else(|| {
-                internal_datafusion_err!(
-                    "Invalid index whilst creating initial physical plan"
-                )
+                internal_datafusion_err!("Invalid index whilst creating initial physical plan")
             })?;
             match &node.state {
                 NodeState::ZeroOrOneChild => {
@@ -571,8 +559,7 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let filters_vec = filters.into_iter().collect::<Vec<_>>();
-                    let stats_requests =
-                        statistics_requests.iter().cloned().collect::<Vec<_>>();
+                    let stats_requests = statistics_requests.iter().cloned().collect::<Vec<_>>();
                     let opts = ScanArgs::default()
                         .with_projection(projection.as_deref())
                         .with_filters(Some(&filters_vec))
@@ -615,18 +602,12 @@ impl DefaultPhysicalPlanner {
                     .map(|row| {
                         row.iter()
                             .map(|expr| {
-                                create_physical_expr(
-                                    expr,
-                                    schema,
-                                    execution_props,
-                                    planning_ctx,
-                                )
+                                create_physical_expr(expr, schema, execution_props, planning_ctx)
                             })
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                MemorySourceConfig::try_new_as_values(Arc::clone(schema.inner()), exprs)?
-                    as _
+                MemorySourceConfig::try_new_as_values(Arc::clone(schema.inner()), exprs)? as _
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
@@ -660,9 +641,7 @@ impl DefaultPhysicalPlanner {
                         .insert_into(session_state, input_exec, *insert_op)
                         .await?
                 } else {
-                    return exec_err!(
-                        "Table source can't be downcasted to DefaultTableSource"
-                    );
+                    return exec_err!("Table source can't be downcasted to DefaultTableSource");
                 }
             }
             LogicalPlan::Dml(DmlStatement {
@@ -682,9 +661,7 @@ impl DefaultPhysicalPlanner {
                             e.context(format!("DELETE operation on table '{table_name}'"))
                         })?
                 } else {
-                    return exec_err!(
-                        "Table source can't be downcasted to DefaultTableSource"
-                    );
+                    return exec_err!("Table source can't be downcasted to DefaultTableSource");
                 }
             }
             LogicalPlan::Dml(DmlStatement {
@@ -708,9 +685,7 @@ impl DefaultPhysicalPlanner {
                             e.context(format!("UPDATE operation on table '{table_name}'"))
                         })?
                 } else {
-                    return exec_err!(
-                        "Table source can't be downcasted to DefaultTableSource"
-                    );
+                    return exec_err!("Table source can't be downcasted to DefaultTableSource");
                 }
             }
             LogicalPlan::Dml(DmlStatement {
@@ -725,14 +700,10 @@ impl DefaultPhysicalPlanner {
                         .truncate(session_state)
                         .await
                         .map_err(|e| {
-                            e.context(format!(
-                                "TRUNCATE operation on table '{table_name}'"
-                            ))
+                            e.context(format!("TRUNCATE operation on table '{table_name}'"))
                         })?
                 } else {
-                    return exec_err!(
-                        "Table source can't be downcasted to DefaultTableSource"
-                    );
+                    return exec_err!("Table source can't be downcasted to DefaultTableSource");
                 }
             }
             LogicalPlan::Dml(DmlStatement {
@@ -746,10 +717,8 @@ impl DefaultPhysicalPlanner {
                     e.context(format!("MERGE INTO operation on table '{table_name}'"))
                 })?;
                 let input_exec = children.one()?;
-                let target_schema = DFSchema::try_from_qualified_schema(
-                    table_name.clone(),
-                    &target.schema(),
-                )?;
+                let target_schema =
+                    DFSchema::try_from_qualified_schema(table_name.clone(), &target.schema())?;
                 let merge_schema = Arc::new(target_schema.join(input.schema())?);
                 provider
                     .merge_into(
@@ -810,21 +779,13 @@ impl DefaultPhysicalPlanner {
                 let logical_schema = node.schema();
                 let window_expr = window_expr
                     .iter()
-                    .map(|e| {
-                        create_window_expr(
-                            e,
-                            logical_schema,
-                            execution_props,
-                            planning_ctx,
-                        )
-                    })
+                    .map(|e| create_window_expr(e, logical_schema, execution_props, planning_ctx))
                     .collect::<Result<Vec<_>>>()?;
 
                 let can_repartition = session_state.config().target_partitions() > 1
                     && session_state.config().repartition_window_functions();
 
-                let uses_bounded_memory =
-                    window_expr.iter().all(|e| e.uses_bounded_memory());
+                let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
                 // If all window expressions can run with bounded memory,
                 // choose the bounded window variant:
                 if uses_bounded_memory {
@@ -897,10 +858,22 @@ impl DefaultPhysicalPlanner {
                             ));
                         }
                         if physical_field.data_type() != logical_field.data_type() {
-                            differences.push(format!("field data type at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.data_type(), logical_field.data_type()));
+                            differences.push(format!(
+                                "field data type at index {} [{}]: (physical) {} vs (logical) {}",
+                                i,
+                                physical_field.name(),
+                                physical_field.data_type(),
+                                logical_field.data_type()
+                            ));
                         }
                         if physical_field.is_nullable() && !logical_field.is_nullable() {
-                            differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
+                            differences.push(format!(
+                                "field nullability at index {} [{}]: (physical) {} vs (logical) {}",
+                                i,
+                                physical_field.name(),
+                                physical_field.is_nullable(),
+                                logical_field.is_nullable()
+                            ));
                         }
                         if physical_field.metadata() != logical_field.metadata() {
                             differences.push(format!(
@@ -977,9 +950,7 @@ impl DefaultPhysicalPlanner {
                             // Do nothing
                         }
                         _ => {
-                            return internal_err!(
-                                "Unexpected result from try_plan_async_exprs"
-                            );
+                            return internal_err!("Unexpected result from try_plan_async_exprs");
                         }
                     }
                 }
@@ -1043,12 +1014,8 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.schema();
-                let runtime_expr = create_physical_expr(
-                    predicate,
-                    input_dfschema,
-                    execution_props,
-                    planning_ctx,
-                )?;
+                let runtime_expr =
+                    create_physical_expr(predicate, input_dfschema, execution_props, planning_ctx)?;
 
                 let input_schema = input.schema();
                 let filter = match self.try_plan_async_exprs(
@@ -1057,37 +1024,24 @@ impl DefaultPhysicalPlanner {
                     input_schema.as_arrow(),
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
-                        FilterExecBuilder::new(
-                            Arc::clone(&runtime_expr[0]),
-                            physical_input,
-                        )
-                        .with_batch_size(session_state.config().batch_size())
-                        .build()?
+                        FilterExecBuilder::new(Arc::clone(&runtime_expr[0]), physical_input)
+                            .with_batch_size(session_state.config().batch_size())
+                            .build()?
                     }
-                    PlanAsyncExpr::Async(
-                        async_map,
-                        PlannedExprResult::Expr(runtime_expr),
-                    ) => {
-                        let async_exec = AsyncFuncExec::try_new(
-                            async_map.async_exprs,
-                            physical_input,
-                        )?;
-                        FilterExecBuilder::new(
-                            Arc::clone(&runtime_expr[0]),
-                            Arc::new(async_exec),
-                        )
-                        // project the output columns excluding the async functions
-                        // The async functions are always appended to the end of the schema.
-                        .apply_projection(Some(
-                            (0..input.schema().fields().len()).collect::<Vec<_>>(),
-                        ))?
-                        .with_batch_size(session_state.config().batch_size())
-                        .build()?
+                    PlanAsyncExpr::Async(async_map, PlannedExprResult::Expr(runtime_expr)) => {
+                        let async_exec =
+                            AsyncFuncExec::try_new(async_map.async_exprs, physical_input)?;
+                        FilterExecBuilder::new(Arc::clone(&runtime_expr[0]), Arc::new(async_exec))
+                            // project the output columns excluding the async functions
+                            // The async functions are always appended to the end of the schema.
+                            .apply_projection(Some(
+                                (0..input.schema().fields().len()).collect::<Vec<_>>(),
+                            ))?
+                            .with_batch_size(session_state.config().batch_size())
+                            .build()?
                     }
                     _ => {
-                        return internal_err!(
-                            "Unexpected result from try_plan_async_exprs"
-                        );
+                        return internal_err!("Unexpected result from try_plan_async_exprs");
                     }
                 };
 
@@ -1129,9 +1083,7 @@ impl DefaultPhysicalPlanner {
                     planning_ctx,
                 )?;
                 let Some(ordering) = LexOrdering::new(sort_exprs) else {
-                    return internal_err!(
-                        "SortExec requires at least one sort expression"
-                    );
+                    return internal_err!("SortExec requires at least one sort expression");
                 };
                 let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
@@ -1140,24 +1092,16 @@ impl DefaultPhysicalPlanner {
             // for supported patterns. This error is hit for correlated
             // patterns that the optimizer cannot (yet) decorrelate.
             LogicalPlan::Subquery(_) => {
-                return not_impl_err!(
-                    "Physical plan does not support undecorrelated Subquery"
-                );
+                return not_impl_err!("Physical plan does not support undecorrelated Subquery");
             }
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
                 let SkipType::Literal(skip) = limit.get_skip_type()? else {
-                    return not_impl_err!(
-                        "Unsupported OFFSET expression: {:?}",
-                        limit.skip
-                    );
+                    return not_impl_err!("Unsupported OFFSET expression: {:?}", limit.skip);
                 };
                 let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
-                    return not_impl_err!(
-                        "Unsupported LIMIT expression: {:?}",
-                        limit.fetch
-                    );
+                    return not_impl_err!("Unsupported LIMIT expression: {:?}", limit.fetch);
                 };
 
                 // GlobalLimitExec requires a single partition for input
@@ -1215,14 +1159,13 @@ impl DefaultPhysicalPlanner {
                 let [physical_left, physical_right] = children.two()?;
 
                 // If join has expression equijoin keys, add physical projection.
-                let has_expr_join_key = keys.iter().any(|(l, r)| {
-                    !(matches!(l, Expr::Column(_)) && matches!(r, Expr::Column(_)))
-                });
+                let has_expr_join_key = keys
+                    .iter()
+                    .any(|(l, r)| !(matches!(l, Expr::Column(_)) && matches!(r, Expr::Column(_))));
                 let (new_logical, physical_left, physical_right) = if has_expr_join_key {
                     // TODO: Can we extract this transformation to somewhere before physical plan
                     //       creation?
-                    let (left_keys, right_keys): (Vec<_>, Vec<_>) =
-                        keys.iter().cloned().unzip();
+                    let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.iter().cloned().unzip();
 
                     let (left, left_col_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(
@@ -1251,32 +1194,28 @@ impl DefaultPhysicalPlanner {
                     // LogicalPlan nodes.
                     let physical_left = match (left_projected, left.as_ref()) {
                         // If left_projected is true we are guaranteed that left is a Projection
-                        (
-                            true,
-                            LogicalPlan::Projection(Projection { input, expr, .. }),
-                        ) => self.create_project_physical_exec_with_props(
-                            execution_props,
-                            planning_ctx,
-                            physical_left,
-                            input,
-                            expr,
-                            left.schema(),
-                        )?,
+                        (true, LogicalPlan::Projection(Projection { input, expr, .. })) => self
+                            .create_project_physical_exec_with_props(
+                                execution_props,
+                                planning_ctx,
+                                physical_left,
+                                input,
+                                expr,
+                                left.schema(),
+                            )?,
                         _ => physical_left,
                     };
                     let physical_right = match (right_projected, right.as_ref()) {
                         // If right_projected is true we are guaranteed that right is a Projection
-                        (
-                            true,
-                            LogicalPlan::Projection(Projection { input, expr, .. }),
-                        ) => self.create_project_physical_exec_with_props(
-                            execution_props,
-                            planning_ctx,
-                            physical_right,
-                            input,
-                            expr,
-                            right.schema(),
-                        )?,
+                        (true, LogicalPlan::Projection(Projection { input, expr, .. })) => self
+                            .create_project_physical_exec_with_props(
+                                execution_props,
+                                planning_ctx,
+                                physical_right,
+                                input,
+                                expr,
+                                right.schema(),
+                            )?,
                         _ => physical_right,
                     };
 
@@ -1340,12 +1279,8 @@ impl DefaultPhysicalPlanner {
                 let join_on = keys
                     .iter()
                     .map(|(l, r)| {
-                        let l = create_physical_expr(
-                            l,
-                            left_df_schema,
-                            execution_props,
-                            planning_ctx,
-                        )?;
+                        let l =
+                            create_physical_expr(l, left_df_schema, execution_props, planning_ctx)?;
                         let r = create_physical_expr(
                             r,
                             right_df_schema,
@@ -1427,9 +1362,7 @@ impl DefaultPhysicalPlanner {
                                 .unzip();
                         let filter_df_fields = filter_df_fields
                             .into_iter()
-                            .map(|(qualifier, field)| {
-                                (qualifier.cloned(), Arc::clone(field))
-                            })
+                            .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
                             .collect();
 
                         let metadata: HashMap<_, _> = left_df_schema
@@ -1441,12 +1374,9 @@ impl DefaultPhysicalPlanner {
 
                         // Construct intermediate schemas used for filtering data and
                         // convert logical expression to physical according to filter schema
-                        let filter_df_schema = DFSchema::new_with_metadata(
-                            filter_df_fields,
-                            metadata.clone(),
-                        )?;
-                        let filter_schema =
-                            Schema::new_with_metadata(filter_fields, metadata);
+                        let filter_df_schema =
+                            DFSchema::new_with_metadata(filter_df_fields, metadata.clone())?;
+                        let filter_schema = Schema::new_with_metadata(filter_fields, metadata);
 
                         let filter_expr = create_physical_expr(
                             expr,
@@ -1468,8 +1398,7 @@ impl DefaultPhysicalPlanner {
                     _ => None,
                 };
 
-                let prefer_hash_join =
-                    session_state.config_options().optimizer.prefer_hash_join;
+                let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
 
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
@@ -1561,8 +1490,7 @@ impl DefaultPhysicalPlanner {
                         if left_side == Side::Right && right_side == Side::Left {
                             std::mem::swap(&mut lhs_logical, &mut rhs_logical);
                             op = reverse_ineq(op);
-                        } else if !(left_side == Side::Left && right_side == Side::Right)
-                        {
+                        } else if !(left_side == Side::Left && right_side == Side::Right) {
                             return plan_err!(
                                 "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
                                 op
@@ -1739,9 +1667,7 @@ impl DefaultPhysicalPlanner {
                 return not_impl_err!("Unsupported logical plan: {name}");
             }
             LogicalPlan::Explain(_) => {
-                return internal_err!(
-                    "Unsupported logical plan: Explain must be root of the plan"
-                );
+                return internal_err!("Unsupported logical plan: Explain must be root of the plan");
             }
             LogicalPlan::Distinct(_) => {
                 return internal_err!(
@@ -1749,9 +1675,7 @@ impl DefaultPhysicalPlanner {
                 );
             }
             LogicalPlan::Analyze(_) => {
-                return internal_err!(
-                    "Unsupported logical plan: Analyze must be root of the plan"
-                );
+                return internal_err!("Unsupported logical plan: Analyze must be root of the plan");
             }
         };
         Ok(exec_node)
@@ -1783,22 +1707,15 @@ impl DefaultPhysicalPlanner {
                     execution_props,
                     planning_ctx,
                 ),
-                Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
-                    create_rollup_physical_expr(
-                        exprs,
-                        input_dfschema,
-                        input_schema,
-                        execution_props,
-                        planning_ctx,
-                    )
-                }
+                Expr::GroupingSet(GroupingSet::Rollup(exprs)) => create_rollup_physical_expr(
+                    exprs,
+                    input_dfschema,
+                    input_schema,
+                    execution_props,
+                    planning_ctx,
+                ),
                 expr => Ok(PhysicalGroupBy::new_single(vec![tuple_err((
-                    create_physical_expr(
-                        expr,
-                        input_dfschema,
-                        execution_props,
-                        planning_ctx,
-                    ),
+                    create_physical_expr(expr, input_dfschema, execution_props, planning_ctx),
                     physical_name(expr),
                 ))?])),
             }
@@ -1812,12 +1729,7 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|e| {
                         tuple_err((
-                            create_physical_expr(
-                                e,
-                                input_dfschema,
-                                execution_props,
-                                planning_ctx,
-                            ),
+                            create_physical_expr(e, input_dfschema, execution_props, planning_ctx),
                             physical_name(e),
                         ))
                     })
@@ -1901,10 +1813,8 @@ fn create_cube_physical_expr(
     let num_of_exprs = exprs.len();
     let num_groups = num_of_exprs * num_of_exprs;
 
-    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
-        Vec::with_capacity(num_of_exprs);
-    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
-        Vec::with_capacity(num_of_exprs);
+    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::with_capacity(num_of_exprs);
+    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::with_capacity(num_of_exprs);
 
     for expr in exprs {
         null_exprs.push(get_null_physical_expr_pair(
@@ -1949,10 +1859,8 @@ fn create_rollup_physical_expr(
 ) -> Result<PhysicalGroupBy> {
     let num_of_exprs = exprs.len();
 
-    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
-        Vec::with_capacity(num_of_exprs);
-    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> =
-        Vec::with_capacity(num_of_exprs);
+    let mut null_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::with_capacity(num_of_exprs);
+    let mut all_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::with_capacity(num_of_exprs);
 
     let mut groups: Vec<Vec<bool>> = Vec::with_capacity(num_of_exprs + 1);
 
@@ -1998,8 +1906,7 @@ fn get_null_physical_expr_pair(
     execution_props: &ExecutionProps,
     planning_ctx: &PhysicalPlanningContext,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let physical_expr =
-        create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
+    let physical_expr = create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
     let physical_name = physical_name(&expr.clone())?;
 
     let data_type = physical_expr.data_type(input_schema)?;
@@ -2071,8 +1978,7 @@ fn get_physical_expr_pair(
     execution_props: &ExecutionProps,
     planning_ctx: &PhysicalPlanningContext,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let physical_expr =
-        create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
+    let physical_expr = create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
 }
@@ -2099,10 +2005,7 @@ fn get_physical_expr_pair(
 /// Returns an empty vector if no applicable filters are found.
 ///
 #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
-fn extract_dml_filters(
-    input: &Arc<LogicalPlan>,
-    target: &TableReference,
-) -> Result<Vec<Expr>> {
+fn extract_dml_filters(input: &Arc<LogicalPlan>, target: &TableReference) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
     let mut allowed_refs = vec![target.clone()];
 
@@ -2204,10 +2107,7 @@ fn extract_dml_filters(
 ///
 /// Columns may be qualified with the target table name or any of its aliases.
 /// Unqualified columns are also accepted as they implicitly belong to the target table.
-fn predicate_is_on_target_multi(
-    expr: &Expr,
-    allowed_refs: &[TableReference],
-) -> Result<bool> {
+fn predicate_is_on_target_multi(expr: &Expr, allowed_refs: &[TableReference]) -> Result<bool> {
     let mut columns = HashSet::new();
     expr_to_columns(expr, &mut columns)?;
 
@@ -2280,8 +2180,7 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
                     if let Expr::Alias(alias) = expr {
                         let column_name = alias.name.clone();
                         if !is_identity_assignment(&alias.expr, &column_name) {
-                            let stripped_expr =
-                                strip_column_qualifiers((*alias.expr).clone())?;
+                            let stripped_expr = strip_column_qualifiers((*alias.expr).clone())?;
                             assignments.push((column_name, stripped_expr));
                         }
                     }
@@ -2351,18 +2250,10 @@ pub fn create_window_expr_with_name(
                         filter,
                     },
             } = window_fun.as_ref();
-            let physical_args = create_physical_exprs(
-                args,
-                logical_schema,
-                execution_props,
-                planning_ctx,
-            )?;
-            let partition_by = create_physical_exprs(
-                partition_by,
-                logical_schema,
-                execution_props,
-                planning_ctx,
-            )?;
+            let physical_args =
+                create_physical_exprs(args, logical_schema, execution_props, planning_ctx)?;
+            let partition_by =
+                create_physical_exprs(partition_by, logical_schema, execution_props, planning_ctx)?;
             let order_by = create_physical_sort_exprs(
                 order_by,
                 logical_schema,
@@ -2379,13 +2270,11 @@ pub fn create_window_expr_with_name(
             }
 
             let window_frame = Arc::new(window_frame.clone());
-            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
-                == NullTreatment::IgnoreNulls;
+            let ignore_nulls =
+                null_treatment.unwrap_or(NullTreatment::RespectNulls) == NullTreatment::IgnoreNulls;
             let physical_filter = filter
                 .as_ref()
-                .map(|f| {
-                    create_physical_expr(f, logical_schema, execution_props, planning_ctx)
-                })
+                .map(|f| create_physical_expr(f, logical_schema, execution_props, planning_ctx))
                 .transpose()?;
 
             windows::create_window_expr(
@@ -2501,9 +2390,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     builder.build().map(lowered_aggregate_to_tuple)
 }
 
-fn lowered_aggregate_to_tuple(
-    lowered: LoweredAggregate,
-) -> AggregateExprWithOptionalArgs {
+fn lowered_aggregate_to_tuple(lowered: LoweredAggregate) -> AggregateExprWithOptionalArgs {
     (lowered.aggregate, lowered.filter, lowered.order_bys)
 }
 
@@ -2640,10 +2527,8 @@ impl DefaultPhysicalPlanner {
                         }
                     }
 
-                    let optimized_plan = self.optimize_physical_plan(
-                        input,
-                        session_state,
-                        |plan, optimizer| {
+                    let optimized_plan =
+                        self.optimize_physical_plan(input, session_state, |plan, optimizer| {
                             let optimizer_name = optimizer.name().to_string();
                             let plan_type = OptimizedPhysicalPlan { optimizer_name };
                             stringified_plans.push(StringifiedPlan::new(
@@ -2654,8 +2539,7 @@ impl DefaultPhysicalPlanner {
                                     .indent(e.verbose)
                                     .to_string(),
                             ));
-                        },
-                    );
+                        });
                     match optimized_plan {
                         Ok(input) => {
                             // This plan will includes statistics if show_statistics is on
@@ -2695,8 +2579,7 @@ impl DefaultPhysicalPlanner {
                         }
                         Err(DataFusionError::Context(optimizer_name, e)) => {
                             let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                            stringified_plans
-                                .push(StringifiedPlan::new(plan_type, e.to_string()))
+                            stringified_plans.push(StringifiedPlan::new(plan_type, e.to_string()))
                         }
                         Err(e) => return Err(e),
                     }
@@ -2784,13 +2667,10 @@ impl DefaultPhysicalPlanner {
             let before_schema = new_plan.schema();
             new_plan = optimizer
                 .optimize_with_context(new_plan, &optimizer_context)
-                .map_err(|e| {
-                    DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
-                })?;
+                .map_err(|e| DataFusionError::Context(optimizer.name().to_string(), Box::new(e)))?;
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
-            OptimizationInvariantChecker::new(optimizer)
-                .check(&new_plan, &before_schema)?;
+            OptimizationInvariantChecker::new(optimizer).check(&new_plan, &before_schema)?;
 
             debug!(
                 "Optimized physical plan by {}:\n{}\n",
@@ -2927,12 +2807,8 @@ impl DefaultPhysicalPlanner {
                     physical_name(e)
                 };
 
-                let physical_expr = create_physical_expr(
-                    e,
-                    input_logical_schema,
-                    execution_props,
-                    planning_ctx,
-                );
+                let physical_expr =
+                    create_physical_expr(e, input_logical_schema, execution_props, planning_ctx);
 
                 tuple_err((physical_expr, physical_name))
             })
@@ -2956,12 +2832,8 @@ impl DefaultPhysicalPlanner {
                     output_schema.as_arrow(),
                 )?))
             }
-            PlanAsyncExpr::Async(
-                async_map,
-                PlannedExprResult::ExprWithName(physical_exprs),
-            ) => {
-                let async_exec =
-                    AsyncFuncExec::try_new(async_map.async_exprs, input_exec)?;
+            PlanAsyncExpr::Async(async_map, PlannedExprResult::ExprWithName(physical_exprs)) => {
+                let async_exec = AsyncFuncExec::try_new(async_map.async_exprs, input_exec)?;
                 let proj_exprs: Vec<ProjectionExpr> = physical_exprs
                     .into_iter()
                     .map(|(expr, alias)| ProjectionExpr { expr, alias })
@@ -3006,8 +2878,8 @@ impl DefaultPhysicalPlanner {
                 exprs
                     .iter()
                     .map(|(expr, column_name)| {
-                        let new_expr = Arc::clone(expr)
-                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
+                        let new_expr =
+                            Arc::clone(expr).transform_up(|e| Ok(async_map.map_expr(e)))?;
                         Ok((new_expr.data, column_name.to_string()))
                     })
                     .collect::<Result<_>>()?,
@@ -3016,8 +2888,8 @@ impl DefaultPhysicalPlanner {
                 exprs
                     .iter()
                     .map(|expr| {
-                        let new_expr = Arc::clone(expr)
-                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
+                        let new_expr =
+                            Arc::clone(expr).transform_up(|e| Ok(async_map.map_expr(e)))?;
                         Ok(new_expr.data)
                     })
                     .collect::<Result<_>>()?,
@@ -3071,13 +2943,14 @@ impl<'a> OptimizationInvariantChecker<'a> {
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
         if self.rule.schema_check() {
-            is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
-                .map_err(|e| {
+            is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref()).map_err(
+                |e| {
                     e.context(format!(
                         "PhysicalOptimizer rule '{}' failed. Schema mismatch.",
                         self.rule.name(),
                     ))
-                })?
+                },
+            )?
         }
 
         // check invariants per each ExecutionPlan node
@@ -3124,8 +2997,7 @@ fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> Result<()> {
     if new_field.name() == old_field.name()
         && new_field.data_type() == old_field.data_type()
         && new_field.metadata() == old_field.metadata()
-        && (new_field.is_nullable() == old_field.is_nullable()
-            || !new_field.is_nullable())
+        && (new_field.is_nullable() == old_field.is_nullable() || !new_field.is_nullable())
     {
         Ok(())
     } else {
@@ -3143,9 +3015,13 @@ impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         // Checks for the more permissive `InvariantLevel::Always`.
         // Plans are not guaranteed to be executable after each physical optimizer run.
-        node.check_invariants(InvariantLevel::Always).map_err(|e|
-            e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
-        )?;
+        node.check_invariants(InvariantLevel::Always).map_err(|e| {
+            e.context(format!(
+                "Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'",
+                node.name(),
+                self.rule.name()
+            ))
+        })?;
         Ok(TreeNodeRecursion::Continue)
     }
 }
@@ -3176,4 +3052,3 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
         Ok(TreeNodeRecursion::Continue)
     }
 }
-

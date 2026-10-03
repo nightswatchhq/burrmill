@@ -18,9 +18,15 @@ fn write_table(dir: &std::path::Path, table: &str, rows: &[(&str, &str, &str)]) 
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from(rows.iter().map(|r| r.0).collect::<Vec<_>>())),
-            Arc::new(StringArray::from(rows.iter().map(|r| r.1).collect::<Vec<_>>())),
-            Arc::new(StringArray::from(rows.iter().map(|r| r.2).collect::<Vec<_>>())),
+            Arc::new(StringArray::from(
+                rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                rows.iter().map(|r| r.1).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+            )),
             Arc::new(UInt64Array::from((0..n).collect::<Vec<_>>())),
         ],
     )
@@ -138,7 +144,10 @@ fn unknown_table_is_refused() {
     let (_tmp, engine) = nest_with_transfer();
     let err = engine.sql(r#"SELECT 1 FROM nosuch"#).unwrap_err();
     match err {
-        BurrmillError::NoSegments(m) | BurrmillError::Plan(m) | BurrmillError::Substrate(m) | BurrmillError::NotAllowed(m) => {
+        BurrmillError::NoSegments(m)
+        | BurrmillError::Plan(m)
+        | BurrmillError::Substrate(m)
+        | BurrmillError::NotAllowed(m) => {
             assert!(m.contains("nosuch") || m.contains("no table"), "{m}");
         }
         other => panic!("{other:?}"),
@@ -148,9 +157,7 @@ fn unknown_table_is_refused() {
 #[test]
 fn copy_is_refused() {
     let (_tmp, engine) = nest_with_transfer();
-    let err = engine
-        .sql("COPY (SELECT 1) TO '/tmp/out.csv'")
-        .unwrap_err();
+    let err = engine.sql("COPY (SELECT 1) TO '/tmp/out.csv'").unwrap_err();
     match err {
         BurrmillError::NotAllowed(_) => {}
         other => panic!("expected NotAllowed, got {other:?}"),
@@ -176,7 +183,10 @@ fn read_csv_table_function_is_refused() {
         .sql("SELECT * FROM read_csv('/etc/passwd')")
         .unwrap_err();
     match err {
-        BurrmillError::NotAllowed(_) | BurrmillError::Parse(_) | BurrmillError::Plan(_) | BurrmillError::Substrate(_) => {}
+        BurrmillError::NotAllowed(_)
+        | BurrmillError::Parse(_)
+        | BurrmillError::Plan(_)
+        | BurrmillError::Substrate(_) => {}
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
@@ -186,7 +196,11 @@ fn replacement_scan_is_refused() {
     let (_tmp, engine) = nest_with_transfer();
     let err = engine.sql("SELECT * FROM '/etc/passwd'").unwrap_err();
     match err {
-        BurrmillError::NotAllowed(_) | BurrmillError::NoSegments(_) | BurrmillError::Plan(_) | BurrmillError::Substrate(_) | BurrmillError::Parse(_) => {}
+        BurrmillError::NotAllowed(_)
+        | BurrmillError::NoSegments(_)
+        | BurrmillError::Plan(_)
+        | BurrmillError::Substrate(_)
+        | BurrmillError::Parse(_) => {}
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
@@ -196,9 +210,17 @@ fn replacement_scan_is_refused() {
 fn a_vanished_segment_names_its_path_and_the_os_error() {
     let (tmp, engine) = nest_with_transfer();
     let segs = tmp.path().join("segments");
-    let file = std::fs::read_dir(&segs).unwrap().next().unwrap().unwrap().path();
+    let file = std::fs::read_dir(&segs)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     std::fs::remove_file(&file).unwrap();
-    let err = engine.sql("SELECT count(*) FROM token__transfer").unwrap_err().to_string();
+    let err = engine
+        .sql("SELECT count(*) FROM token__transfer")
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("No such file or directory"), "{err}");
     assert!(err.contains(segs.to_str().unwrap()), "{err}");
 }
@@ -236,7 +258,8 @@ fn doubles_round_to_hugeint_half_to_even_and_to_decimal_half_away() {
 fn is_distinct_from_binds_tighter_than_and_or() {
     let (_tmp, engine) = nest_with_transfer();
     // sqlparser alone reads this as `1 IS DISTINCT FROM (2 AND 3 IS DISTINCT FROM (3 OR ...))`.
-    let sql = "SELECT 1 IS DISTINCT FROM 2 AND 3 IS DISTINCT FROM 3 OR 4 IS NOT DISTINCT FROM 4 AS v";
+    let sql =
+        "SELECT 1 IS DISTINCT FROM 2 AND 3 IS DISTINCT FROM 3 OR 4 IS NOT DISTINCT FROM 4 AS v";
     let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
     assert_eq!(serde_json::to_string(&rows).unwrap(), r#"[{"v":true}]"#);
 }
@@ -246,7 +269,10 @@ fn substring_plans_without_the_umbrella_crate() {
     let (_tmp, engine) = nest_with_transfer();
     let sql = "SELECT substr('abcdef', 2, 3) AS a, SUBSTRING('abcdef' FROM 2 FOR 3) AS b";
     let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
-    assert_eq!(serde_json::to_string(&rows).unwrap(), r#"[{"a":"bcd","b":"bcd"}]"#);
+    assert_eq!(
+        serde_json::to_string(&rows).unwrap(),
+        r#"[{"a":"bcd","b":"bcd"}]"#
+    );
 }
 
 #[test]
@@ -275,11 +301,18 @@ fn a_small_table_is_not_fanned_out() {
         .sql(&format!("EXPLAIN {sql}"))
         .unwrap()
         .iter()
-        .map(|b| arrow::util::pretty::pretty_format_batches(std::slice::from_ref(b)).unwrap().to_string())
+        .map(|b| {
+            arrow::util::pretty::pretty_format_batches(std::slice::from_ref(b))
+                .unwrap()
+                .to_string()
+        })
         .collect();
     assert!(!plan.contains("RoundRobinBatch"), "{plan}");
     let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
-    assert_eq!(serde_json::to_string(&rows).unwrap(), r#"[{"from":"0xa","n":2},{"from":"0xb","n":1}]"#);
+    assert_eq!(
+        serde_json::to_string(&rows).unwrap(),
+        r#"[{"from":"0xa","n":2},{"from":"0xb","n":1}]"#
+    );
 }
 
 /// A host function that refuses some input, as `nuthatch_abi_tuple` refuses a malformed payload.
@@ -309,16 +342,25 @@ impl datafusion_expr::ScalarUDFImpl for Strict {
             }
             out.push(format!("ok:{}", a.value(i)));
         }
-        Ok(datafusion_expr::ColumnarValue::Array(Arc::new(StringArray::from(out))))
+        Ok(datafusion_expr::ColumnarValue::Array(Arc::new(
+            StringArray::from(out),
+        )))
     }
 }
 
 #[test]
 fn a_host_function_under_try_is_null_where_it_fails() {
     let (_tmp, mut engine) = nest_with_transfer();
-    let sig = datafusion_expr::Signature::exact(vec![DataType::Utf8], datafusion_expr::Volatility::Immutable);
+    let sig = datafusion_expr::Signature::exact(
+        vec![DataType::Utf8],
+        datafusion_expr::Volatility::Immutable,
+    );
     engine.register_scalar_udf(Arc::new(datafusion_expr::ScalarUDF::from(Strict(sig))));
-    assert!(engine.sql("SELECT host_strict(\"from\") FROM token__transfer").is_err());
+    assert!(
+        engine
+            .sql("SELECT host_strict(\"from\") FROM token__transfer")
+            .is_err()
+    );
     let sql = "SELECT \"from\", TRY(host_strict(\"from\")) AS v FROM token__transfer ORDER BY _seq";
     let rows = burrmill::df::encode::rows(&engine.sql(sql).unwrap()[0]).unwrap();
     assert_eq!(

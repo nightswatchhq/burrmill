@@ -17,11 +17,11 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{ExecutionPlan, Partitioning};
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_session::PhysicalOptimizerRule;
 
 pub const SMALL_BYTES: u64 = 4 << 20;
@@ -33,7 +33,13 @@ pub struct SmallInputs;
 pub(super) fn bytes_read(p: &Arc<dyn ExecutionPlan>) -> Option<u64> {
     if let Some(d) = p.downcast_ref::<DataSourceExec>() {
         if let Some(f) = d.data_source().downcast_ref::<FileScanConfig>() {
-            return Some(f.file_groups.iter().flat_map(|g| g.iter()).map(|f| f.object_meta.size).sum());
+            return Some(
+                f.file_groups
+                    .iter()
+                    .flat_map(|g| g.iter())
+                    .map(|f| f.object_meta.size)
+                    .sum(),
+            );
         }
         return d.data_source().is::<MemorySourceConfig>().then_some(0);
     }
@@ -48,7 +54,11 @@ pub(super) fn bytes_read(p: &Arc<dyn ExecutionPlan>) -> Option<u64> {
 }
 
 impl PhysicalOptimizerRule for SmallInputs {
-    fn optimize(&self, plan: Arc<dyn ExecutionPlan>, config: &ConfigOptions) -> Result<Arc<dyn ExecutionPlan>> {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let small = Arc::clone(&plan).transform_up(|p| {
             let Some(r) = p.downcast_ref::<RepartitionExec>() else {
                 return Ok(Transformed::no(p));

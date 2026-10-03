@@ -4,5 +4,5 @@ pub mod agg;
 pub mod checked;
 pub mod signed_fold;
 
-pub use checked::{checked_add, checked_neg, CheckedSumI128};
-pub use signed_fold::{to_record_batch, CancelToken, FoldMetrics, Seam, SignedFoldExec};
+pub use checked::{CheckedSumI128, checked_add, checked_neg};
+pub use signed_fold::{CancelToken, FoldMetrics, Seam, SignedFoldExec, to_record_batch};

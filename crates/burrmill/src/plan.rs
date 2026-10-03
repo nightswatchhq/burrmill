@@ -144,8 +144,10 @@ impl Plan {
                                 .map(|p| match p {
                                     KeyPart::Literal(l) => format!("{l:?}"),
                                     KeyPart::Column { name, key_fn: None } => name.clone(),
-                                    KeyPart::Column { name, key_fn: Some(f) } =>
-                                        format!("{f:?}({name})").to_lowercase(),
+                                    KeyPart::Column {
+                                        name,
+                                        key_fn: Some(f),
+                                    } => format!("{f:?}({name})").to_lowercase(),
                                 })
                                 .collect::<Vec<_>>()
                                 .join("||"))
@@ -190,7 +192,7 @@ pub fn plan(sql: &str) -> Result<Plan> {
             return Err(not_allowed(format!(
                 "only SELECT is admitted; got `{}`",
                 first_word(&other.to_string())
-            )))
+            )));
         }
     };
     match_signed_fold(&query).map(Plan::SignedFold)
@@ -219,11 +221,12 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     // Wildcards are checked before arity, so `SELECT * FROM t` says what is actually wrong with it
     // rather than complaining that one item is not enough. A refusal that misdiagnoses is only
     // marginally better than no refusal: the reader goes and fixes the wrong thing.
-    if select
-        .projection
-        .iter()
-        .any(|p| matches!(p, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..)))
-    {
+    if select.projection.iter().any(|p| {
+        matches!(
+            p,
+            SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..)
+        )
+    }) {
         return Err(not_allowed(
             "SELECT * is not admitted: the result schema is part of the contract",
         ));
@@ -249,7 +252,9 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
                 .is_some_and(|(_, e)| is_sum_call(strip_varchar_cast(e)))
         })
         .ok_or_else(|| {
-            not_allowed("the fold projects at least one group key and at least one SUM; found no SUM")
+            not_allowed(
+                "the fold projects at least one group key and at least one SUM; found no SUM",
+            )
         })?;
     let arity = first_sum;
     if arity == 0 {
@@ -277,7 +282,8 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     // The FROM must be a single derived table - the UNION ALL - with no joins.
     let derived = single_derived_table(select)?;
     let arms = union_all_branches(&derived.body)?;
-    let mut matched: Vec<(FoldBranch, Option<String>, Option<String>)> = Vec::with_capacity(arms.len());
+    let mut matched: Vec<(FoldBranch, Option<String>, Option<String>)> =
+        Vec::with_capacity(arms.len());
     for (i, arm) in arms.iter().enumerate() {
         matched.push(match_branch(arm, i == 0, arity, sums)?);
     }
@@ -300,7 +306,11 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
     // that projects tok then sh is a different query from the one it looks like, so it is refused
     // rather than reordered.
     let first_arm_names: Vec<Option<String>> = (0..sums)
-        .map(|j| projection_item_opt(arms[0], arity + j, true).ok().and_then(|(a, _)| a))
+        .map(|j| {
+            projection_item_opt(arms[0], arity + j, true)
+                .ok()
+                .and_then(|(a, _)| a)
+        })
         .collect();
     for (j, want) in summed_names.iter().enumerate() {
         if first_arm_names[j].as_deref() != Some(want.as_str()) {
@@ -308,7 +318,9 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
                 "SUM number {} is over `{want}`, but the union's value column at that position is \
                  `{}`. Sums are matched by position, not by name lookup",
                 j + 1,
-                first_arm_names[j].clone().unwrap_or_else(|| "<unnamed>".into())
+                first_arm_names[j]
+                    .clone()
+                    .unwrap_or_else(|| "<unnamed>".into())
             )));
         }
     }
@@ -346,14 +358,20 @@ fn match_signed_fold(query: &Query) -> Result<SignedFold> {
                 }
             }
         }
-        _ => return Err(not_allowed("GROUP BY ALL and grouping modifiers are not admitted")),
+        _ => {
+            return Err(not_allowed(
+                "GROUP BY ALL and grouping modifiers are not admitted",
+            ));
+        }
     }
 
     let drop_zero = match &select.having {
         None => false,
         Some(e) => {
             if !is_sum_ne_zero(e, &first_value_alias) {
-                return Err(not_allowed("the only admitted HAVING is `SUM(<value>) <> 0`"));
+                return Err(not_allowed(
+                    "the only admitted HAVING is `SUM(<value>) <> 0`",
+                ));
             }
             if sums > 1 {
                 // With several aggregates, "drop the rows that net out" has to say *which* sum, and
@@ -404,7 +422,8 @@ fn match_branch(
             select.projection.len()
         )));
     }
-    let grouped = !matches!(&select.group_by, GroupByExpr::Expressions(e, m) if e.is_empty() && m.is_empty());
+    let grouped =
+        !matches!(&select.group_by, GroupByExpr::Expressions(e, m) if e.is_empty() && m.is_empty());
     if grouped || select.having.is_some() || select.selection.is_some() {
         return Err(not_allowed(
             "the arms of the union must be bare projections - no WHERE, GROUP BY or HAVING",
@@ -428,11 +447,18 @@ fn match_branch(
             value_alias = alias;
         }
         let (negated, inner) = match value_expr {
-            Expr::UnaryOp { op: UnaryOperator::Minus, expr } => (true, expr.as_ref()),
+            Expr::UnaryOp {
+                op: UnaryOperator::Minus,
+                expr,
+            } => (true, expr.as_ref()),
             other => (false, other),
         };
         let (col, strict_cast) = cast_to_i128(inner)?;
-        values.push(FoldValue { col, negated, strict_cast });
+        values.push(FoldValue {
+            col,
+            negated,
+            strict_cast,
+        });
     }
     let table = single_named_table(select)?;
 
@@ -447,11 +473,16 @@ fn match_branch(
 /// bug this whole project exists to refuse.
 fn cast_to_i128(expr: &Expr) -> Result<(String, bool)> {
     let (kind, inner, data_type) = match expr {
-        Expr::Cast { kind, expr, data_type, .. } => (kind, expr.as_ref(), data_type),
+        Expr::Cast {
+            kind,
+            expr,
+            data_type,
+            ..
+        } => (kind, expr.as_ref(), data_type),
         _ => {
             return Err(not_allowed(
                 "the value column must be wrapped in TRY_CAST to a 128-bit integer",
-            ))
+            ));
         }
     };
     // **Both spellings, kept distinct.** `TRY_CAST` yields NULL on an unparseable value and `SUM`
@@ -470,7 +501,7 @@ fn cast_to_i128(expr: &Expr) -> Result<(String, bool)> {
         _ => {
             return Err(not_allowed(
                 "only CAST and TRY_CAST are admitted around the value column",
-            ))
+            ));
         }
     };
     // **Three spellings, one width, and Burrmill owns which one is meant.** `HUGEINT` is DuckDB's,
@@ -512,7 +543,12 @@ fn union_all_branches(body: &SetExpr) -> Result<Vec<&Select>> {
                 out.push(sel.as_ref());
                 Ok(())
             }
-            SetExpr::SetOperation { op: SetOperator::Union, set_quantifier, left, right } => {
+            SetExpr::SetOperation {
+                op: SetOperator::Union,
+                set_quantifier,
+                left,
+                right,
+            } => {
                 if !matches!(set_quantifier, SetQuantifier::All) {
                     return Err(not_allowed(
                         "the union must be UNION ALL: plain UNION deduplicates, which silently \
@@ -522,12 +558,16 @@ fn union_all_branches(body: &SetExpr) -> Result<Vec<&Select>> {
                 walk(left, out)?;
                 walk(right, out)
             }
-            _ => Err(not_allowed("the derived table must be a UNION ALL of bare projections")),
+            _ => Err(not_allowed(
+                "the derived table must be a UNION ALL of bare projections",
+            )),
         }
     }
     walk(body, &mut out)?;
     if out.len() < 2 {
-        return Err(not_allowed("the derived table must be a UNION ALL of at least two projections"));
+        return Err(not_allowed(
+            "the derived table must be a UNION ALL of at least two projections",
+        ));
     }
     Ok(out)
 }
@@ -535,7 +575,12 @@ fn union_all_branches(body: &SetExpr) -> Result<Vec<&Select>> {
 #[allow(dead_code)]
 fn union_all_halves(body: &SetExpr) -> Result<(&Select, &Select)> {
     match body {
-        SetExpr::SetOperation { op: SetOperator::Union, set_quantifier, left, right } => {
+        SetExpr::SetOperation {
+            op: SetOperator::Union,
+            set_quantifier,
+            left,
+            right,
+        } => {
             if !matches!(set_quantifier, SetQuantifier::All) {
                 return Err(not_allowed(
                     "UNION must be UNION ALL: deduplicating would silently drop a party's second \
@@ -544,7 +589,9 @@ fn union_all_halves(body: &SetExpr) -> Result<(&Select, &Select)> {
             }
             Ok((as_select(left)?, as_select(right)?))
         }
-        _ => Err(not_allowed("the derived table must be a UNION ALL of two projections")),
+        _ => Err(not_allowed(
+            "the derived table must be a UNION ALL of two projections",
+        )),
     }
 }
 
@@ -553,17 +600,23 @@ fn single_derived_table(select: &Select) -> Result<&Query> {
         return Err(not_allowed("joins are not in the admitted subset"));
     }
     match &select.from[0].relation {
-        TableFactor::Derived { subquery, lateral, .. } if !lateral => Ok(subquery),
+        TableFactor::Derived {
+            subquery, lateral, ..
+        } if !lateral => Ok(subquery),
         _ => Err(not_allowed("the outer FROM must be the union subquery")),
     }
 }
 
 fn single_named_table(select: &Select) -> Result<String> {
     if select.from.len() != 1 || !select.from[0].joins.is_empty() {
-        return Err(not_allowed("each half of the union reads exactly one table"));
+        return Err(not_allowed(
+            "each half of the union reads exactly one table",
+        ));
     }
     match &select.from[0].relation {
-        TableFactor::Table { name, args: None, .. } => Ok(name
+        TableFactor::Table {
+            name, args: None, ..
+        } => Ok(name
             .0
             .last()
             .map(|p| unquote(&p.to_string()))
@@ -575,7 +628,9 @@ fn single_named_table(select: &Select) -> Result<String> {
             "table functions are not registered; Burrmill resolves names against a positive \
              allowlist and has no way to name a path",
         )),
-        _ => Err(not_allowed("each half of the union must read a registered table by name")),
+        _ => Err(not_allowed(
+            "each half of the union must read a registered table by name",
+        )),
     }
 }
 
@@ -600,9 +655,9 @@ fn projection_item_opt(select: &Select, i: usize, named: bool) -> Result<(Option
             }
             Ok((if named { name } else { None }, expr))
         }
-        Some(SelectItem::Wildcard(_)) | Some(SelectItem::QualifiedWildcard(..)) => Err(not_allowed(
-            "SELECT * is not admitted: the result schema is part of the contract",
-        )),
+        Some(SelectItem::Wildcard(_)) | Some(SelectItem::QualifiedWildcard(..)) => Err(
+            not_allowed("SELECT * is not admitted: the result schema is part of the contract"),
+        ),
         // `SELECT expr AS (a, b)` - a tuple alias. It projects more than one column from one item,
         // which the shape's positional matching cannot represent, so it is refused rather than
         // half-understood.
@@ -628,14 +683,24 @@ fn key_column(expr: &Expr) -> Result<KeyCol> {
 
 fn key_parts(expr: &Expr, out: &mut Vec<KeyPart>) -> Result<()> {
     // `a || b` in any nesting. Concatenation is associative, so the tree flattens.
-    if let Expr::BinaryOp { left, op: BinaryOperator::StringConcat, right } = expr {
+    if let Expr::BinaryOp {
+        left,
+        op: BinaryOperator::StringConcat,
+        right,
+    } = expr
+    {
         key_parts(left, out)?;
         return key_parts(right, out);
     }
     // A cast to text around a key part is a no-op for grouping: the key is bytes either way, and
     // `CAST(x AS VARCHAR)` is how a view spells "put this id in a string". Refusing it would be
     // refusing punctuation.
-    if let Expr::Cast { expr: inner, data_type, .. } = expr {
+    if let Expr::Cast {
+        expr: inner,
+        data_type,
+        ..
+    } = expr
+    {
         if matches!(
             data_type,
             DataType::Varchar(_) | DataType::Text | DataType::String(_) | DataType::Char(_)
@@ -669,7 +734,10 @@ fn key_parts(expr: &Expr, out: &mut Vec<KeyPart>) -> Result<()> {
                 ) = &l.args[0]
                 {
                     if let Some(col) = ident_name(inner) {
-                        out.push(KeyPart::Column { name: col, key_fn: Some(kf) });
+                        out.push(KeyPart::Column {
+                            name: col,
+                            key_fn: Some(kf),
+                        });
                         return Ok(());
                     }
                 }
@@ -690,11 +758,14 @@ fn is_sum_call(expr: &Expr) -> bool {
 
 fn strip_varchar_cast(expr: &Expr) -> &Expr {
     match expr {
-        Expr::Cast { expr: inner, data_type, .. }
-            if matches!(
-                data_type,
-                DataType::Varchar(_) | DataType::Text | DataType::String(_)
-            ) =>
+        Expr::Cast {
+            expr: inner,
+            data_type,
+            ..
+        } if matches!(
+            data_type,
+            DataType::Varchar(_) | DataType::Text | DataType::String(_)
+        ) =>
         {
             inner.as_ref()
         }
@@ -706,10 +777,16 @@ fn strip_varchar_cast(expr: &Expr) -> &Expr {
 fn sum_argument(expr: &Expr) -> Result<String> {
     let f = match expr {
         Expr::Function(f) => f,
-        _ => return Err(not_allowed("the second projected column must be SUM(<value>)")),
+        _ => {
+            return Err(not_allowed(
+                "the second projected column must be SUM(<value>)",
+            ));
+        }
     };
     if f.over.is_some() {
-        return Err(not_allowed("window functions are not in the admitted subset"));
+        return Err(not_allowed(
+            "window functions are not in the admitted subset",
+        ));
     }
     if f.name.0.last().map(|p| p.to_string().to_ascii_uppercase()) != Some("SUM".into()) {
         return Err(not_allowed(format!(
@@ -722,7 +799,9 @@ fn sum_argument(expr: &Expr) -> Result<String> {
         _ => return Err(not_allowed("SUM takes exactly one column")),
     };
     if args.duplicate_treatment.is_some() || !args.clauses.is_empty() || args.args.len() != 1 {
-        return Err(not_allowed("SUM(DISTINCT ...) and aggregate clauses are not admitted"));
+        return Err(not_allowed(
+            "SUM(DISTINCT ...) and aggregate clauses are not admitted",
+        ));
     }
     match &args.args[0] {
         FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => {
@@ -733,7 +812,9 @@ fn sum_argument(expr: &Expr) -> Result<String> {
 }
 
 fn is_sum_ne_zero(expr: &Expr, value_col: &str) -> bool {
-    let Expr::BinaryOp { left, op, right } = expr else { return false };
+    let Expr::BinaryOp { left, op, right } = expr else {
+        return false;
+    };
     if !matches!(op, BinaryOperator::NotEq) {
         return false;
     }
@@ -748,7 +829,9 @@ fn is_zero(v: &Value) -> bool {
 /// Canonical ordering is applied whether or not it is asked for. The only thing refused here is a
 /// query asking for a *different* order, because silently overruling it would be worse than saying no.
 fn check_order_by_is_canonical(query: &Query, key_alias: &str) -> Result<()> {
-    let Some(order_by) = &query.order_by else { return Ok(()) };
+    let Some(order_by) = &query.order_by else {
+        return Ok(());
+    };
     let exprs = match &order_by.kind {
         sqlparser::ast::OrderByKind::Expressions(e) => e,
         _ => return Err(not_allowed("ORDER BY ALL is not admitted")),
@@ -824,7 +907,9 @@ fn reject_unsupported_clauses(select: &Select) -> Result<()> {
 /// ignored.
 fn reject_unsupported_query_clauses(query: &Query) -> Result<()> {
     if query.with.is_some() {
-        return Err(not_allowed("common table expressions are not in the admitted subset"));
+        return Err(not_allowed(
+            "common table expressions are not in the admitted subset",
+        ));
     }
     if query.limit_clause.is_some() {
         return Err(not_allowed(
@@ -836,10 +921,14 @@ fn reject_unsupported_query_clauses(query: &Query) -> Result<()> {
         return Err(not_allowed("FETCH is not in the admitted subset"));
     }
     if !query.locks.is_empty() {
-        return Err(not_allowed("locking clauses are not in the admitted subset"));
+        return Err(not_allowed(
+            "locking clauses are not in the admitted subset",
+        ));
     }
     if query.for_clause.is_some() || query.format_clause.is_some() || query.settings.is_some() {
-        return Err(not_allowed("output-format and settings clauses are not in the admitted subset"));
+        return Err(not_allowed(
+            "output-format and settings clauses are not in the admitted subset",
+        ));
     }
     if !query.pipe_operators.is_empty() {
         return Err(not_allowed("pipe operators are not in the admitted subset"));

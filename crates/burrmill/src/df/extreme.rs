@@ -16,7 +16,9 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, JoinType, NullEquality, Result};
 use datafusion_expr::expr::{AggregateFunction, WindowFunctionDefinition};
 use datafusion_expr::logical_plan::Filter;
-use datafusion_expr::{BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator, WindowFrameBound};
+use datafusion_expr::{
+    BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator, WindowFrameBound,
+};
 use datafusion_optimizer::analyzer::AnalyzerRule;
 
 #[derive(Debug, Default)]
@@ -86,7 +88,12 @@ fn rewrite(f: &Filter) -> Result<Option<LogicalPlan>> {
     let width = base.schema().fields().len();
     let out = w.schema.field(width).name().clone();
     // The filter is an equality against the window's value, either way round.
-    let Expr::BinaryExpr(BinaryExpr { left, op: Operator::Eq, right }) = &f.predicate else {
+    let Expr::BinaryExpr(BinaryExpr {
+        left,
+        op: Operator::Eq,
+        right,
+    }) = &f.predicate
+    else {
         return Ok(None);
     };
     let is_out = |e: &Expr| matches!(e, Expr::Column(c) if c.relation.is_none() && c.name == out);

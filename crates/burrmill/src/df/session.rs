@@ -275,7 +275,11 @@ impl MiniSession {
             // another key in a projection, where a rewritten `TRY_CAST(k AS BIGINT)`, which DataFusion
             // names `k`, collides with `k` itself and the query was refused.
             optimizer: Optimizer::with_rules(
-                Optimizer::new().rules.into_iter().filter(|r| r.name() != "eliminate_group_by_constant").collect(),
+                Optimizer::new()
+                    .rules
+                    .into_iter()
+                    .filter(|r| r.name() != "eliminate_group_by_constant")
+                    .collect(),
             ),
             // Last, so it sees the join filter after projection pushdown has made its operands columns.
             physical_optimizers: PhysicalOptimizer::new()
@@ -285,11 +289,13 @@ impl MiniSession {
                 .flat_map(|r| {
                     let after_selection = r.name() == "join_selection";
                     std::iter::once(r).chain(after_selection.then(|| {
-                        Arc::new(super::buildside::BuildOnSmaller) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+                        Arc::new(super::buildside::BuildOnSmaller)
+                            as Arc<dyn PhysicalOptimizerRule + Send + Sync>
                     }))
                 })
                 .chain([
-                    Arc::new(super::rangejoin::RangeJoin) as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+                    Arc::new(super::rangejoin::RangeJoin)
+                        as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
                     Arc::new(super::smallinputs::SmallInputs),
                     Arc::new(super::cancel::Cancellable(cancel)),
                 ])
@@ -308,7 +314,10 @@ impl MiniSession {
     /// columns, the ones those commands and a person reading them use.
     pub fn build_information_schema(&mut self, hidden: fn(&str) -> bool) -> DFResult<()> {
         self.hidden = hidden;
-        *self.information_schema.get_mut().unwrap_or_else(|e| e.into_inner()) = None;
+        *self
+            .information_schema
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner()) = None;
         Ok(())
     }
 
@@ -412,7 +421,14 @@ impl MiniSession {
         cached
             .get_or_insert_with(|| {
                 super::dialect::Known::of_tables(self.tables.iter().map(|(name, t)| {
-                    (name.as_str(), t.schema().fields().iter().map(|f| f.name().clone()).collect())
+                    (
+                        name.as_str(),
+                        t.schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().clone())
+                            .collect(),
+                    )
                 }))
             })
             .clone()
@@ -453,8 +469,8 @@ impl QueryPlanner for MiniQueryPlanner {
             Arc::new(OwnedFoldPlanner),
             Arc::new(super::sharing::SharedPlanner),
         ])
-            .create_physical_plan(logical_plan, session)
-            .await
+        .create_physical_plan(logical_plan, session)
+        .await
     }
 }
 
@@ -545,7 +561,9 @@ fn series(name: &str, args: &[Expr]) -> DFResult<Arc<dyn TableSource>> {
     use arrow::datatypes::{DataType, Field, Schema};
     let n: Vec<i64> = args
         .iter()
-        .map(|a| integer_argument(a).ok_or_else(|| plan_datafusion_err!("{name} takes integer literals")))
+        .map(|a| {
+            integer_argument(a).ok_or_else(|| plan_datafusion_err!("{name} takes integer literals"))
+        })
         .collect::<DFResult<_>>()?;
     let (start, stop, step) = match n.as_slice() {
         [stop] => (0, *stop, 1),
@@ -554,12 +572,16 @@ fn series(name: &str, args: &[Expr]) -> DFResult<Arc<dyn TableSource>> {
         _ => return Err(plan_datafusion_err!("{name} takes one to three arguments")),
     };
     if step == 0 {
-        return Err(plan_datafusion_err!("Binder Error: {name} step cannot be 0"));
+        return Err(plan_datafusion_err!(
+            "Binder Error: {name} step cannot be 0"
+        ));
     }
     let inclusive = name == "generate_series";
     let span = (stop as i128 - start as i128) / step as i128 + 1;
     if span > 10_000_000 {
-        return Err(plan_datafusion_err!("{name} of more than ten million rows is refused here"));
+        return Err(plan_datafusion_err!(
+            "{name} of more than ten million rows is refused here"
+        ));
     }
     let mut values = Vec::with_capacity(span.max(0) as usize);
     let mut v = start as i128;
@@ -583,7 +605,11 @@ fn series(name: &str, args: &[Expr]) -> DFResult<Arc<dyn TableSource>> {
 }
 
 impl ContextProvider for MiniSession {
-    fn get_table_function_source(&self, name: &str, args: Vec<Expr>) -> DFResult<Arc<dyn TableSource>> {
+    fn get_table_function_source(
+        &self,
+        name: &str,
+        args: Vec<Expr>,
+    ) -> DFResult<Arc<dyn TableSource>> {
         match name.to_ascii_lowercase().as_str() {
             n @ ("range" | "generate_series") => series(n, &args),
             _ => datafusion_common::not_impl_err!("Table Functions are not supported"),
@@ -592,7 +618,10 @@ impl ContextProvider for MiniSession {
     fn get_table_source(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {
         let found = match name.schema() {
             Some(s) if s.eq_ignore_ascii_case("information_schema") => {
-                let mut built = self.information_schema.lock().unwrap_or_else(|e| e.into_inner());
+                let mut built = self
+                    .information_schema
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if built.is_none() {
                     *built = Some(self.information_schema()?);
                 }

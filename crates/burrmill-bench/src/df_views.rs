@@ -22,7 +22,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use datafusion::arrow::array::{Array, AsArray};
-use datafusion::arrow::datatypes::{DataType, Decimal128Type, Field, Float32Type, Float64Type, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, Field, Float32Type, Float64Type, Schema, SchemaRef,
+};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::DFSchema;
@@ -43,7 +45,9 @@ use datafusion::execution::cache::cache_manager::CacheManagerConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::logical_expr::{utils::conjunction, Expr, LogicalPlan, TableProviderFilterPushDown};
+use datafusion::logical_expr::{
+    utils::conjunction, Expr, LogicalPlan, TableProviderFilterPushDown,
+};
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::*;
@@ -91,12 +95,19 @@ pub(crate) fn load_nest(root: &Path) -> anyhow::Result<Nest> {
     let mut by_table: BTreeMap<String, Vec<(PathBuf, u64)>> = BTreeMap::new();
     for e in std::fs::read_dir(root.join("segments"))?.flatten() {
         let p = e.path();
-        let Some(stem) = p.file_name().and_then(|f| f.to_str()).and_then(|f| f.strip_suffix(".parquet")) else {
+        let Some(stem) = p
+            .file_name()
+            .and_then(|f| f.to_str())
+            .and_then(|f| f.strip_suffix(".parquet"))
+        else {
             continue;
         };
         if let Some((table, _)) = stem.rsplit_once('-') {
             let size = e.metadata()?.len();
-            by_table.entry(table.to_string()).or_default().push((p, size));
+            by_table
+                .entry(table.to_string())
+                .or_default()
+                .push((p, size));
         }
     }
     anyhow::ensure!(!by_table.is_empty(), "no segments under {}", root.display());
@@ -105,12 +116,19 @@ pub(crate) fn load_nest(root: &Path) -> anyhow::Result<Nest> {
     let doc: serde_json::Value = serde_json::from_str(&raw)?;
     let mut declared: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for t in doc["tables"].as_array().into_iter().flatten() {
-        let Some(name) = t["table"].as_str() else { continue };
+        let Some(name) = t["table"].as_str() else {
+            continue;
+        };
         let cols = t["columns"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|c| Some((c["name"].as_str()?.to_string(), c["storage"].as_str()?.to_string())))
+            .filter_map(|c| {
+                Some((
+                    c["name"].as_str()?.to_string(),
+                    c["storage"].as_str()?.to_string(),
+                ))
+            })
             .collect();
         declared.insert(name.to_string(), cols);
     }
@@ -131,7 +149,10 @@ pub(crate) fn load_nest(root: &Path) -> anyhow::Result<Nest> {
             Some(files) => {
                 let f = std::fs::File::open(&files[0].0)?;
                 let meta = ArrowReaderMetadata::load(&f, ArrowReaderOptions::new())?;
-                (Arc::new(transform_schema_to_view(meta.schema())), files.clone())
+                (
+                    Arc::new(transform_schema_to_view(meta.schema())),
+                    files.clone(),
+                )
             }
             // Unsealed: the layout every sealed table on this nest has. u64 stays u64; the rest is
             // text, including bools and the 256-bit words - nuthatch seals them as strings.
@@ -147,13 +168,26 @@ pub(crate) fn load_nest(root: &Path) -> anyhow::Result<Nest> {
                 (Arc::new(Schema::new(fields)), Vec::new())
             }
         };
-        tables.push(Table { name: name.clone(), schema, files, wide });
+        tables.push(Table {
+            name: name.clone(),
+            schema,
+            files,
+            wide,
+        });
     }
 
     let views = load_views(&root.join("views"))?;
-    anyhow::ensure!(!views.is_empty(), "no CREATE VIEW statements under {}", root.display());
+    anyhow::ensure!(
+        !views.is_empty(),
+        "no CREATE VIEW statements under {}",
+        root.display()
+    );
     let wants_dec = views.iter().any(|v| v.body.contains("_dec"));
-    Ok(Nest { tables, views, wants_dec })
+    Ok(Nest {
+        tables,
+        views,
+        wants_dec,
+    })
 }
 
 /// Every `CREATE VIEW` in the `.sql` files of `dir`, in file order.
@@ -169,7 +203,12 @@ pub(crate) fn load_views(dir: &Path) -> anyhow::Result<Vec<View>> {
         let text = std::fs::read_to_string(f)?;
         let short = f.file_name().unwrap().to_string_lossy().to_string();
         for (name, text, body) in split_views(&text) {
-            views.push(View { name, file: short.clone(), text, body });
+            views.push(View {
+                name,
+                file: short.clone(),
+                text,
+                body,
+            });
         }
     }
     Ok(views)
@@ -196,9 +235,15 @@ fn split_views(text: &str) -> Vec<(String, String, String)> {
         .filter_map(|c| {
             let stmt = c.trim().trim_end_matches(';').trim().to_string();
             let rest = stmt["CREATE VIEW".len()..].trim_start();
-            let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
             let rest = rest[name.len()..].trim_start();
-            let body = rest.get(..2).filter(|k| k.eq_ignore_ascii_case("AS")).map(|_| rest[2..].trim().to_string())?;
+            let body = rest
+                .get(..2)
+                .filter(|k| k.eq_ignore_ascii_case("AS"))
+                .map(|_| rest[2..].trim().to_string())?;
             Some((name, stmt, body))
         })
         .collect()
@@ -219,11 +264,21 @@ fn decimal38() -> sq::DataType {
 }
 
 fn cast(expr: sq::Expr, data_type: sq::DataType) -> sq::Expr {
-    sq::Expr::Cast { kind: sq::CastKind::Cast, expr: Box::new(expr), data_type, array: false, format: None }
+    sq::Expr::Cast {
+        kind: sq::CastKind::Cast,
+        expr: Box::new(expr),
+        data_type,
+        array: false,
+        format: None,
+    }
 }
 
 fn binop(l: sq::Expr, op: sq::BinaryOperator, r: sq::Expr) -> sq::Expr {
-    sq::Expr::BinaryOp { left: Box::new(l), op, right: Box::new(r) }
+    sq::Expr::BinaryOp {
+        left: Box::new(l),
+        op,
+        right: Box::new(r),
+    }
 }
 
 /// `(a1, a2) op (b1, b2)` spelled out lexicographically.
@@ -253,7 +308,11 @@ impl VisitorMut for Rewriter {
             }
             // `a // b` is truncating division. DataFusion's decimal `/` carries four extra digits
             // and a cast back would round them, so divide only the exact multiple.
-            sq::Expr::BinaryOp { left, op: sq::BinaryOperator::DuckIntegerDivide, right } => {
+            sq::Expr::BinaryOp {
+                left,
+                op: sq::BinaryOperator::DuckIntegerDivide,
+                right,
+            } => {
                 use sq::BinaryOperator::*;
                 let (a, b) = (*left.clone(), *right.clone());
                 let rem = binop(a.clone(), Modulo, b.clone());
@@ -277,7 +336,10 @@ impl VisitorMut for Rewriter {
 }
 
 enum Translated {
-    Ok { stmt: sq::Statement, rules: Vec<&'static str> },
+    Ok {
+        stmt: sq::Statement,
+        rules: Vec<&'static str>,
+    },
     ParseFail(String),
 }
 
@@ -310,7 +372,10 @@ fn translate(text: &str) -> Translated {
     let mut query = cv.query;
     let mut rw = Rewriter::default();
     let _ = query.visit(&mut rw);
-    Translated::Ok { stmt: sq::Statement::Query(query), rules: rw.used.into_iter().collect() }
+    Translated::Ok {
+        stmt: sq::Statement::Query(query),
+        rules: rw.used.into_iter().collect(),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -345,7 +410,10 @@ impl DfConfig {
             b if b >= 1 << 30 => format!("{}G", b >> 30),
             b => format!("{}M", b >> 20),
         };
-        format!("{p:<12} stats={:<3} cache={cache:<4}", if self.collect_statistics { "on" } else { "off" })
+        format!(
+            "{p:<12} stats={:<3} cache={cache:<4}",
+            if self.collect_statistics { "on" } else { "off" }
+        )
     }
 }
 
@@ -364,8 +432,13 @@ struct PreparsedReader {
 }
 
 impl AsyncFileReader for PreparsedReader {
-    fn get_bytes(&mut self, range: std::ops::Range<u64>) -> BoxFuture<'_, parquet::errors::Result<bytes::Bytes>> {
-        self.metrics.bytes_scanned.add((range.end - range.start) as usize);
+    fn get_bytes(
+        &mut self,
+        range: std::ops::Range<u64>,
+    ) -> BoxFuture<'_, parquet::errors::Result<bytes::Bytes>> {
+        self.metrics
+            .bytes_scanned
+            .add((range.end - range.start) as usize);
         self.store
             .get_range(&self.file.object_meta.location, range)
             .map_err(|e| parquet::errors::ParquetError::External(Box::new(e)))
@@ -376,7 +449,9 @@ impl AsyncFileReader for PreparsedReader {
         &mut self,
         ranges: Vec<std::ops::Range<u64>>,
     ) -> BoxFuture<'_, parquet::errors::Result<Vec<bytes::Bytes>>> {
-        self.metrics.bytes_scanned.add(ranges.iter().map(|r| (r.end - r.start) as usize).sum());
+        self.metrics
+            .bytes_scanned
+            .add(ranges.iter().map(|r| (r.end - r.start) as usize).sum());
         async move {
             self.store
                 .get_ranges(&self.file.object_meta.location, &ranges)
@@ -404,13 +479,16 @@ impl ParquetFileReaderFactory for PreparsedFactory {
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion::error::Result<Box<dyn AsyncFileReader + Send>> {
         let key = partitioned_file.object_meta.location.to_string();
-        let footer = self
-            .footers
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| datafusion::error::DataFusionError::Internal(format!("no pre-parsed footer for {key}")))?;
+        let footer = self.footers.get(&key).cloned().ok_or_else(|| {
+            datafusion::error::DataFusionError::Internal(format!("no pre-parsed footer for {key}"))
+        })?;
         let metrics = ParquetFileMetrics::new(partition_index, &key, metrics);
-        Ok(Box::new(PreparsedReader { store: self.store.clone(), file: partitioned_file, footer, metrics }))
+        Ok(Box::new(PreparsedReader {
+            store: self.store.clone(),
+            file: partitioned_file,
+            footer,
+            metrics,
+        }))
     }
 }
 
@@ -447,14 +525,20 @@ impl TableProvider for SegmentTable {
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         let url = ObjectStoreUrl::local_filesystem();
         let store = state.runtime_env().object_store(&url)?;
-        let opts = TableParquetOptions { global: state.config_options().execution.parquet.clone(), ..Default::default() };
+        let opts = TableParquetOptions {
+            global: state.config_options().execution.parquet.clone(),
+            ..Default::default()
+        };
         let mut source = ParquetSource::new(self.schema.clone()).with_table_parquet_options(opts);
         if let Some(pred) = conjunction(filters.iter().cloned()) {
             let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
             source = source.with_predicate(state.create_physical_expr(pred, &df_schema)?);
         }
         let factory: Arc<dyn ParquetFileReaderFactory> = match &self.footers {
-            Some(f) => Arc::new(PreparsedFactory { store, footers: f.clone() }),
+            Some(f) => Arc::new(PreparsedFactory {
+                store,
+                footers: f.clone(),
+            }),
             None => Arc::new(CachedParquetFileReaderFactory::new(
                 store,
                 state.runtime_env().cache_manager.get_file_metadata_cache(),
@@ -490,15 +574,28 @@ async fn df_session(cfg: &DfConfig, nest: &Nest, budget: usize) -> anyhow::Resul
         // case-insensitively and DataFusion would lowercase them.
         .set_bool("datafusion.sql_parser.enable_ident_normalization", false);
     let runtime = RuntimeEnvBuilder::new()
-        .with_cache_manager(CacheManagerConfig::default().with_metadata_cache_limit(cfg.metadata_cache_bytes))
+        .with_cache_manager(
+            CacheManagerConfig::default().with_metadata_cache_limit(cfg.metadata_cache_bytes),
+        )
         .build_arc()?;
-    let state = SessionStateBuilder::new().with_config(config).with_runtime_env(runtime).with_default_features().build();
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
+        .build();
     let ctx = SessionContext::new_with_state(state);
 
     for t in &nest.tables {
-        let raw = if nest.wants_dec && !t.wide.is_empty() { format!("{}__raw", t.name) } else { t.name.clone() };
+        let raw = if nest.wants_dec && !t.wide.is_empty() {
+            format!("{}__raw", t.name)
+        } else {
+            t.name.clone()
+        };
         if t.files.is_empty() {
-            ctx.register_table(&raw, Arc::new(MemTable::try_new(t.schema.clone(), vec![vec![]])?))?;
+            ctx.register_table(
+                &raw,
+                Arc::new(MemTable::try_new(t.schema.clone(), vec![vec![]])?),
+            )?;
         } else {
             match cfg.provider {
                 Provider::Listing => {
@@ -508,7 +605,9 @@ async fn df_session(cfg: &DfConfig, nest: &Nest, budget: usize) -> anyhow::Resul
                         .map(|(p, _)| ListingTableUrl::parse(p.to_string_lossy()))
                         .collect::<Result<Vec<_>, _>>()?;
                     let lc = ListingTableConfig::new_with_multi_paths(urls)
-                        .with_listing_options(ListingOptions::new(Arc::new(ParquetFormat::default())))
+                        .with_listing_options(ListingOptions::new(Arc::new(
+                            ParquetFormat::default(),
+                        )))
                         .with_schema(t.schema.clone());
                     ctx.register_table(&raw, Arc::new(ListingTable::try_new(lc)?))?;
                 }
@@ -517,42 +616,73 @@ async fn df_session(cfg: &DfConfig, nest: &Nest, budget: usize) -> anyhow::Resul
                         .files
                         .iter()
                         .map(|(p, size)| {
-                            Ok(PartitionedFile::new(object_store::path::Path::from_filesystem_path(p)?.to_string(), *size))
+                            Ok(PartitionedFile::new(
+                                object_store::path::Path::from_filesystem_path(p)?.to_string(),
+                                *size,
+                            ))
                         })
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     let footers = match cfg.provider {
                         Provider::Morsels { .. } => {
-                            let segs = burrmill::SealedSegments::from_files(t.name.clone(), t.files.iter().map(|(p, _)| p.clone()));
+                            let segs = burrmill::SealedSegments::from_files(
+                                t.name.clone(),
+                                t.files.iter().map(|(p, _)| p.clone()),
+                            );
                             let mut map = HashMap::new();
                             for m in segs.morsels()?.iter() {
-                                let key = object_store::path::Path::from_filesystem_path(&*m.path)?.to_string();
+                                let key = object_store::path::Path::from_filesystem_path(&*m.path)?
+                                    .to_string();
                                 map.entry(key).or_insert_with(|| m.meta.metadata().clone());
                             }
                             Some(Arc::new(map))
                         }
                         _ => None,
                     };
-                    ctx.register_table(&raw, Arc::new(SegmentTable { schema: t.schema.clone(), files, groups, footers }))?;
+                    ctx.register_table(
+                        &raw,
+                        Arc::new(SegmentTable {
+                            schema: t.schema.clone(),
+                            files,
+                            groups,
+                            footers,
+                        }),
+                    )?;
                 }
             }
         }
         if nest.wants_dec && !t.wide.is_empty() {
-            let dec: Vec<String> = t.wide.iter().map(|c| format!(", TRY_CAST(\"{c}\" AS DECIMAL(38,0)) AS \"{c}_dec\"")).collect();
-            ctx.sql(&format!("CREATE VIEW \"{}\" AS SELECT *{} FROM \"{raw}\"", t.name, dec.join("")))
-                .await?
-                .collect()
-                .await?;
+            let dec: Vec<String> = t
+                .wide
+                .iter()
+                .map(|c| format!(", TRY_CAST(\"{c}\" AS DECIMAL(38,0)) AS \"{c}_dec\""))
+                .collect();
+            ctx.sql(&format!(
+                "CREATE VIEW \"{}\" AS SELECT *{} FROM \"{raw}\"",
+                t.name,
+                dec.join("")
+            ))
+            .await?
+            .collect()
+            .await?;
         }
     }
-    Ok(Df { ctx, register_ms: t.elapsed().as_millis() })
+    Ok(Df {
+        ctx,
+        register_ms: t.elapsed().as_millis(),
+    })
 }
 
 fn duck_session(nest: &Nest, budget: usize) -> anyhow::Result<duckdb::Connection> {
     let conn = duckdb::Connection::open_in_memory()?;
-    conn.execute_batch(&format!("SET threads TO {budget}; SET parquet_metadata_cache = true;"))?;
+    conn.execute_batch(&format!(
+        "SET threads TO {budget}; SET parquet_metadata_cache = true;"
+    ))?;
     for t in &nest.tables {
         let dec: Vec<String> = if nest.wants_dec {
-            t.wide.iter().map(|c| format!(", TRY_CAST(\"{c}\" AS HUGEINT) AS \"{c}_dec\"")).collect()
+            t.wide
+                .iter()
+                .map(|c| format!(", TRY_CAST(\"{c}\" AS HUGEINT) AS \"{c}_dec\""))
+                .collect()
         } else {
             Vec::new()
         };
@@ -561,12 +691,36 @@ fn duck_session(nest: &Nest, budget: usize) -> anyhow::Result<duckdb::Connection
                 .schema
                 .fields()
                 .iter()
-                .map(|f| format!("\"{}\" {}", f.name(), if *f.data_type() == DataType::UInt64 { "UBIGINT" } else { "VARCHAR" }))
+                .map(|f| {
+                    format!(
+                        "\"{}\" {}",
+                        f.name(),
+                        if *f.data_type() == DataType::UInt64 {
+                            "UBIGINT"
+                        } else {
+                            "VARCHAR"
+                        }
+                    )
+                })
                 .collect();
-            conn.execute_batch(&format!("CREATE TABLE \"{}__raw\" ({});", t.name, cols.join(", ")))?;
-            conn.execute_batch(&format!("CREATE VIEW \"{}\" AS SELECT *{} FROM \"{}__raw\";", t.name, dec.join(""), t.name))?;
+            conn.execute_batch(&format!(
+                "CREATE TABLE \"{}__raw\" ({});",
+                t.name,
+                cols.join(", ")
+            ))?;
+            conn.execute_batch(&format!(
+                "CREATE VIEW \"{}\" AS SELECT *{} FROM \"{}__raw\";",
+                t.name,
+                dec.join(""),
+                t.name
+            ))?;
         } else {
-            let list = t.files.iter().map(|(p, _)| format!("'{}'", p.display())).collect::<Vec<_>>().join(",");
+            let list = t
+                .files
+                .iter()
+                .map(|(p, _)| format!("'{}'", p.display()))
+                .collect::<Vec<_>>()
+                .join(",");
             conn.execute_batch(&format!(
                 "CREATE VIEW \"{}\" AS SELECT *{} FROM read_parquet([{list}]);",
                 t.name,
@@ -642,9 +796,13 @@ fn df_rows(batches: &[RecordBatch]) -> anyhow::Result<Vec<String>> {
                         continue;
                     }
                     v.push(match c.data_type() {
-                        DataType::Decimal128(_, 0) => c.as_primitive::<Decimal128Type>().value(i).to_string(),
+                        DataType::Decimal128(_, 0) => {
+                            c.as_primitive::<Decimal128Type>().value(i).to_string()
+                        }
                         DataType::Float64 => c.as_primitive::<Float64Type>().value(i).to_string(),
-                        DataType::Float32 => (c.as_primitive::<Float32Type>().value(i) as f64).to_string(),
+                        DataType::Float32 => {
+                            (c.as_primitive::<Float32Type>().value(i) as f64).to_string()
+                        }
                         _ => datafusion::arrow::util::display::array_value_to_string(c, i)?,
                     });
                 }
@@ -652,7 +810,12 @@ fn df_rows(batches: &[RecordBatch]) -> anyhow::Result<Vec<String>> {
             })
             .collect::<anyhow::Result<_>>()?;
         for i in 0..b.num_rows() {
-            out.push(cols.iter().map(|c| c[i].as_str()).collect::<Vec<_>>().join("\u{1f}"));
+            out.push(
+                cols.iter()
+                    .map(|c| c[i].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\u{1f}"),
+            );
         }
     }
     out.sort();
@@ -703,12 +866,17 @@ impl Breakdown {
 fn walk_metrics(plan: &Arc<dyn ExecutionPlan>, b: &mut Breakdown) {
     if let Some(m) = plan.metrics() {
         let m = m.aggregate_by_name();
-        let ns = |n: &str| Duration::from_nanos(m.sum_by_name(n).map(|v| v.as_usize() as u64).unwrap_or(0));
+        let ns = |n: &str| {
+            Duration::from_nanos(m.sum_by_name(n).map(|v| v.as_usize() as u64).unwrap_or(0))
+        };
         if plan.name() == "DataSourceExec" {
             b.meta += ns("metadata_load_time");
             b.open += ns("time_elapsed_opening");
             b.scan += ns("time_elapsed_scanning_total");
-            b.bytes += m.sum_by_name("bytes_scanned").map(|v| v.as_usize()).unwrap_or(0);
+            b.bytes += m
+                .sum_by_name("bytes_scanned")
+                .map(|v| v.as_usize())
+                .unwrap_or(0);
         } else {
             let ec = Duration::from_nanos(m.elapsed_compute().unwrap_or(0) as u64);
             if plan.name().contains("Aggregate") || plan.name().contains("Join") {
@@ -728,18 +896,29 @@ enum DfErr {
     Exec(String),
 }
 
-async fn df_run(ctx: &SessionContext, stmt: &sq::Statement) -> Result<(LogicalPlan, Vec<RecordBatch>, Breakdown), DfErr> {
+async fn df_run(
+    ctx: &SessionContext,
+    stmt: &sq::Statement,
+) -> Result<(LogicalPlan, Vec<RecordBatch>, Breakdown), DfErr> {
     let state = ctx.state();
     let mut b = Breakdown::default();
     let t = Instant::now();
     let df_stmt = datafusion::sql::parser::Statement::Statement(Box::new(stmt.clone()));
-    let logical = state.statement_to_plan(df_stmt).await.map_err(|e| DfErr::Plan(e.to_string()))?;
+    let logical = state
+        .statement_to_plan(df_stmt)
+        .await
+        .map_err(|e| DfErr::Plan(e.to_string()))?;
     b.plan = t.elapsed();
     let t = Instant::now();
-    let physical = state.create_physical_plan(&logical).await.map_err(|e| DfErr::Plan(e.to_string()))?;
+    let physical = state
+        .create_physical_plan(&logical)
+        .await
+        .map_err(|e| DfErr::Plan(e.to_string()))?;
     b.physical = t.elapsed();
     let t = Instant::now();
-    let batches = collect(physical.clone(), state.task_ctx()).await.map_err(|e| DfErr::Exec(e.to_string()))?;
+    let batches = collect(physical.clone(), state.task_ctx())
+        .await
+        .map_err(|e| DfErr::Exec(e.to_string()))?;
     b.exec = t.elapsed();
     walk_metrics(&physical, &mut b);
     Ok((logical, batches, b))
@@ -789,9 +968,16 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
     // plan time either and a fair scan is the question; the footer cache is sized so that every
     // segment on the nest fits, because a cache that evicts under the working set is the same as
     // no cache with extra steps. The diagnosis below runs DataFusion's own defaults for comparison.
-    let main_cfg = DfConfig { provider: Provider::Listing, collect_statistics: false, metadata_cache_bytes: 1 << 30 };
-    let duck_version: String = duckdb::Connection::open_in_memory()?
-        .query_row("SELECT library_version FROM pragma_version()", [], |r| r.get(0))?;
+    let main_cfg = DfConfig {
+        provider: Provider::Listing,
+        collect_statistics: false,
+        metadata_cache_bytes: 1 << 30,
+    };
+    let duck_version: String = duckdb::Connection::open_in_memory()?.query_row(
+        "SELECT library_version FROM pragma_version()",
+        [],
+        |r| r.get(0),
+    )?;
     println!(
         "duckdb {duck_version}: threads={budget} parquet_metadata_cache=true, explicit file lists\ndatafusion {}: target_partitions={budget} \
          collect_statistics={} metadata_cache={}MiB ({}) enable_ident_normalization=false schema_force_view_types=true\n",
@@ -814,7 +1000,13 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
     let mut failed: BTreeSet<String> = BTreeSet::new();
     let mut rule_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut outcomes: BTreeMap<String, usize> = BTreeMap::new();
-    fn note(outcomes: &mut BTreeMap<String, usize>, name: &str, outcome: &str, rules: &str, detail: String) {
+    fn note(
+        outcomes: &mut BTreeMap<String, usize>,
+        name: &str,
+        outcome: &str,
+        rules: &str,
+        detail: String,
+    ) {
         *outcomes.entry(outcome.to_string()).or_default() += 1;
         println!("{:<34} {:<10} {:<20} {}", name, outcome, rules, detail);
     }
@@ -824,7 +1016,13 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
         let d_rows = match duck_rows(&duck, &v.body) {
             Ok(r) => r,
             Err(e) => {
-                note(&mut outcomes, &v.name, "duck fail", "", first_line(&e.to_string()));
+                note(
+                    &mut outcomes,
+                    &v.name,
+                    "duck fail",
+                    "",
+                    first_line(&e.to_string()),
+                );
                 failed.insert(v.name.clone());
                 continue;
             }
@@ -842,7 +1040,11 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
         for r in &rules {
             *rule_counts.entry(r).or_default() += 1;
         }
-        let rules_s = if rules.is_empty() { "-".to_string() } else { rules.join(",") };
+        let rules_s = if rules.is_empty() {
+            "-".to_string()
+        } else {
+            rules.join(",")
+        };
 
         let (logical, batches, _) = match df_run(&df.ctx, &stmt).await {
             Ok(x) => x,
@@ -854,7 +1056,13 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
                 // A dependent of a view that already failed is that failure again, not a new one.
                 let cascade = failed.iter().find(|f| msg.contains(f.as_str())).cloned();
                 match cascade {
-                    Some(parent) => note(&mut outcomes, &v.name, "cascade", &rules_s, format!("via {parent}")),
+                    Some(parent) => note(
+                        &mut outcomes,
+                        &v.name,
+                        "cascade",
+                        &rules_s,
+                        format!("via {parent}"),
+                    ),
                     None => note(&mut outcomes, &v.name, kind, &rules_s, first_line(&msg)),
                 }
                 failed.insert(v.name.clone());
@@ -867,13 +1075,26 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
                 .iter()
                 .zip(f_rows.iter())
                 .find(|(a, b)| a != b)
-                .map(|(a, b)| format!("duck[{}] df[{}]", a.replace('\u{1f}', "|"), b.replace('\u{1f}', "|")))
+                .map(|(a, b)| {
+                    format!(
+                        "duck[{}] df[{}]",
+                        a.replace('\u{1f}', "|"),
+                        b.replace('\u{1f}', "|")
+                    )
+                })
                 .unwrap_or_default();
-            note(&mut outcomes, &v.name, "mismatch", &rules_s, format!("{} rows vs {}: {}", d_rows.len(), f_rows.len(), diff));
+            note(
+                &mut outcomes,
+                &v.name,
+                "mismatch",
+                &rules_s,
+                format!("{} rows vs {}: {}", d_rows.len(), f_rows.len(), diff),
+            );
             failed.insert(v.name.clone());
             continue;
         }
-        df.ctx.register_table(&v.name, Arc::new(ViewTable::new(logical, None)))?;
+        df.ctx
+            .register_table(&v.name, Arc::new(ViewTable::new(logical, None)))?;
 
         // Parity held, so time it: both warmed by the parity pass, three interleaved repeats.
         let (mut ds, mut fs) = (Vec::new(), Vec::new());
@@ -882,9 +1103,16 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
             let t = Instant::now();
             let n = duck_arrow(&duck, &v.body)?;
             ds.push(t.elapsed().as_millis());
-            anyhow::ensure!(n == d_rows.len(), "{}: DuckDB returned {n} rows timed, {} at parity", v.name, d_rows.len());
+            anyhow::ensure!(
+                n == d_rows.len(),
+                "{}: DuckDB returned {n} rows timed, {} at parity",
+                v.name,
+                d_rows.len()
+            );
             let (_, _, b) = df_run(&df.ctx, &stmt).await.map_err(|e| match e {
-                DfErr::Plan(m) | DfErr::Exec(m) => anyhow::anyhow!("{}: repeat failed: {m}", v.name),
+                DfErr::Plan(m) | DfErr::Exec(m) => {
+                    anyhow::anyhow!("{}: repeat failed: {m}", v.name)
+                }
             })?;
             fs.push(b.total().as_millis());
             last = b;
@@ -909,10 +1137,17 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
             last.agg_join.as_millis(),
             last.other.as_millis(),
         );
-        runnable.push(Runnable { name: v.name.clone(), stmt, duck_ms: dm, df_ms: fm });
+        runnable.push(Runnable {
+            name: v.name.clone(),
+            stmt,
+            duck_ms: dm,
+            df_ms: fm,
+        });
     }
 
-    let (sd, sf): (u128, u128) = runnable.iter().fold((0, 0), |(a, b), r| (a + r.duck_ms, b + r.df_ms));
+    let (sd, sf): (u128, u128) = runnable
+        .iter()
+        .fold((0, 0), |(a, b), r| (a + r.duck_ms, b + r.df_ms));
     println!(
         "\n{}/{} statements run on DataFusion with parity; time-weighted ratio {:.2} ({} ms DataFusion against {} ms DuckDB)",
         runnable.len(),
@@ -923,14 +1158,22 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
     );
     println!(
         "outcomes: {}",
-        outcomes.iter().map(|(k, n)| format!("{k}={n}")).collect::<Vec<_>>().join(" ")
+        outcomes
+            .iter()
+            .map(|(k, n)| format!("{k}={n}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     );
     println!(
         "rewrite rules: {}",
         if rule_counts.is_empty() {
             "none".to_string()
         } else {
-            rule_counts.iter().map(|(k, n)| format!("{k}={n}")).collect::<Vec<_>>().join(" ")
+            rule_counts
+                .iter()
+                .map(|(k, n)| format!("{k}={n}"))
+                .collect::<Vec<_>>()
+                .join(" ")
         }
     );
     println!("  hugeint    CAST(x AS HUGEINT) -> CAST(x AS DECIMAL(38,0)), the same 128-bit width");
@@ -946,7 +1189,10 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
 
 /// The worst ratios, re-run under every remedy on the list, against DataFusion's own defaults.
 async fn diagnose(nest: &Nest, runnable: &[Runnable], budget: usize) -> anyhow::Result<()> {
-    let worst_n = std::env::var("DF_WORST").ok().and_then(|s| s.parse().ok()).unwrap_or(6);
+    let worst_n = std::env::var("DF_WORST")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6);
     // A statement DuckDB answers in a millisecond has a ratio made of timer noise.
     let mut worst: Vec<&Runnable> = runnable.iter().filter(|r| r.duck_ms >= 20).collect();
     worst.sort_by(|a, b| {
@@ -965,20 +1211,59 @@ async fn diagnose(nest: &Nest, runnable: &[Runnable], budget: usize) -> anyhow::
     );
     println!("  DataFusion's defaults first (ListingTable, statistics on, 50 MiB footer cache); each row changes one thing.");
     let configs = [
-        DfConfig { provider: Provider::Listing, collect_statistics: true, metadata_cache_bytes: 50 << 20 },
-        DfConfig { provider: Provider::Listing, collect_statistics: false, metadata_cache_bytes: 50 << 20 },
-        DfConfig { provider: Provider::Listing, collect_statistics: false, metadata_cache_bytes: 0 },
-        DfConfig { provider: Provider::Listing, collect_statistics: false, metadata_cache_bytes: 1 << 30 },
-        DfConfig { provider: Provider::Listing, collect_statistics: true, metadata_cache_bytes: 1 << 30 },
-        DfConfig { provider: Provider::Files { groups: budget }, collect_statistics: false, metadata_cache_bytes: 1 << 30 },
-        DfConfig { provider: Provider::Files { groups: 1 }, collect_statistics: false, metadata_cache_bytes: 1 << 30 },
-        DfConfig { provider: Provider::Files { groups: budget }, collect_statistics: false, metadata_cache_bytes: 0 },
-        DfConfig { provider: Provider::Morsels { groups: budget }, collect_statistics: false, metadata_cache_bytes: 0 },
+        DfConfig {
+            provider: Provider::Listing,
+            collect_statistics: true,
+            metadata_cache_bytes: 50 << 20,
+        },
+        DfConfig {
+            provider: Provider::Listing,
+            collect_statistics: false,
+            metadata_cache_bytes: 50 << 20,
+        },
+        DfConfig {
+            provider: Provider::Listing,
+            collect_statistics: false,
+            metadata_cache_bytes: 0,
+        },
+        DfConfig {
+            provider: Provider::Listing,
+            collect_statistics: false,
+            metadata_cache_bytes: 1 << 30,
+        },
+        DfConfig {
+            provider: Provider::Listing,
+            collect_statistics: true,
+            metadata_cache_bytes: 1 << 30,
+        },
+        DfConfig {
+            provider: Provider::Files { groups: budget },
+            collect_statistics: false,
+            metadata_cache_bytes: 1 << 30,
+        },
+        DfConfig {
+            provider: Provider::Files { groups: 1 },
+            collect_statistics: false,
+            metadata_cache_bytes: 1 << 30,
+        },
+        DfConfig {
+            provider: Provider::Files { groups: budget },
+            collect_statistics: false,
+            metadata_cache_bytes: 0,
+        },
+        DfConfig {
+            provider: Provider::Morsels { groups: budget },
+            collect_statistics: false,
+            metadata_cache_bytes: 0,
+        },
     ];
 
     let mut header = format!("{:<34} {:>7}", "configuration", "reg_ms");
     for w in &worst {
-        header.push_str(&format!(" {:>21}", w.name.chars().take(21).collect::<String>()));
+        header.push_str(&format!(
+            " {:>21}",
+            w.name.chars().take(21).collect::<String>()
+        ));
     }
     header.push_str(&format!(" {:>7} {:>6}", "sum_ms", "ratio"));
     println!("{header}");
@@ -986,7 +1271,11 @@ async fn diagnose(nest: &Nest, runnable: &[Runnable], budget: usize) -> anyhow::
     for w in &worst {
         duck_line.push_str(&format!(" {:>21}", w.duck_ms));
     }
-    duck_line.push_str(&format!(" {:>7} {:>6}", worst.iter().map(|w| w.duck_ms).sum::<u128>(), "1.00"));
+    duck_line.push_str(&format!(
+        " {:>7} {:>6}",
+        worst.iter().map(|w| w.duck_ms).sum::<u128>(),
+        "1.00"
+    ));
     println!("{duck_line}");
 
     let mut baseline: Option<u128> = None;
@@ -994,15 +1283,23 @@ async fn diagnose(nest: &Nest, runnable: &[Runnable], budget: usize) -> anyhow::
         let df = match df_session(cfg, nest, budget).await {
             Ok(d) => d,
             Err(e) => {
-                println!("{:<34} failed to register: {}", cfg.label(), first_line(&e.to_string()));
+                println!(
+                    "{:<34} failed to register: {}",
+                    cfg.label(),
+                    first_line(&e.to_string())
+                );
                 continue;
             }
         };
         // Views are re-registered in order so dependents resolve, exactly as in the main pass.
         for r in runnable {
             match df_run(&df.ctx, &r.stmt).await {
-                Ok((logical, _, _)) => df.ctx.register_table(&r.name, Arc::new(ViewTable::new(logical, None)))?,
-                Err(DfErr::Plan(m) | DfErr::Exec(m)) => anyhow::bail!("{}: {} under {}", r.name, first_line(&m), cfg.label()),
+                Ok((logical, _, _)) => df
+                    .ctx
+                    .register_table(&r.name, Arc::new(ViewTable::new(logical, None)))?,
+                Err(DfErr::Plan(m) | DfErr::Exec(m)) => {
+                    anyhow::bail!("{}: {} under {}", r.name, first_line(&m), cfg.label())
+                }
             };
         }
         let mut line = format!("{:<34} {:>7}", cfg.label(), df.register_ms);
@@ -1034,9 +1331,16 @@ async fn diagnose(nest: &Nest, runnable: &[Runnable], budget: usize) -> anyhow::
             ));
         }
         let base = *baseline.get_or_insert(sum);
-        line.push_str(&format!(" {:>7} {:>6.2}", sum, sum as f64 / base.max(1) as f64));
+        line.push_str(&format!(
+            " {:>7} {:>6.2}",
+            sum,
+            sum as f64 / base.max(1) as f64
+        ));
         println!("{line}");
-        println!("{:<34} {:>7}{detail}", "  plan+list/footers/open/scan/rest", "");
+        println!(
+            "{:<34} {:>7}{detail}",
+            "  plan+list/footers/open/scan/rest", ""
+        );
     }
     println!("\nratio is against the first row; plan+list is wall, the rest are per-file elapsed summed over {budget} partitions and overlap under async I/O");
     Ok(())

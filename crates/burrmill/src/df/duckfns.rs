@@ -3,12 +3,16 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, Int64Builder, Int8Builder, ListBuilder, StringBuilder};
+use arrow::array::{
+    Array, ArrayRef, AsArray, Int8Builder, Int64Builder, ListBuilder, StringBuilder,
+};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, TimeUnit};
 use chrono::{DateTime, Datelike, NaiveDateTime, Timelike};
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+};
 
 fn udf(f: impl ScalarUDFImpl + 'static) -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::from(f))
@@ -17,13 +21,29 @@ fn udf(f: impl ScalarUDFImpl + 'static) -> Arc<ScalarUDF> {
 pub fn all() -> Vec<Arc<ScalarUDF>> {
     vec![
         udf(Strftime(Signature::user_defined(Volatility::Immutable))),
-        udf(DateDiff(Signature::user_defined(Volatility::Immutable), vec!["datediff".into()])),
-        udf(RegexpExtract(Signature::user_defined(Volatility::Immutable))),
+        udf(DateDiff(
+            Signature::user_defined(Volatility::Immutable),
+            vec!["datediff".into()],
+        )),
+        udf(RegexpExtract(Signature::user_defined(
+            Volatility::Immutable,
+        ))),
         udf(Sign(Signature::user_defined(Volatility::Immutable))),
-        udf(RegexpReplace(Signature::user_defined(Volatility::Immutable))),
-        udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::Extract }),
-        udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::ExtractString }),
-        udf(Json { sig: Signature::user_defined(Volatility::Immutable), kind: JsonKind::Type }),
+        udf(RegexpReplace(Signature::user_defined(
+            Volatility::Immutable,
+        ))),
+        udf(Json {
+            sig: Signature::user_defined(Volatility::Immutable),
+            kind: JsonKind::Extract,
+        }),
+        udf(Json {
+            sig: Signature::user_defined(Volatility::Immutable),
+            kind: JsonKind::ExtractString,
+        }),
+        udf(Json {
+            sig: Signature::user_defined(Volatility::Immutable),
+            kind: JsonKind::Type,
+        }),
         udf(TryMark(Signature::user_defined(Volatility::Immutable))),
         udf(FromJson(Signature::user_defined(Volatility::Immutable))),
         udf(Len(Signature::user_defined(Volatility::Immutable))),
@@ -60,7 +80,9 @@ impl ScalarUDFImpl for Typeof {
             DataType::Null => "\"NULL\"".to_string(),
             t => super::tables::duckdb_type(&t),
         };
-        Ok(ColumnarValue::Scalar(datafusion_common::ScalarValue::Utf8(Some(name))))
+        Ok(ColumnarValue::Scalar(datafusion_common::ScalarValue::Utf8(
+            Some(name),
+        )))
     }
 }
 
@@ -79,7 +101,9 @@ impl ScalarUDFImpl for Hex {
     fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
         match args {
             [t] if t.is_integer() || t.is_null() => Ok(vec![DataType::Int64]),
-            [DataType::Binary | DataType::LargeBinary | DataType::BinaryView] => Ok(vec![DataType::Binary]),
+            [DataType::Binary | DataType::LargeBinary | DataType::BinaryView] => {
+                Ok(vec![DataType::Binary])
+            }
             [t] if matches!(t, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
                 Ok(vec![DataType::Utf8])
             }
@@ -98,19 +122,31 @@ impl ScalarUDFImpl for Hex {
             DataType::Int64 => {
                 let a = a.as_primitive::<arrow::datatypes::Int64Type>();
                 for i in 0..a.len() {
-                    if a.is_null(i) { b.append_null() } else { b.append_value(format!("{:X}", a.value(i))) }
+                    if a.is_null(i) {
+                        b.append_null()
+                    } else {
+                        b.append_value(format!("{:X}", a.value(i)))
+                    }
                 }
             }
             DataType::Binary => {
                 let a = a.as_binary::<i32>();
                 for i in 0..a.len() {
-                    if a.is_null(i) { b.append_null() } else { b.append_value(bytes(a.value(i))) }
+                    if a.is_null(i) {
+                        b.append_null()
+                    } else {
+                        b.append_value(bytes(a.value(i)))
+                    }
                 }
             }
             _ => {
                 let a = a.as_string::<i32>();
                 for i in 0..a.len() {
-                    if a.is_null(i) { b.append_null() } else { b.append_value(bytes(a.value(i).as_bytes())) }
+                    if a.is_null(i) {
+                        b.append_null()
+                    } else {
+                        b.append_value(bytes(a.value(i).as_bytes()))
+                    }
                 }
             }
         }
@@ -162,7 +198,10 @@ fn scalar_out(scalar: bool, out: ArrayRef) -> Result<ColumnarValue> {
 }
 
 fn is_time(t: &DataType) -> bool {
-    matches!(t, DataType::Timestamp(..) | DataType::Date32 | DataType::Date64)
+    matches!(
+        t,
+        DataType::Timestamp(..) | DataType::Date32 | DataType::Date64
+    )
 }
 
 /// Any timestamp or date as microseconds since the epoch, UTC.
@@ -221,7 +260,11 @@ impl ScalarUDFImpl for TimestampText {
         let us = us.as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
         let mut b = StringBuilder::new();
         for i in 0..us.len() {
-            match us.is_valid(i).then(|| timestamp_text(us.value(i), zoned)).flatten() {
+            match us
+                .is_valid(i)
+                .then(|| timestamp_text(us.value(i), zoned))
+                .flatten()
+            {
                 Some(s) => b.append_value(s),
                 None => b.append_null(),
             }
@@ -359,7 +402,10 @@ impl ScalarUDFImpl for Json {
         Ok(DataType::Utf8)
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let doc = cast(&arrays[0], &DataType::Utf8)?;
         let doc = doc.as_string::<i32>();
@@ -369,9 +415,9 @@ impl ScalarUDFImpl for Json {
             let steps = match path {
                 None => Some(vec![]),
                 Some(p) if p.is_null(i) => None,
-                Some(p) if p.data_type().is_integer() => {
-                    Some(vec![Step::Index(p.as_primitive::<arrow::datatypes::Int64Type>().value(i))])
-                }
+                Some(p) if p.data_type().is_integer() => Some(vec![Step::Index(
+                    p.as_primitive::<arrow::datatypes::Int64Type>().value(i),
+                )]),
                 Some(p) => {
                     let text = cast(p, &DataType::Utf8)?;
                     let text = text.as_string::<i32>().value(i).to_string();
@@ -397,9 +443,11 @@ impl ScalarUDFImpl for Json {
                 (JsonKind::Type, Some(v)) => b.append_value(json_type_name(v)),
                 (JsonKind::ExtractString, Some(serde_json::Value::Null)) => b.append_null(),
                 (JsonKind::ExtractString, Some(serde_json::Value::String(s))) => b.append_value(s),
-                (_, Some(v)) => b.append_value(serde_json::to_string(v).map_err(|e| {
-                    datafusion_common::DataFusionError::Execution(e.to_string())
-                })?),
+                (_, Some(v)) => {
+                    b.append_value(serde_json::to_string(v).map_err(|e| {
+                        datafusion_common::DataFusionError::Execution(e.to_string())
+                    })?)
+                }
             }
         }
         scalar_out(scalar, Arc::new(b.finish()))
@@ -426,9 +474,14 @@ fn structure_type(v: &serde_json::Value) -> Result<DataType> {
             "FLOAT" | "REAL" => DataType::Float32,
             other => return plan_err!("from_json: type {other} is not supported here"),
         },
-        serde_json::Value::Array(a) if a.len() == 1 => DataType::List(Arc::new(Field::new("l", structure_type(&a[0])?, true))),
+        serde_json::Value::Array(a) if a.len() == 1 => {
+            DataType::List(Arc::new(Field::new("l", structure_type(&a[0])?, true)))
+        }
         serde_json::Value::Object(m) => DataType::Struct(
-            m.iter().map(|(k, t)| Ok(Field::new(k, structure_type(t)?, true))).collect::<Result<Vec<_>>>()?.into(),
+            m.iter()
+                .map(|(k, t)| Ok(Field::new(k, structure_type(t)?, true)))
+                .collect::<Result<Vec<_>>>()?
+                .into(),
         ),
         other => return plan_err!("from_json: structure {other} is not one DuckDB reads"),
     })
@@ -446,7 +499,10 @@ fn json_array(t: &DataType, values: &[Option<&serde_json::Value>]) -> Result<Arr
     };
     let int = |v: &V| -> Option<i128> {
         match v {
-            V::Number(n) => n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from)),
+            V::Number(n) => n
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| n.as_u64().map(i128::from)),
             V::String(s) => s.trim().parse::<i128>().ok(),
             V::Bool(b) => Some(*b as i128),
             _ => None,
@@ -469,7 +525,12 @@ fn json_array(t: &DataType, values: &[Option<&serde_json::Value>]) -> Result<Arr
         }};
     }
     Ok(match t {
-        DataType::Utf8 => Arc::new(values.iter().map(|v| v.and_then(text)).collect::<StringArray>()),
+        DataType::Utf8 => Arc::new(
+            values
+                .iter()
+                .map(|v| v.and_then(text))
+                .collect::<StringArray>(),
+        ),
         DataType::Boolean => Arc::new(
             values
                 .iter()
@@ -497,8 +558,18 @@ fn json_array(t: &DataType, values: &[Option<&serde_json::Value>]) -> Result<Arr
             }
             Arc::new(b.finish().with_precision_and_scale(*p, *sc)?)
         }
-        DataType::Float64 => Arc::new(values.iter().map(|v| v.and_then(float)).collect::<Float64Array>()),
-        DataType::Float32 => Arc::new(values.iter().map(|v| v.and_then(float).map(|f| f as f32)).collect::<Float32Array>()),
+        DataType::Float64 => Arc::new(
+            values
+                .iter()
+                .map(|v| v.and_then(float))
+                .collect::<Float64Array>(),
+        ),
+        DataType::Float32 => Arc::new(
+            values
+                .iter()
+                .map(|v| v.and_then(float).map(|f| f as f32))
+                .collect::<Float32Array>(),
+        ),
         DataType::List(f) => {
             let mut offsets = vec![0i32];
             let mut items: Vec<Option<&V>> = Vec::new();
@@ -522,7 +593,10 @@ fn json_array(t: &DataType, values: &[Option<&serde_json::Value>]) -> Result<Arr
             )?)
         }
         DataType::Struct(fields) => {
-            let valid: Vec<bool> = values.iter().map(|v| matches!(v, Some(V::Object(_)))).collect();
+            let valid: Vec<bool> = values
+                .iter()
+                .map(|v| matches!(v, Some(V::Object(_))))
+                .collect();
             let children = fields
                 .iter()
                 .map(|f| {
@@ -536,7 +610,11 @@ fn json_array(t: &DataType, values: &[Option<&serde_json::Value>]) -> Result<Arr
                     json_array(f.data_type(), &vs)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Arc::new(StructArray::try_new(fields.clone(), children, Some(arrow::buffer::NullBuffer::from(valid)))?)
+            Arc::new(StructArray::try_new(
+                fields.clone(),
+                children,
+                Some(arrow::buffer::NullBuffer::from(valid)),
+            )?)
         }
         other => return exec_err!("from_json: {other} is not supported here"),
     })
@@ -562,19 +640,30 @@ impl ScalarUDFImpl for FromJson {
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
         plan_err!("from_json's type comes from its structure")
     }
-    fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<arrow::datatypes::FieldRef> {
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<arrow::datatypes::FieldRef> {
         let Some(Some(structure)) = args.scalar_arguments.get(1) else {
             return plan_err!("from_json needs its structure as a literal");
         };
         let Some(text) = structure.try_as_str().flatten() else {
             return plan_err!("from_json needs its structure as text");
         };
-        let v: serde_json::Value = serde_json::from_str(text)
-            .map_err(|e| datafusion_common::DataFusionError::Plan(format!("from_json structure: {e}")))?;
-        Ok(Arc::new(arrow::datatypes::Field::new(self.name(), structure_type(&v)?, true)))
+        let v: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+            datafusion_common::DataFusionError::Plan(format!("from_json structure: {e}"))
+        })?;
+        Ok(Arc::new(arrow::datatypes::Field::new(
+            self.name(),
+            structure_type(&v)?,
+            true,
+        )))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let doc = cast(&arrays[0], &DataType::Utf8)?;
         let doc = doc.as_string::<i32>();
@@ -583,9 +672,13 @@ impl ScalarUDFImpl for FromJson {
                 if doc.is_null(i) {
                     return Ok(None);
                 }
-                serde_json::from_str::<serde_json::Value>(doc.value(i)).map(Some).map_err(|e| {
-                    datafusion_common::DataFusionError::Execution(format!("Invalid Input Error: Malformed JSON: {e}"))
-                })
+                serde_json::from_str::<serde_json::Value>(doc.value(i))
+                    .map(Some)
+                    .map_err(|e| {
+                        datafusion_common::DataFusionError::Execution(format!(
+                            "Invalid Input Error: Malformed JSON: {e}"
+                        ))
+                    })
             })
             .collect::<Result<Vec<_>>>()?;
         let refs: Vec<Option<&serde_json::Value>> = parsed.iter().map(|v| v.as_ref()).collect();
@@ -691,7 +784,10 @@ impl ScalarUDFImpl for TryCall {
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
         self.inner.return_type(args)
     }
-    fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<arrow::datatypes::FieldRef> {
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<arrow::datatypes::FieldRef> {
         let f = self.inner.return_field_from_args(args)?;
         Ok(Arc::new(f.as_ref().clone().with_nullable(true)))
     }
@@ -714,7 +810,11 @@ impl ScalarUDFImpl for TryCall {
                 number_rows: 1,
                 ..args.clone()
             };
-            let row = match self.inner.invoke_with_args(one).and_then(|v| v.into_array(1)) {
+            let row = match self
+                .inner
+                .invoke_with_args(one)
+                .and_then(|v| v.into_array(1))
+            {
                 Ok(v) => v,
                 Err(_) => arrow::array::new_null_array(args.return_field.data_type(), 1),
             };
@@ -722,7 +822,9 @@ impl ScalarUDFImpl for TryCall {
         }
         let refs: Vec<&dyn Array> = rows.iter().map(|r| r.as_ref()).collect();
         if refs.is_empty() {
-            return Ok(ColumnarValue::Array(arrow::array::new_empty_array(args.return_field.data_type())));
+            return Ok(ColumnarValue::Array(arrow::array::new_empty_array(
+                args.return_field.data_type(),
+            )));
         }
         Ok(ColumnarValue::Array(arrow::compute::concat(&refs)?))
     }
@@ -739,7 +841,10 @@ pub struct ToTimestamp {
 
 impl ToTimestamp {
     pub fn udf(inner: Arc<ScalarUDF>) -> Arc<ScalarUDF> {
-        udf(Self { sig: Signature::user_defined(Volatility::Immutable), inner })
+        udf(Self {
+            sig: Signature::user_defined(Volatility::Immutable),
+            inner,
+        })
     }
 }
 
@@ -762,19 +867,31 @@ impl ScalarUDFImpl for ToTimestamp {
     }
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
         match args {
-            [DataType::Int64 | DataType::Float64] => Ok(DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))),
+            [DataType::Int64 | DataType::Float64] => Ok(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some("UTC".into()),
+            )),
             _ => self.inner.return_type(args),
         }
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         use arrow::array::TimestampMicrosecondBuilder;
-        if args.args.len() != 1 || !matches!(args.args[0].data_type(), DataType::Int64 | DataType::Float64) {
+        if args.args.len() != 1
+            || !matches!(
+                args.args[0].data_type(),
+                DataType::Int64 | DataType::Float64
+            )
+        {
             return self.inner.invoke_with_args(args);
         }
         let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
         let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
         let mut b = TimestampMicrosecondBuilder::with_capacity(a.len());
-        let out_of_range = |v: String| exec_err!("Conversion Error: Could not convert epoch seconds {v} to TIMESTAMP WITH TIME ZONE");
+        let out_of_range = |v: String| {
+            exec_err!(
+                "Conversion Error: Could not convert epoch seconds {v} to TIMESTAMP WITH TIME ZONE"
+            )
+        };
         for i in 0..a.len() {
             if a.is_null(i) {
                 b.append_null();
@@ -807,10 +924,28 @@ impl ScalarUDFImpl for ToTimestamp {
 /// DuckDB's `strftime` specifiers, which are not chrono's: `%f` is microseconds and `%g`
 /// milliseconds. One it does not know is refused, as DuckDB refuses it.
 fn strftime(t: NaiveDateTime, fmt: &str) -> Result<String> {
-    const DAYS: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    const DAYS: [&str; 7] = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
     const MONTHS: [&str; 12] = [
-        "January", "February", "March", "April", "May", "June", "July", "August", "September",
-        "October", "November", "December",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ];
     let mut out = String::new();
     let mut chars = fmt.chars();
@@ -824,8 +959,18 @@ fn strftime(t: NaiveDateTime, fmt: &str) -> Result<String> {
         if bare {
             spec = chars.next();
         }
-        let two = |n: u32| if bare { n.to_string() } else { format!("{n:02}") };
-        let hour12 = if t.hour() % 12 == 0 { 12 } else { t.hour() % 12 };
+        let two = |n: u32| {
+            if bare {
+                n.to_string()
+            } else {
+                format!("{n:02}")
+            }
+        };
+        let hour12 = if t.hour() % 12 == 0 {
+            12
+        } else {
+            t.hour() % 12
+        };
         let wd = t.weekday().num_days_from_monday() as usize;
         match spec {
             Some('Y') => out.push_str(&format!("{:04}", t.year())),
@@ -837,7 +982,11 @@ fn strftime(t: NaiveDateTime, fmt: &str) -> Result<String> {
             Some('M') => out.push_str(&two(t.minute())),
             Some('S') => out.push_str(&two(t.second())),
             Some('p') => out.push_str(if t.hour() < 12 { "AM" } else { "PM" }),
-            Some('j') => out.push_str(&if bare { t.ordinal().to_string() } else { format!("{:03}", t.ordinal()) }),
+            Some('j') => out.push_str(&if bare {
+                t.ordinal().to_string()
+            } else {
+                format!("{:03}", t.ordinal())
+            }),
             Some('b') => out.push_str(&MONTHS[t.month0() as usize][..3]),
             Some('B') => out.push_str(MONTHS[t.month0() as usize]),
             Some('a') => out.push_str(&DAYS[wd][..3]),
@@ -878,7 +1027,10 @@ impl ScalarUDFImpl for Strftime {
         Ok(DataType::Utf8)
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let us = micros(&arrays[0])?;
         let us = us.as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
@@ -900,7 +1052,11 @@ impl ScalarUDFImpl for Strftime {
 }
 
 fn coerce_text(t: &DataType) -> DataType {
-    if matches!(t, DataType::Utf8View | DataType::LargeUtf8) { t.clone() } else { DataType::Utf8 }
+    if matches!(t, DataType::Utf8View | DataType::LargeUtf8) {
+        t.clone()
+    } else {
+        DataType::Utf8
+    }
 }
 
 /// Boundaries crossed between `a` and `b`, as DuckDB counts them: calendar months for month,
@@ -951,7 +1107,10 @@ impl ScalarUDFImpl for DateDiff {
         Ok(DataType::Int64)
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let part = cast(&arrays[0], &DataType::Utf8)?;
         let part = part.as_string::<i32>();
@@ -991,7 +1150,9 @@ impl ScalarUDFImpl for RegexpExtract {
     fn coerce_types(&self, args: &[DataType]) -> Result<Vec<DataType>> {
         match args {
             [s, p] => Ok(vec![coerce_text(s), coerce_text(p)]),
-            [s, p, g] if g.is_integer() || g.is_null() => Ok(vec![coerce_text(s), coerce_text(p), DataType::Int64]),
+            [s, p, g] if g.is_integer() || g.is_null() => {
+                Ok(vec![coerce_text(s), coerce_text(p), DataType::Int64])
+            }
             _ => plan_err!("regexp_extract takes a string, a pattern and an optional group"),
         }
     }
@@ -999,13 +1160,19 @@ impl ScalarUDFImpl for RegexpExtract {
         Ok(DataType::Utf8)
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let s = cast(&arrays[0], &DataType::Utf8)?;
         let s = s.as_string::<i32>();
         let p = cast(&arrays[1], &DataType::Utf8)?;
         let p = p.as_string::<i32>();
-        let g = arrays.get(2).map(|g| cast(g, &DataType::Int64)).transpose()?;
+        let g = arrays
+            .get(2)
+            .map(|g| cast(g, &DataType::Int64))
+            .transpose()?;
         let mut cache: Option<(String, regex::Regex)> = None;
         let mut b = StringBuilder::new();
         for i in 0..s.len() {
@@ -1019,8 +1186,9 @@ impl ScalarUDFImpl for RegexpExtract {
                 .map_or(0, |g| if g.is_null(i) { 0 } else { g.value(i) });
             let pat = p.value(i);
             if cache.as_ref().is_none_or(|(c, _)| c != pat) {
-                let re = regex::Regex::new(pat)
-                    .map_err(|e| datafusion_common::DataFusionError::Execution(format!("regexp_extract: {e}")))?;
+                let re = regex::Regex::new(pat).map_err(|e| {
+                    datafusion_common::DataFusionError::Execution(format!("regexp_extract: {e}"))
+                })?;
                 cache = Some((pat.to_string(), re));
             }
             let re = &cache.as_ref().expect("compiled").1;
@@ -1080,11 +1248,22 @@ impl ScalarUDFImpl for RegexpReplace {
         Ok(DataType::Utf8)
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
-        let text: Vec<ArrayRef> = arrays.iter().map(|a| cast(a, &DataType::Utf8)).collect::<std::result::Result<_, _>>()?;
+        let text: Vec<ArrayRef> = arrays
+            .iter()
+            .map(|a| cast(a, &DataType::Utf8))
+            .collect::<std::result::Result<_, _>>()?;
         let col = |i: usize| text.get(i).map(|a| a.as_string::<i32>());
-        let (s, p, r, o) = (col(0).expect("s"), col(1).expect("p"), col(2).expect("r"), col(3));
+        let (s, p, r, o) = (
+            col(0).expect("s"),
+            col(1).expect("p"),
+            col(2).expect("r"),
+            col(3),
+        );
         let mut cache: Option<(String, String, regex::Regex)> = None;
         let mut b = StringBuilder::new();
         for i in 0..s.len() {
@@ -1094,13 +1273,20 @@ impl ScalarUDFImpl for RegexpReplace {
             }
             let opts = o.map_or("", |o| o.value(i));
             let (pat, global) = (p.value(i), opts.contains('g'));
-            if cache.as_ref().is_none_or(|(cp, co, _)| cp != pat || co != opts) {
+            if cache
+                .as_ref()
+                .is_none_or(|(cp, co, _)| cp != pat || co != opts)
+            {
                 let re = regex::RegexBuilder::new(pat)
                     .case_insensitive(opts.contains('i') && !opts.contains('c'))
                     .dot_matches_new_line(opts.contains('s'))
                     .multi_line(opts.contains('m'))
                     .build()
-                    .map_err(|e| datafusion_common::DataFusionError::Execution(format!("regexp_replace: {e}")))?;
+                    .map_err(|e| {
+                        datafusion_common::DataFusionError::Execution(format!(
+                            "regexp_replace: {e}"
+                        ))
+                    })?;
                 cache = Some((pat.to_string(), opts.to_string(), re));
             }
             let re = &cache.as_ref().expect("compiled").2;
@@ -1163,7 +1349,13 @@ impl ScalarUDFImpl for Sign {
                 b.append_null();
             } else {
                 let v = a.value(i);
-                b.append_value(if v > 0.0 { 1 } else if v < 0.0 { -1 } else { 0 });
+                b.append_value(if v > 0.0 {
+                    1
+                } else if v < 0.0 {
+                    -1
+                } else {
+                    0
+                });
             }
         }
         scalar_out(scalar, Arc::new(b.finish()))
@@ -1199,7 +1391,9 @@ fn duck_substr(s: &str, mut start: i64, len: Option<i64>) -> String {
             return String::new();
         }
         let end = end.min(n + 1);
-        return chars[(begin as usize) - 1..(end as usize) - 1].iter().collect();
+        return chars[(begin as usize) - 1..(end as usize) - 1]
+            .iter()
+            .collect();
     }
     if len == 0 || start > n {
         return String::new();
@@ -1240,12 +1434,17 @@ impl ScalarUDFImpl for Substr {
         Ok(DataType::Utf8)
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let s = cast(&arrays[0], &DataType::Utf8)?;
         let s = s.as_string::<i32>();
         let start = arrays[1].as_primitive::<arrow::datatypes::Int64Type>();
-        let len = arrays.get(2).map(|a| a.as_primitive::<arrow::datatypes::Int64Type>());
+        let len = arrays
+            .get(2)
+            .map(|a| a.as_primitive::<arrow::datatypes::Int64Type>());
         let mut b = StringBuilder::new();
         for i in 0..s.len() {
             let Some(len) = len else {
@@ -1288,10 +1487,17 @@ impl ScalarUDFImpl for StringSplit {
         }
     }
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))))
+        Ok(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Utf8,
+            true,
+        ))))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let s = cast(&arrays[0], &DataType::Utf8)?;
         let d = cast(&arrays[1], &DataType::Utf8)?;
@@ -1330,7 +1536,10 @@ impl ScalarUDFImpl for StringSplit {
 }
 
 fn is_text(t: &DataType) -> bool {
-    matches!(t, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null)
+    matches!(
+        t,
+        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null
+    )
 }
 
 #[cfg(test)]
@@ -1340,32 +1549,69 @@ mod tests {
     // Each as DuckDB 1.5 printed it (`duck-eval`).
     #[test]
     fn formats_and_differences_as_duckdb() {
-        let t = NaiveDateTime::parse_from_str("2024-03-05 07:08:09.123", "%Y-%m-%d %H:%M:%S%.f").unwrap();
+        let t = NaiveDateTime::parse_from_str("2024-03-05 07:08:09.123", "%Y-%m-%d %H:%M:%S%.f")
+            .unwrap();
         assert_eq!(
-            strftime(t, "%Y-%m-%d %H:%M:%S|%b %d|%a|%j|%y|%I %p|%-d|%A %B|%f|%g|%%").unwrap(),
+            strftime(
+                t,
+                "%Y-%m-%d %H:%M:%S|%b %d|%a|%j|%y|%I %p|%-d|%A %B|%f|%g|%%"
+            )
+            .unwrap(),
             "2024-03-05 07:08:09|Mar 05|Tue|065|24|07 AM|5|Tuesday March|123000|123|%"
         );
         assert!(strftime(t, "%e").is_err());
-        let us = |s: &str| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f").unwrap().and_utc().timestamp_micros();
-        let d = |p: &str, a: &str, b: &str| date_diff(p, naive(us(a)).unwrap(), naive(us(b)).unwrap(), us(a), us(b)).unwrap();
+        let us = |s: &str| {
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+                .unwrap()
+                .and_utc()
+                .timestamp_micros()
+        };
+        let d = |p: &str, a: &str, b: &str| {
+            date_diff(
+                p,
+                naive(us(a)).unwrap(),
+                naive(us(b)).unwrap(),
+                us(a),
+                us(b),
+            )
+            .unwrap()
+        };
         assert_eq!(d("day", "2024-01-01 23:00:00", "2024-01-02 01:00:00"), 1);
         assert_eq!(d("hour", "2024-01-01 23:59:00", "2024-01-02 00:01:00"), 1);
         assert_eq!(d("month", "2024-01-31 00:00:00", "2024-02-01 00:00:00"), 1);
         assert_eq!(d("year", "2023-12-31 00:00:00", "2024-01-01 00:00:00"), 1);
         assert_eq!(d("day", "2024-01-05 00:00:00", "2024-01-01 00:00:00"), -4);
         assert_eq!(d("minute", "2024-01-01 00:00:59", "2024-01-01 00:01:00"), 1);
-        assert_eq!(d("quarter", "2024-03-31 00:00:00", "2024-04-01 00:00:00"), 1);
+        assert_eq!(
+            d("quarter", "2024-03-31 00:00:00", "2024-04-01 00:00:00"),
+            1
+        );
         assert_eq!(d("week", "2024-01-06 00:00:00", "2024-01-08 00:00:00"), 0);
-        assert_eq!(d("second", "2024-01-01 00:00:00.9", "2024-01-01 00:00:01.1"), 1);
-        assert_eq!(timestamp_text(1704067200_000_000, true).unwrap(), "2024-01-01 00:00:00+00");
+        assert_eq!(
+            d("second", "2024-01-01 00:00:00.9", "2024-01-01 00:00:01.1"),
+            1
+        );
+        assert_eq!(
+            timestamp_text(1704067200_000_000, true).unwrap(),
+            "2024-01-01 00:00:00+00"
+        );
         let re = regex::Regex::new("^s").unwrap();
         let caps = re.captures("swap").unwrap();
         assert_eq!(rewrite(&caps, "\\2-\\1", 0), None);
         let re = regex::Regex::new("(b)").unwrap();
         let caps = re.captures("abc").unwrap();
-        assert_eq!(rewrite(&caps, "\\1\\1[\\0]\\\\", 1).as_deref(), Some("bb[b]\\"));
-        assert_eq!(timestamp_text(1704067200_500_000, true).unwrap(), "2024-01-01 00:00:00.5+00");
-        assert_eq!(timestamp_text(1704071_523_000_120, false).unwrap(), "2024-01-01 01:12:03.00012");
+        assert_eq!(
+            rewrite(&caps, "\\1\\1[\\0]\\\\", 1).as_deref(),
+            Some("bb[b]\\")
+        );
+        assert_eq!(
+            timestamp_text(1704067200_500_000, true).unwrap(),
+            "2024-01-01 00:00:00.5+00"
+        );
+        assert_eq!(
+            timestamp_text(1704071_523_000_120, false).unwrap(),
+            "2024-01-01 01:12:03.00012"
+        );
         // Negative start counts from the end; a start before the first character shortens the
         // length; a negative length runs backwards. Measured with duck-eval.
         assert_eq!(duck_substr("abcdef", -1, Some(1)), "f");

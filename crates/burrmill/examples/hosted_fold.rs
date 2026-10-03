@@ -15,18 +15,25 @@ const SQL: &str = "SELECT addr, SUM(d) AS net FROM (\
     ) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = std::env::args().nth(1).ok_or("usage: hosted_fold <segments>")?;
+    let dir = std::env::args()
+        .nth(1)
+        .ok_or("usage: hosted_fold <segments>")?;
     let peak = Arc::new(Mutex::new((0usize, 0usize)));
     let p = Arc::clone(&peak);
-    std::thread::spawn(move || loop {
-        if let Ok(t) = std::fs::read_to_string("/proc/self/statm") {
-            let f: Vec<usize> = t.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-            let mut g = p.lock().unwrap();
-            if f[1] * 4096 > g.0 {
-                *g = (f[1] * 4096, f[2] * 4096);
+    std::thread::spawn(move || {
+        loop {
+            if let Ok(t) = std::fs::read_to_string("/proc/self/statm") {
+                let f: Vec<usize> = t
+                    .split_whitespace()
+                    .filter_map(|x| x.parse().ok())
+                    .collect();
+                let mut g = p.lock().unwrap();
+                if f[1] * 4096 > g.0 {
+                    *g = (f[1] * 4096, f[2] * 4096);
+                }
             }
+            std::thread::sleep(Duration::from_millis(2));
         }
-        std::thread::sleep(Duration::from_millis(2));
     });
     let engine = burrmill::Engine::open_segments(std::path::Path::new(&dir))?;
     let t = Instant::now();
@@ -38,7 +45,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ms = t.elapsed().as_millis();
     let hwm = std::fs::read_to_string("/proc/self/status")
         .ok()
-        .and_then(|s| s.lines().find(|l| l.starts_with("VmHWM")).map(|l| l.to_string()))
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmHWM"))
+                .map(|l| l.to_string())
+        })
         .unwrap_or_default();
     let (rss, file) = *peak.lock().unwrap();
     let mb = |b: usize| b / (1024 * 1024);

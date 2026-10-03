@@ -74,10 +74,9 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
             to: field.data_type().clone(),
             safe: true,
         }));
-        return Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction::new_udf(
-            udf,
-            vec![expr.as_ref().clone()],
-        ))));
+        return Ok(Transformed::yes(Expr::ScalarFunction(
+            ScalarFunction::new_udf(udf, vec![expr.as_ref().clone()]),
+        )));
     }
     let Expr::Cast(Cast { expr, field }) = &e else {
         return Ok(Transformed::no(e));
@@ -167,7 +166,10 @@ impl ScalarUDFImpl for TextToDecimal {
                 None => {
                     // Arrow's message names its default DECIMAL(38,10), whatever the target.
                     let one = cast_with_options(&a.slice(i, 1), &want, &strict).map_err(|_| {
-                        exec_datafusion_err!("Could not convert string '{s}' to DECIMAL({},0)", self.precision)
+                        exec_datafusion_err!(
+                            "Could not convert string '{s}' to DECIMAL({},0)",
+                            self.precision
+                        )
                     })?;
                     let one = one.as_primitive::<Decimal128Type>();
                     if one.is_null(0) {
@@ -390,11 +392,27 @@ mod hex_tests {
     #[test]
     fn plain_text_reads_as_duckdb_reads_it() {
         for (s, v) in [
-            ("1.", Some(1)), (".5", Some(1)), ("1_000", Some(1000)), ("2.4999", Some(2)),
-            ("-0.5", Some(-1)), ("1e-1", Some(0)), ("5e-1", Some(1)), ("00012", Some(12)),
-            ("1 2", None), ("inf", None), ("-", None), ("1.5e1", Some(15)), ("+-1", None),
-            ("\t7\n", Some(7)), (" 12 ", Some(12)), ("1.5", Some(2)), ("-2.5", Some(-3)),
-            ("1e2", Some(100)), ("+7", Some(7)), ("", None), ("abc", None),
+            ("1.", Some(1)),
+            (".5", Some(1)),
+            ("1_000", Some(1000)),
+            ("2.4999", Some(2)),
+            ("-0.5", Some(-1)),
+            ("1e-1", Some(0)),
+            ("5e-1", Some(1)),
+            ("00012", Some(12)),
+            ("1 2", None),
+            ("inf", None),
+            ("-", None),
+            ("1.5e1", Some(15)),
+            ("+-1", None),
+            ("\t7\n", Some(7)),
+            (" 12 ", Some(12)),
+            ("1.5", Some(2)),
+            ("-2.5", Some(-3)),
+            ("1e2", Some(100)),
+            ("+7", Some(7)),
+            ("", None),
+            ("abc", None),
             ("9223372036854775807.5", Some(9223372036854775808)),
         ] {
             assert_eq!(duck_int(s), v, "{s:?}");

@@ -13,7 +13,9 @@ use burrmill::Engine;
 type Row = (i64, Option<i64>, Option<i64>);
 
 fn lcg(seed: &mut u64) -> u64 {
-    *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *seed = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     *seed >> 33
 }
 
@@ -24,9 +26,15 @@ fn write(segs: &Path, rows: &[Row]) {
         Field::new("x", DataType::Int64, true),
     ]));
     let arrays: Vec<ArrayRef> = vec![
-        Arc::new(Int64Array::from(rows.iter().map(|r| r.0).collect::<Vec<_>>())),
-        Arc::new(Int64Array::from(rows.iter().map(|r| r.1).collect::<Vec<_>>())),
-        Arc::new(Int64Array::from(rows.iter().map(|r| r.2).collect::<Vec<_>>())),
+        Arc::new(Int64Array::from(
+            rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+        )),
+        Arc::new(Int64Array::from(
+            rows.iter().map(|r| r.1).collect::<Vec<_>>(),
+        )),
+        Arc::new(Int64Array::from(
+            rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+        )),
     ];
     let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
     let f = std::fs::File::create(segs.join(format!("t-{:064x}.parquet", 1))).unwrap();
@@ -40,8 +48,16 @@ fn fixture() -> (tempfile::TempDir, Engine, Vec<Row>) {
     // 40 keys and a NULL one, values 0..30 so every partition has ties, some values NULL.
     let rows: Vec<Row> = (0..5000)
         .map(|i| {
-            let k = if lcg(&mut s) % 37 == 0 { None } else { Some((lcg(&mut s) % 40) as i64) };
-            let x = if lcg(&mut s) % 11 == 0 { None } else { Some((lcg(&mut s) % 30) as i64) };
+            let k = if lcg(&mut s) % 37 == 0 {
+                None
+            } else {
+                Some((lcg(&mut s) % 40) as i64)
+            };
+            let x = if lcg(&mut s) % 11 == 0 {
+                None
+            } else {
+                Some((lcg(&mut s) % 30) as i64)
+            };
             (i, k, x)
         })
         .collect();
@@ -98,13 +114,18 @@ fn the_rows_at_their_partitions_extreme_without_a_window() {
         for sql in [
             format!("SELECT id FROM t QUALIFY x = {f}(x) OVER (PARTITION BY k)"),
             format!("SELECT id FROM t QUALIFY {f}(x) OVER (PARTITION BY k) = x"),
-            format!("SELECT id FROM (SELECT id, x, {f}(x) OVER (PARTITION BY k) AS m FROM t) WHERE x = m"),
+            format!(
+                "SELECT id FROM (SELECT id, x, {f}(x) OVER (PARTITION BY k) AS m FROM t) WHERE x = m"
+            ),
         ] {
             assert_eq!(ids(&e, &sql), expect(&rows, max), "{sql}");
         }
         let qualify = format!("SELECT id FROM t QUALIFY x = {f}(x) OVER (PARTITION BY k)");
         let p = plan(&e, &qualify);
-        assert!(!p.contains("WindowAggExec") && p.contains("HashJoinExec"), "{p}");
+        assert!(
+            !p.contains("WindowAggExec") && p.contains("HashJoinExec"),
+            "{p}"
+        );
     }
     // Left as a window: an ordered one, and a filter that is not an equality against it.
     for sql in [

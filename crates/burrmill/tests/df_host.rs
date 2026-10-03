@@ -143,9 +143,7 @@ fn a_window_bounds_the_rows_and_registration_replaces() {
 #[test]
 fn a_cancel_armed_before_the_statement_is_not_forgotten() {
     let mut engine = Engine::open_empty().unwrap();
-    engine
-        .register_rows("t", &[json!({"n": "1"})])
-        .unwrap();
+    engine.register_rows("t", &[json!({"n": "1"})]).unwrap();
     engine.cancel_token().cancel();
     let r = engine.sql("SELECT count(*) AS n FROM t");
     assert!(
@@ -703,7 +701,9 @@ fn a_repeated_name_in_any_branch_of_a_union_is_answered_as_duckdb_does() {
 /// already driving the host's own runtime, the engine answers, counts scans and is dropped.
 #[test]
 fn the_engine_answers_and_drops_inside_a_hosts_runtime() {
-    let host = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let host = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
     host.block_on(async {
         let engine = Engine::open_empty().unwrap();
         assert_eq!(rows(&engine, "SELECT 1 AS one"), vec![json!({"one": 1})]);
@@ -735,7 +735,12 @@ fn a_historical_window_refuses_an_unstamped_row() {
         )
         .unwrap();
         let path = tmp.path().join(name);
-        let mut w = parquet::arrow::ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema.clone(), None).unwrap();
+        let mut w = parquet::arrow::ArrowWriter::try_new(
+            std::fs::File::create(&path).unwrap(),
+            schema.clone(),
+            None,
+        )
+        .unwrap();
         w.write(&batch).unwrap();
         w.close().unwrap();
         let len = std::fs::metadata(&path).unwrap().len();
@@ -746,14 +751,21 @@ fn a_historical_window_refuses_an_unstamped_row() {
     engine
         .register_facts("t", &declared(), vec![unstamped], &[], (Some(10), Some(20)))
         .unwrap();
-    let err = engine.sql("SELECT count(*) AS n FROM t").map(|_| ()).unwrap_err().to_string();
+    let err = engine
+        .sql("SELECT count(*) AS n FROM t")
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("unstamped archived row"), "{err}");
 
     let stamped = write("stamped.parquet", vec![Some(5), Some(12)]);
     engine
         .register_facts("t", &declared(), vec![stamped], &[], (Some(10), Some(20)))
         .unwrap();
-    assert_eq!(rows(&engine, "SELECT count(*) AS n FROM t"), vec![json!({"n": 1})]);
+    assert_eq!(
+        rows(&engine, "SELECT count(*) AS n FROM t"),
+        vec![json!({"n": 1})]
+    );
 }
 
 /// Every segment's footer is read when the table is defined, as DuckDB's `read_parquet` binds them
@@ -768,14 +780,23 @@ fn a_segment_that_will_not_bind_refuses_the_definition() {
     let bad_len = std::fs::metadata(&bad).unwrap().len();
     let mut engine = Engine::open_empty().unwrap();
     let err = engine
-        .register_facts("t", &declared(), vec![good.clone(), (bad.clone(), bad_len)], &[], (None, None))
+        .register_facts(
+            "t",
+            &declared(),
+            vec![good.clone(), (bad.clone(), bad_len)],
+            &[],
+            (None, None),
+        )
         .unwrap_err()
         .to_string();
     assert!(err.contains("t-bad.parquet"), "{err}");
     engine
         .register_facts("t", &declared(), vec![good], &[], (None, None))
         .unwrap();
-    assert_eq!(rows(&engine, "SELECT count(*) AS n FROM t"), vec![json!({"n": 1})]);
+    assert_eq!(
+        rows(&engine, "SELECT count(*) AS n FROM t"),
+        vec![json!({"n": 1})]
+    );
 }
 
 /// A hot row without a counter has NULL there, as DuckDB's `read_json` reads it, not 0: a missing
@@ -783,15 +804,24 @@ fn a_segment_that_will_not_bind_refuses_the_definition() {
 #[test]
 fn a_hot_row_missing_a_counter_reads_null() {
     let mut engine = Engine::open_empty().unwrap();
-    let hot = [json!({"who": "0xa", "amount": "5"}), json!({"block_number": 12, "who": "0xb", "amount": "7"})];
+    let hot = [
+        json!({"who": "0xa", "amount": "5"}),
+        json!({"block_number": 12, "who": "0xb", "amount": "7"}),
+    ];
     engine
         .register_facts("t", &declared(), Vec::new(), &hot, (None, None))
         .unwrap();
     assert_eq!(
         rows(&engine, "SELECT who, block_number FROM t ORDER BY who"),
-        vec![json!({"who": "0xa", "block_number": null}), json!({"who": "0xb", "block_number": 12})]
+        vec![
+            json!({"who": "0xa", "block_number": null}),
+            json!({"who": "0xb", "block_number": 12})
+        ]
     );
-    assert_eq!(rows(&engine, "SELECT min(block_number) AS m FROM t"), vec![json!({"m": 12})]);
+    assert_eq!(
+        rows(&engine, "SELECT min(block_number) AS m FROM t"),
+        vec![json!({"m": 12})]
+    );
 }
 
 /// Segments that drifted, one carrying a column the other lacks, answer the same whichever comes
@@ -817,13 +847,20 @@ fn a_column_only_a_later_segment_carries_is_read_in_either_order() {
     )
     .unwrap();
     let path = tmp.path().join("t-new.parquet");
-    let mut w = parquet::arrow::ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema, None).unwrap();
+    let mut w =
+        parquet::arrow::ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema, None)
+            .unwrap();
     w.write(&batch).unwrap();
     w.close().unwrap();
     let new = (path.clone(), std::fs::metadata(&path).unwrap().len());
-    for files in [vec![old.clone(), new.clone()], vec![new.clone(), old.clone()]] {
+    for files in [
+        vec![old.clone(), new.clone()],
+        vec![new.clone(), old.clone()],
+    ] {
         let mut engine = Engine::open_empty().unwrap();
-        engine.register_facts("t", &declared(), files, &[], (None, None)).unwrap();
+        engine
+            .register_facts("t", &declared(), files, &[], (None, None))
+            .unwrap();
         assert_eq!(
             rows(&engine, "SELECT count(*) AS n, count(memo) AS m FROM t"),
             vec![json!({"n": 4, "m": 1})]
@@ -837,12 +874,28 @@ fn a_column_only_a_later_segment_carries_is_read_in_either_order() {
 fn a_view_does_not_replace_a_table() {
     let mut e = Engine::open_empty().unwrap();
     e.create_table_as("t", "SELECT 1 AS x").unwrap();
-    let refused = e.register_view("t", "SELECT 2 AS y").expect_err("a table holds the name");
-    assert!(matches!(refused, burrmill::BurrmillError::Plan(_)), "{refused:?}");
-    assert!(refused.to_string().contains("is of type Table, trying to replace with type View"), "{refused}");
+    let refused = e
+        .register_view("t", "SELECT 2 AS y")
+        .expect_err("a table holds the name");
     assert!(
-        e.register_facts("t", &[("block_number".into(), "BIGINT".into())], vec![], &[], (None, None))
-            .is_err()
+        matches!(refused, burrmill::BurrmillError::Plan(_)),
+        "{refused:?}"
+    );
+    assert!(
+        refused
+            .to_string()
+            .contains("is of type Table, trying to replace with type View"),
+        "{refused}"
+    );
+    assert!(
+        e.register_facts(
+            "t",
+            &[("block_number".into(), "BIGINT".into())],
+            vec![],
+            &[],
+            (None, None)
+        )
+        .is_err()
     );
     assert_eq!(rows(&e, "SELECT x FROM t"), vec![json!({"x": 1})]);
 
@@ -870,7 +923,10 @@ fn a_statement_cannot_name_the_hidden_parts_of_a_registration() {
         vec![json!({"m": 10})]
     );
     let leaked = engine.sql("SELECT max(block_number) AS m FROM t__union");
-    assert!(leaked.is_err(), "t__union answered past the window: {leaked:?}");
+    assert!(
+        leaked.is_err(),
+        "t__union answered past the window: {leaked:?}"
+    );
     assert!(engine.sql("SELECT * FROM t__hot").is_err());
     assert!(engine.sql("SELECT * FROM t__raw").is_err());
     assert!(engine.sql("SELECT * FROM \"T__UNION\"").is_err());
@@ -880,7 +936,11 @@ fn a_statement_cannot_name_the_hidden_parts_of_a_registration() {
     engine
         .register_facts("u", &declared(), Vec::new(), &[], (None, None))
         .unwrap();
-    assert!(engine.sql("SELECT max(block_number) AS m FROM t__hot").is_err());
+    assert!(
+        engine
+            .sql("SELECT max(block_number) AS m FROM t__hot")
+            .is_err()
+    );
     let hidden = |n: &str| {
         let l = n.to_ascii_lowercase();
         l.ends_with("__raw") || l.ends_with("__hot") || l.ends_with("__union")

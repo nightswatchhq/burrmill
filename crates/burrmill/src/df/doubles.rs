@@ -51,7 +51,9 @@ pub struct DecimalToDouble {
 
 impl DecimalToDouble {
     pub fn udf() -> Arc<ScalarUDF> {
-        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable) }))
+        Arc::new(ScalarUDF::from(Self {
+            sig: Signature::user_defined(Volatility::Immutable),
+        }))
     }
 }
 
@@ -73,9 +75,16 @@ impl ScalarUDFImpl for DecimalToDouble {
     }
     // NULL exactly where the DECIMAL is, as the cast it replaces: a union's schema derived before
     // this rule ran would otherwise disagree with the physical plan.
-    fn return_field_from_args(&self, args: datafusion_expr::ReturnFieldArgs) -> Result<arrow::datatypes::FieldRef> {
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<arrow::datatypes::FieldRef> {
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-        Ok(Arc::new(arrow::datatypes::Field::new(self.name(), DataType::Float64, nullable)))
+        Ok(Arc::new(arrow::datatypes::Field::new(
+            self.name(),
+            DataType::Float64,
+            nullable,
+        )))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [a] = args.args.as_slice() else {
@@ -85,12 +94,14 @@ impl ScalarUDFImpl for DecimalToDouble {
             return plan_err!("burrmill_decimal_to_double takes a DECIMAL");
         };
         let convert = |d: &arrow::array::Decimal128Array| -> Float64Array {
-            d.iter().map(|v| v.map(|v| decimal_to_double(v, p, s))).collect()
+            d.iter()
+                .map(|v| v.map(|v| decimal_to_double(v, p, s)))
+                .collect()
         };
         Ok(match a {
-            ColumnarValue::Array(x) => {
-                ColumnarValue::Array(Arc::new(convert(x.as_primitive::<Decimal128Type>())) as ArrayRef)
-            }
+            ColumnarValue::Array(x) => ColumnarValue::Array(Arc::new(convert(
+                x.as_primitive::<Decimal128Type>(),
+            )) as ArrayRef),
             ColumnarValue::Scalar(x) => {
                 let d = x.to_array()?;
                 ColumnarValue::Scalar(ScalarValue::try_from_array(
@@ -109,7 +120,9 @@ pub struct DuckDoubles {
 
 impl Default for DuckDoubles {
     fn default() -> Self {
-        Self { f: DecimalToDouble::udf() }
+        Self {
+            f: DecimalToDouble::udf(),
+        }
     }
 }
 
@@ -132,7 +145,8 @@ impl AnalyzerRule for DuckDoubles {
                 let name = e.schema_name().to_string();
                 let t = e.transform_up(|e| {
                     let inner = match &e {
-                        Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field })
+                        Expr::Cast(Cast { expr, field })
+                        | Expr::TryCast(TryCast { expr, field })
                             if field.data_type() == &DataType::Float64 =>
                         {
                             expr
@@ -142,10 +156,9 @@ impl AnalyzerRule for DuckDoubles {
                     if !matches!(inner.get_type(&schema)?, DataType::Decimal128(..)) {
                         return Ok(Transformed::no(e));
                     }
-                    Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        Arc::clone(&self.f),
-                        vec![inner.as_ref().clone()],
-                    ))))
+                    Ok(Transformed::yes(Expr::ScalarFunction(
+                        ScalarFunction::new_udf(Arc::clone(&self.f), vec![inner.as_ref().clone()]),
+                    )))
                 })?;
                 if t.transformed && names_matter && t.data.schema_name().to_string() != name {
                     Ok(Transformed::yes(t.data.alias(name)))
@@ -165,10 +178,16 @@ mod tests {
     #[test]
     fn rounds_as_duckdb_does() {
         // Correctly rounded, this is 4.758202831081925e19; DuckDB's two roundings give ...926e19.
-        assert_eq!(decimal_to_double(47582028310819253533, 38, 0), 4.758202831081926e19);
+        assert_eq!(
+            decimal_to_double(47582028310819253533, 38, 0),
+            4.758202831081926e19
+        );
         assert_eq!(decimal_to_double(-1, 38, 0), -1.0);
         assert_eq!(decimal_to_double(1743532650, 38, 9), 1.74353265);
         // Past 2^53, integer part plus fraction: DuckDB's 9791626625542364.0, not ...366.0.
-        assert_eq!(decimal_to_double(9791626625542365709860864, 38, 9), 9791626625542364.0);
+        assert_eq!(
+            decimal_to_double(9791626625542365709860864, 38, 9),
+            9791626625542364.0
+        );
     }
 }

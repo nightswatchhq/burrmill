@@ -42,7 +42,11 @@ impl AnalyzerRule for LatestCorrelation {
                 p = next;
                 changed = true;
             }
-            Ok(if changed { Transformed::yes(p) } else { Transformed::no(p) })
+            Ok(if changed {
+                Transformed::yes(p)
+            } else {
+                Transformed::no(p)
+            })
         })
         .map(|t| t.data)
     }
@@ -63,27 +67,37 @@ struct TopN {
 }
 
 fn top_n(sub: &LogicalPlan) -> Option<TopN> {
-    let LogicalPlan::Limit(l) = sub else { return None };
+    let LogicalPlan::Limit(l) = sub else {
+        return None;
+    };
     let limit = literal_limit(l)?;
     let (out, sorted) = match l.input.as_ref() {
         LogicalPlan::Projection(p) => (Some(p), p.input.as_ref()),
         other => (None, other),
     };
-    let LogicalPlan::Sort(s) = sorted else { return None };
+    let LogicalPlan::Sort(s) = sorted else {
+        return None;
+    };
     let (inner, below) = match s.input.as_ref() {
         LogicalPlan::Projection(p) => (Some(p.expr.clone()), p.input.as_ref()),
         other => (None, other),
     };
-    let LogicalPlan::Filter(f) = below else { return None };
-    let outer_below = f.input.exists(|p| Ok(p.contains_outer_reference())).unwrap_or(true);
+    let LogicalPlan::Filter(f) = below else {
+        return None;
+    };
+    let outer_below = f
+        .input
+        .exists(|p| Ok(p.contains_outer_reference()))
+        .unwrap_or(true);
     let outer_above = out.is_some_and(|o| o.expr.iter().any(Expr::contains_outer))
         || s.expr.iter().any(|o| o.expr.contains_outer())
         || inner.iter().flatten().any(Expr::contains_outer);
     if outer_below || outer_above {
         return None;
     }
-    let (correlated, plain): (Vec<Expr>, Vec<Expr>) =
-        split_conjunction_owned(f.predicate.clone()).into_iter().partition(Expr::contains_outer);
+    let (correlated, plain): (Vec<Expr>, Vec<Expr>) = split_conjunction_owned(f.predicate.clone())
+        .into_iter()
+        .partition(Expr::contains_outer);
     if correlated.is_empty() {
         return None;
     }
@@ -129,13 +143,27 @@ fn literal_limit(l: &Limit) -> Option<usize> {
 
 /// `SELECT <expressions of the outer row>` with no relation: the expressions, each with its name.
 fn binding(sub: &LogicalPlan) -> Option<Vec<(Expr, String)>> {
-    let LogicalPlan::Projection(p) = sub else { return None };
-    let LogicalPlan::EmptyRelation(e) = p.input.as_ref() else { return None };
+    let LogicalPlan::Projection(p) = sub else {
+        return None;
+    };
+    let LogicalPlan::EmptyRelation(e) = p.input.as_ref() else {
+        return None;
+    };
     if !e.produce_one_row {
         return None;
     }
     let plain = |x: &Expr| {
-        !x.exists(|y| Ok(matches!(y, Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) | Expr::AggregateFunction(_) | Expr::WindowFunction(_)))).unwrap_or(true)
+        !x.exists(|y| {
+            Ok(matches!(
+                y,
+                Expr::ScalarSubquery(_)
+                    | Expr::Exists(_)
+                    | Expr::InSubquery(_)
+                    | Expr::AggregateFunction(_)
+                    | Expr::WindowFunction(_)
+            ))
+        })
+        .unwrap_or(true)
     };
     p.expr.iter().all(plain).then(|| {
         p.expr
@@ -162,28 +190,64 @@ fn unouter(e: Expr) -> Result<Expr> {
 }
 
 fn qualifiers(p: &LogicalPlan) -> std::collections::HashSet<String> {
-    p.schema().iter().filter_map(|(q, _)| q.map(|q| q.to_string())).collect()
+    p.schema()
+        .iter()
+        .filter_map(|(q, _)| q.map(|q| q.to_string()))
+        .collect()
 }
 
 /// `outer` numbered, the top-N's relation joined to it and ranked within each outer row, cut at
 /// `k`. Carries `outer`'s columns, the subquery's output under `names`, and the match marker.
-fn ranked(outer: &LogicalPlan, t: TopN, n: &mut usize, names: &[String]) -> Result<(LogicalPlan, String)> {
-    let (rid, rank, marker) = (format!("__burrmill_lrid{n}"), format!("__burrmill_lrn{n}"), format!("__burrmill_lm{n}"));
+fn ranked(
+    outer: &LogicalPlan,
+    t: TopN,
+    n: &mut usize,
+    names: &[String],
+) -> Result<(LogicalPlan, String)> {
+    let (rid, rank, marker) = (
+        format!("__burrmill_lrid{n}"),
+        format!("__burrmill_lrn{n}"),
+        format!("__burrmill_lm{n}"),
+    );
     *n += 1;
-    let row_number = || Expr::from(datafusion_expr::expr::WindowFunction::new(
-        datafusion_expr::expr::WindowFunctionDefinition::WindowUDF(datafusion_functions_window::row_number::row_number_udwf()),
-        vec![],
-    ));
-    let numbered = LogicalPlanBuilder::from(outer.clone()).window(vec![row_number().alias(&rid)])?.build()?;
+    let row_number = || {
+        Expr::from(datafusion_expr::expr::WindowFunction::new(
+            datafusion_expr::expr::WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::row_number::row_number_udwf(),
+            ),
+            vec![],
+        ))
+    };
+    let numbered = LogicalPlanBuilder::from(outer.clone())
+        .window(vec![row_number().alias(&rid)])?
+        .build()?;
     let mut relation = LogicalPlanBuilder::from(t.relation);
     if let Some(w) = conjunction(t.plain) {
         relation = relation.filter(w)?;
     }
-    let columns: Vec<Expr> = relation.schema().columns().into_iter().map(Expr::Column).collect();
-    let relation = relation.project(columns.into_iter().chain([lit(true).alias(&marker)]))?.build()?;
-    let on = t.correlated.into_iter().map(unouter).collect::<Result<Vec<_>>>()?;
-    let joined = LogicalPlanBuilder::from(numbered.clone()).join_on(relation, JoinType::Left, on)?.build()?;
-    let carried: Vec<Expr> = numbered.schema().columns().into_iter().map(Expr::Column).collect();
+    let columns: Vec<Expr> = relation
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::Column)
+        .collect();
+    let relation = relation
+        .project(columns.into_iter().chain([lit(true).alias(&marker)]))?
+        .build()?;
+    let on = t
+        .correlated
+        .into_iter()
+        .map(unouter)
+        .collect::<Result<Vec<_>>>()?;
+    let joined = LogicalPlanBuilder::from(numbered.clone())
+        .join_on(relation, JoinType::Left, on)?
+        .build()?;
+    let carried: Vec<Expr> = numbered
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::Column)
+        .collect();
     let marked = Expr::Column(Column::new_unqualified(&marker));
     let shaped = match t.inner {
         Some(inner) => LogicalPlanBuilder::from(joined)
@@ -200,9 +264,20 @@ fn ranked(outer: &LogicalPlan, t: TopN, n: &mut usize, names: &[String]) -> Resu
         .window(vec![ranking])?
         .filter(Expr::Column(Column::new_unqualified(&rank)).lt_eq(lit(t.limit as u64)))?
         .build()?;
-    let kept: Vec<Expr> = outer.schema().columns().into_iter().map(Expr::Column).collect();
-    let values = t.output.into_iter().zip(names).map(|((e, _), name)| e.alias(name));
-    let plan = LogicalPlanBuilder::from(cut).project(kept.into_iter().chain(values).chain([marked]))?.build()?;
+    let kept: Vec<Expr> = outer
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::Column)
+        .collect();
+    let values = t
+        .output
+        .into_iter()
+        .zip(names)
+        .map(|((e, _), name)| e.alias(name));
+    let plan = LogicalPlanBuilder::from(cut)
+        .project(kept.into_iter().chain(values).chain([marked]))?
+        .build()?;
     Ok((plan, marker))
 }
 
@@ -242,18 +317,38 @@ fn scalar(p: &LogicalPlan, n: &mut usize) -> Result<Option<LogicalPlan>> {
         let name = e.schema_name().to_string();
         let t = e.transform(|x| {
             if x == subquery {
-                Ok(Transformed::yes(Expr::Column(Column::new_unqualified(&value))))
+                Ok(Transformed::yes(Expr::Column(Column::new_unqualified(
+                    &value,
+                ))))
             } else {
                 Ok(Transformed::no(x))
             }
         })?;
-        Ok(if t.transformed && t.data.schema_name().to_string() != name { t.data.alias(name) } else { t.data })
+        Ok(
+            if t.transformed && t.data.schema_name().to_string() != name {
+                t.data.alias(name)
+            } else {
+                t.data
+            },
+        )
     };
-    let outer: Vec<Expr> = input.schema().columns().into_iter().map(Expr::Column).collect();
+    let outer: Vec<Expr> = input
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::Column)
+        .collect();
     Ok(Some(match p {
         LogicalPlan::Projection(x) => {
-            let exprs = x.expr.iter().cloned().map(replace).collect::<Result<Vec<_>>>()?;
-            LogicalPlanBuilder::from(with_value).project(exprs)?.build()?
+            let exprs = x
+                .expr
+                .iter()
+                .cloned()
+                .map(replace)
+                .collect::<Result<Vec<_>>>()?;
+            LogicalPlanBuilder::from(with_value)
+                .project(exprs)?
+                .build()?
         }
         LogicalPlan::Filter(x) => LogicalPlanBuilder::from(with_value)
             .filter(replace(x.predicate.clone())?)?
@@ -275,31 +370,55 @@ fn lateral(j: &Join, n: &mut usize) -> Result<Option<LogicalPlan>> {
         LogicalPlan::SubqueryAlias(a) => (Some(a.alias.clone()), a.input.as_ref()),
         other => (None, other),
     };
-    let LogicalPlan::Subquery(sq) = sub else { return Ok(None) };
+    let LogicalPlan::Subquery(sq) = sub else {
+        return Ok(None);
+    };
     if let Some(bound) = binding(&sq.subquery) {
-        let left: Vec<Expr> = j.left.schema().columns().into_iter().map(Expr::Column).collect();
+        let left: Vec<Expr> = j
+            .left
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect();
         let right = bound
             .into_iter()
             .map(|(e, name)| match &alias {
-                Some(a) => Ok(unouter(e)?.alias_qualified(Some(TableReference::from(a.clone())), name)),
+                Some(a) => {
+                    Ok(unouter(e)?.alias_qualified(Some(TableReference::from(a.clone())), name))
+                }
                 None => Ok(unouter(e)?.alias(name)),
             })
             .collect::<Result<Vec<_>>>()?;
-        return Ok(Some(LogicalPlanBuilder::from((*j.left).clone()).project(left.into_iter().chain(right))?.build()?));
+        return Ok(Some(
+            LogicalPlanBuilder::from((*j.left).clone())
+                .project(left.into_iter().chain(right))?
+                .build()?,
+        ));
     }
-    let Some(t) = top_n(&sq.subquery) else { return Ok(None) };
+    let Some(t) = top_n(&sq.subquery) else {
+        return Ok(None);
+    };
     if !qualifiers(&j.left).is_disjoint(&qualifiers(&t.relation)) {
         return Ok(None);
     }
     // Private names until the end: a subquery column may share a name with an outer one.
     let names: Vec<String> = t.output.iter().map(|(_, name)| name.clone()).collect();
-    let private: Vec<String> = (0..names.len()).map(|i| format!("__burrmill_lo{n}_{i}")).collect();
+    let private: Vec<String> = (0..names.len())
+        .map(|i| format!("__burrmill_lo{n}_{i}"))
+        .collect();
     let (plan, marker) = ranked(&j.left, t, n, &private)?;
     let mut plan = LogicalPlanBuilder::from(plan);
     if j.join_type == JoinType::Inner {
         plan = plan.filter(Expr::Column(Column::new_unqualified(&marker)).is_not_null())?;
     }
-    let left: Vec<Expr> = j.left.schema().columns().into_iter().map(Expr::Column).collect();
+    let left: Vec<Expr> = j
+        .left
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::Column)
+        .collect();
     let right = private.iter().zip(&names).map(|(p, name)| {
         let e = Expr::Column(Column::new_unqualified(p));
         match &alias {

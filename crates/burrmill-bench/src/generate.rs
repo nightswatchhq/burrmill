@@ -135,10 +135,18 @@ pub fn write_segments(dir: &Path, rows: &[Row], splits: usize) -> anyhow::Result
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(UInt64Array::from((0..chunk.len() as u64).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(chunk.iter().map(|r| r.from.as_str()).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(chunk.iter().map(|r| r.to.as_str()).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(chunk.iter().map(|r| r.value.as_str()).collect::<Vec<_>>())),
+                Arc::new(UInt64Array::from(
+                    (0..chunk.len() as u64).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    chunk.iter().map(|r| r.from.as_str()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    chunk.iter().map(|r| r.to.as_str()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    chunk.iter().map(|r| r.value.as_str()).collect::<Vec<_>>(),
+                )),
             ],
         )?;
         let f = std::fs::File::create(dir.join(format!("seg-{i:05}.parquet")))?;

@@ -49,7 +49,11 @@ pub struct Gate {
 
 impl Gate {
     pub fn new(width: usize) -> Self {
-        Self { state: Mutex::new(State::default()), cv: Condvar::new(), width: width.max(1) }
+        Self {
+            state: Mutex::new(State::default()),
+            cv: Condvar::new(),
+            width: width.max(1),
+        }
     }
 
     pub fn width(&self) -> usize {
@@ -97,7 +101,10 @@ impl Gate {
         }
         st.in_flight += 1;
         st.peak = st.peak.max(st.in_flight);
-        Some(Pass { gate: self, in_flight: st.in_flight })
+        Some(Pass {
+            gate: self,
+            in_flight: st.in_flight,
+        })
     }
 
     pub fn peak_in_flight(&self) -> usize {
@@ -138,8 +145,8 @@ impl Drop for Pass<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// **Nobody waits forever, and that is the whole point.** With thirty-two threads contending on
     /// a width-four gate, every one of them must get through - repeatedly - rather than a lucky
@@ -196,7 +203,11 @@ mod tests {
                 });
             }
         });
-        assert!(worst.load(Ordering::SeqCst) <= 3, "saw {} in flight", worst.load(Ordering::SeqCst));
+        assert!(
+            worst.load(Ordering::SeqCst) <= 3,
+            "saw {} in flight",
+            worst.load(Ordering::SeqCst)
+        );
     }
 
     /// **A cancelled waiter gives its turn back, and the queue keeps moving.**
@@ -236,8 +247,14 @@ mod tests {
         // Every uncancelled waiter got through. If a forfeited ticket had stalled the line, the
         // scope would never join and this test would hang rather than fail - which is why the
         // forfeit is a `released += 1` and not a bare `return`.
-        assert_eq!(served.load(Ordering::Relaxed) + gave_up.load(Ordering::Relaxed), 24);
-        assert!(served.load(Ordering::Relaxed) >= 12, "uncancelled waiters were not all served");
+        assert_eq!(
+            served.load(Ordering::Relaxed) + gave_up.load(Ordering::Relaxed),
+            24
+        );
+        assert!(
+            served.load(Ordering::Relaxed) >= 12,
+            "uncancelled waiters were not all served"
+        );
     }
 
     /// A panicking holder must not wedge the gate. The guard releases on unwind, so the next ticket

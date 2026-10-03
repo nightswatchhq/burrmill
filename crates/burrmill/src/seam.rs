@@ -91,7 +91,9 @@ impl HotSnapshot {
     /// A hot row at or below the watermark is also in a cold segment, so counting it would
     /// double-count a balance. Cheap enough to run on every query and precise about what went wrong.
     pub fn check_disjoint(&self) -> Result<()> {
-        let Some(watermark) = self.sealed_through else { return Ok(()) };
+        let Some(watermark) = self.sealed_through else {
+            return Ok(());
+        };
         if let Some(bad) = self.rows.iter().find(|r| r.block <= watermark) {
             return Err(crate::BurrmillError::Seam(format!(
                 "a hot row at block {} is at or below sealed_through {watermark}, so it is also in \
@@ -130,7 +132,11 @@ impl MemoryTip {
     }
 
     pub fn append(&self, row: HotRow) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).rows.push(row);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .rows
+            .push(row);
     }
 
     /// Advance the watermark and prune, atomically. Returns the rows that left hot, which is what a
@@ -142,19 +148,27 @@ impl MemoryTip {
         }
         g.sealed_through = Some(block);
         let watermark = block;
-        let (sealed, kept): (Vec<_>, Vec<_>) =
-            std::mem::take(&mut g.rows).into_iter().partition(|r| r.block <= watermark);
+        let (sealed, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut g.rows)
+            .into_iter()
+            .partition(|r| r.block <= watermark);
         g.rows = kept;
         sealed
     }
 
     /// How many rows are still unsealed. For tests that want to assert the tip drained.
     pub fn snapshot_rows_len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).rows.len()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .rows
+            .len()
     }
 
     pub fn sealed_through(&self) -> Option<u64> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).sealed_through
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sealed_through
     }
 }
 

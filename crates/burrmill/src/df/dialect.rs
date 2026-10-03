@@ -717,7 +717,9 @@ fn struct_pack(f: &mut sq::Function) {
             } => (name.value.clone(), v.clone()),
             sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(v)) => match v {
                 SqlExpr::Identifier(i) => (i.value.clone(), v.clone()),
-                SqlExpr::CompoundIdentifier(p) => (p.last().expect("a part").value.clone(), v.clone()),
+                SqlExpr::CompoundIdentifier(p) => {
+                    (p.last().expect("a part").value.clone(), v.clone())
+                }
                 _ => return,
             },
             _ => return,
@@ -745,10 +747,13 @@ fn names_only(q: &sq::Query, outer: &str) -> bool {
         type Break = ();
         fn pre_visit_table_factor(&mut self, t: &sq::TableFactor) -> ControlFlow<()> {
             match t {
-                sq::TableFactor::Table { alias: Some(a), .. } | sq::TableFactor::Derived { alias: Some(a), .. } => {
+                sq::TableFactor::Table { alias: Some(a), .. }
+                | sq::TableFactor::Derived { alias: Some(a), .. } => {
                     self.0.push(a.name.value.clone())
                 }
-                sq::TableFactor::Table { name, alias: None, .. } => {
+                sq::TableFactor::Table {
+                    name, alias: None, ..
+                } => {
                     if let Some(i) = name.0.last().and_then(|p| p.as_ident()) {
                         self.0.push(i.value.clone())
                     }
@@ -784,7 +789,9 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
     if q.with.is_some() || q.order_by.is_some() || q.limit_clause.is_some() || q.fetch.is_some() {
         return None;
     }
-    let sq::SetExpr::Select(outer) = q.body.as_mut() else { return None };
+    let sq::SetExpr::Select(outer) = q.body.as_mut() else {
+        return None;
+    };
     if outer.selection.is_some()
         || outer.having.is_some()
         || outer.distinct.is_some()
@@ -792,21 +799,38 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
     {
         return None;
     }
-    let [from] = outer.from.as_mut_slice() else { return None };
+    let [from] = outer.from.as_mut_slice() else {
+        return None;
+    };
     if !from.joins.is_empty() {
         return None;
     }
-    let sq::TableFactor::Derived { lateral: false, subquery: inner_q, alias: Some(t), sample: None } = &mut from.relation else {
+    let sq::TableFactor::Derived {
+        lateral: false,
+        subquery: inner_q,
+        alias: Some(t),
+        sample: None,
+    } = &mut from.relation
+    else {
         return None;
     };
     let t = t.name.clone();
     if inner_q.with.is_some() || inner_q.fetch.is_some() {
         return None;
     }
-    let Some(sq::OrderBy { kind: sq::OrderByKind::Expressions(order), interpolate: None }) = inner_q.order_by.clone() else {
+    let Some(sq::OrderBy {
+        kind: sq::OrderByKind::Expressions(order),
+        interpolate: None,
+    }) = inner_q.order_by.clone()
+    else {
         return None;
     };
-    let Some(sq::LimitClause::LimitOffset { limit: Some(limit), offset, limit_by }) = inner_q.limit_clause.clone() else {
+    let Some(sq::LimitClause::LimitOffset {
+        limit: Some(limit),
+        offset,
+        limit_by,
+    }) = inner_q.limit_clause.clone()
+    else {
         return None;
     };
     let literal = |e: &SqlExpr| match e {
@@ -824,15 +848,27 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
     if !limit_by.is_empty() {
         return None;
     }
-    let sq::SetExpr::Select(inner) = inner_q.body.as_mut() else { return None };
+    let sq::SetExpr::Select(inner) = inner_q.body.as_mut() else {
+        return None;
+    };
     if inner.having.is_some()
         || inner.distinct.is_some()
         || !matches!(&inner.group_by, sq::GroupByExpr::Expressions(g, m) if g.is_empty() && m.is_empty())
     {
         return None;
     }
-    let [rel] = inner.from.as_slice() else { return None };
-    let sq::TableFactor::Table { name, alias, args: None, .. } = &rel.relation else { return None };
+    let [rel] = inner.from.as_slice() else {
+        return None;
+    };
+    let sq::TableFactor::Table {
+        name,
+        alias,
+        args: None,
+        ..
+    } = &rel.relation
+    else {
+        return None;
+    };
     if !rel.joins.is_empty() {
         return None;
     }
@@ -858,9 +894,10 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
             match x {
                 SqlExpr::Identifier(_) => unknown = true,
                 SqlExpr::CompoundIdentifier(p) if p.len() == 2 => inside &= p[0].value == c,
-                SqlExpr::CompoundIdentifier(_) | SqlExpr::Subquery(_) | SqlExpr::Exists { .. } | SqlExpr::InSubquery { .. } => {
-                    unknown = true
-                }
+                SqlExpr::CompoundIdentifier(_)
+                | SqlExpr::Subquery(_)
+                | SqlExpr::Exists { .. }
+                | SqlExpr::InSubquery { .. } => unknown = true,
                 _ => {}
             }
             ControlFlow::<()>::Continue(())
@@ -875,7 +912,11 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
     let mut key = None;
     let mut plain = Vec::new();
     for x in conjuncts {
-        if let SqlExpr::BinaryOp { left, op: BinaryOperator::Eq, right } = &x
+        if let SqlExpr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } = &x
             && key.is_none()
         {
             if column(left) && inner_only(right) == Some(false) {
@@ -894,7 +935,9 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
     }
     let (inner_key, outer_value) = key?;
     let items_inner = inner.projection.iter().all(|i| match i {
-        sq::SelectItem::UnnamedExpr(e) | sq::SelectItem::ExprWithAlias { expr: e, .. } => inner_only(e) == Some(true),
+        sq::SelectItem::UnnamedExpr(e) | sq::SelectItem::ExprWithAlias { expr: e, .. } => {
+            inner_only(e) == Some(true)
+        }
         _ => false,
     });
     if !items_inner || order.iter().any(|o| inner_only(&o.expr) != Some(true)) {
@@ -911,8 +954,14 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
             window_frame: None,
         }));
     }
-    inner.projection.push(sq::SelectItem::ExprWithAlias { expr: inner_key, alias: sq::Ident::new(KEY) });
-    inner.projection.push(sq::SelectItem::ExprWithAlias { expr: rank, alias: sq::Ident::new(RANK) });
+    inner.projection.push(sq::SelectItem::ExprWithAlias {
+        expr: inner_key,
+        alias: sq::Ident::new(KEY),
+    });
+    inner.projection.push(sq::SelectItem::ExprWithAlias {
+        expr: rank,
+        alias: sq::Ident::new(RANK),
+    });
     inner_q.order_by = None;
     inner_q.limit_clause = None;
 
@@ -928,15 +977,25 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
         if let SqlExpr::Function(f) = x
             && f.over.is_none()
             && let [sq::ObjectNamePart::Identifier(id)] = f.name.0.as_slice()
-            && matches!(id.value.to_ascii_lowercase().as_str(), "list" | "array_agg" | "string_agg" | "group_concat")
+            && matches!(
+                id.value.to_ascii_lowercase().as_str(),
+                "list" | "array_agg" | "string_agg" | "group_concat"
+            )
             && let sq::FunctionArguments::List(l) = &mut f.args
-            && !l.clauses.iter().any(|c| matches!(c, sq::FunctionArgumentClause::OrderBy(_)))
+            && !l
+                .clauses
+                .iter()
+                .any(|c| matches!(c, sq::FunctionArgumentClause::OrderBy(_)))
         {
-            l.clauses.push(sq::FunctionArgumentClause::OrderBy(vec![sq::OrderByExpr {
-                expr: col(RANK),
-                options: sq::OrderByOptions { asc: None, nulls_first: None },
-                with_fill: None,
-            }]));
+            l.clauses
+                .push(sq::FunctionArgumentClause::OrderBy(vec![sq::OrderByExpr {
+                    expr: col(RANK),
+                    options: sq::OrderByOptions {
+                        asc: None,
+                        nulls_first: None,
+                    },
+                    with_fill: None,
+                }]));
         }
         ControlFlow::<()>::Continue(())
     });
@@ -945,17 +1004,33 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
 
 fn split_and(e: SqlExpr, out: &mut Vec<SqlExpr>) {
     match e {
-        SqlExpr::BinaryOp { left, op: BinaryOperator::And, right } => {
+        SqlExpr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } => {
             split_and(*left, out);
             split_and(*right, out);
         }
-        SqlExpr::Nested(x) if matches!(*x, SqlExpr::BinaryOp { op: BinaryOperator::And, .. }) => split_and(*x, out),
+        SqlExpr::Nested(x)
+            if matches!(
+                *x,
+                SqlExpr::BinaryOp {
+                    op: BinaryOperator::And,
+                    ..
+                }
+            ) =>
+        {
+            split_and(*x, out)
+        }
         e => out.push(e),
     }
 }
 
 fn rejoin(v: Vec<SqlExpr>) -> SqlExpr {
-    v.into_iter().reduce(|a, b| binop(a, BinaryOperator::And, b)).expect("at least one conjunct")
+    v.into_iter()
+        .reduce(|a, b| binop(a, BinaryOperator::And, b))
+        .expect("at least one conjunct")
 }
 
 fn call(name: &str, args: Vec<SqlExpr>) -> SqlExpr {
@@ -1614,7 +1689,9 @@ fn try_as_duckdb(e: Expr) -> DFResult<Transformed<Expr>> {
         x @ (Expr::TryCast(_) | Expr::Column(_) | Expr::Literal(..)) => x.clone(),
         x @ (Expr::Cast(_) | Expr::ScalarFunction(_)) => try_within(x),
         other => {
-            return plan_err!("TRY is supported here around a cast or a function call, not {other}");
+            return plan_err!(
+                "TRY is supported here around a cast or a function call, not {other}"
+            );
         }
     }))
 }
@@ -1626,15 +1703,21 @@ fn try_as_duckdb(e: Expr) -> DFResult<Transformed<Expr>> {
 /// inner cast stays a cast, failing loudly rather than tainting what is summed downstream.
 fn try_within(e: &Expr) -> Expr {
     const STRICT: &[&str] = &[
-        "decode", "from_hex", "hex", "substr", "substring", "lower", "upper", "length",
+        "decode",
+        "from_hex",
+        "hex",
+        "substr",
+        "substring",
+        "lower",
+        "upper",
+        "length",
     ];
     fn call(e: &Expr) -> Expr {
         match e {
             Expr::Alias(a) => call(&a.expr),
-            Expr::Cast(Cast { expr, field }) => Expr::Cast(Cast::new(
-                Box::new(call(expr)),
-                field.data_type().clone(),
-            )),
+            Expr::Cast(Cast { expr, field }) => {
+                Expr::Cast(Cast::new(Box::new(call(expr)), field.data_type().clone()))
+            }
             Expr::ScalarFunction(inner) => {
                 let strict = STRICT.contains(&inner.func.name());
                 Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
@@ -1652,9 +1735,10 @@ fn try_within(e: &Expr) -> Expr {
         }
     }
     match e {
-        Expr::Cast(Cast { expr, field }) => {
-            Expr::TryCast(TryCast::new(Box::new(call(expr)), field.data_type().clone()))
-        }
+        Expr::Cast(Cast { expr, field }) => Expr::TryCast(TryCast::new(
+            Box::new(call(expr)),
+            field.data_type().clone(),
+        )),
         e => call(e),
     }
 }
@@ -1894,7 +1978,8 @@ impl AnalyzerRule for DuckComparisons {
     }
 
     fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> DFResult<LogicalPlan> {
-        plan.rewrite_with_subqueries(&mut Comparisons(Vec::new())).map(|t| t.data)
+        plan.rewrite_with_subqueries(&mut Comparisons(Vec::new()))
+            .map(|t| t.data)
     }
 }
 
@@ -2333,13 +2418,21 @@ fn compare_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> 
     divide_as_double(e, schema)?.transform_data(|e| {
         let quiet = std::cell::Cell::new(false);
         let t = compare_inner(e, schema, &quiet)?;
-        Ok(if quiet.get() { Transformed::yes(t.data) } else { t })
+        Ok(if quiet.get() {
+            Transformed::yes(t.data)
+        } else {
+            t
+        })
     })
 }
 
 /// `quiet` is set where a literal is fitted or a cast added on a path that otherwise reports no
 /// change; comparing each node with a copy of itself instead made planning quadratic in depth.
-fn compare_inner(e: Expr, schema: &DFSchema, quiet: &std::cell::Cell<bool>) -> DFResult<Transformed<Expr>> {
+fn compare_inner(
+    e: Expr,
+    schema: &DFSchema,
+    quiet: &std::cell::Cell<bool>,
+) -> DFResult<Transformed<Expr>> {
     let fit_literal = |e: Expr, to: &DataType| {
         let was = match &e {
             Expr::Literal(v, _) => Some(v.data_type()),

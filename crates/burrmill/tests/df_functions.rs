@@ -11,14 +11,14 @@ fn nothing_registered_reaches_outside_the_query() {
     let tmp = tempfile::tempdir().unwrap();
     let segs = tmp.path().join("segments");
     std::fs::create_dir(&segs).unwrap();
-    let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
-        "x",
-        arrow::datatypes::DataType::Utf8,
-        true,
-    )]));
+    let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+        arrow::datatypes::Field::new("x", arrow::datatypes::DataType::Utf8, true),
+    ]));
     let b = arrow::record_batch::RecordBatch::try_new(
         schema.clone(),
-        vec![std::sync::Arc::new(arrow::array::StringArray::from(vec!["a"]))],
+        vec![std::sync::Arc::new(arrow::array::StringArray::from(vec![
+            "a",
+        ]))],
     )
     .unwrap();
     let f = std::fs::File::create(segs.join(format!("t-{:064x}.parquet", 1))).unwrap();
@@ -34,23 +34,33 @@ fn nothing_registered_reaches_outside_the_query() {
         "read", "file", "glob", "env", "shell", "exec", "http", "url", "load", "import", "copy",
         "attach", "path", "dir", "sys", "setting", "catalog", "query", "sql",
     ];
-    let hits: Vec<&String> =
-        names.iter().filter(|n| suspicious.iter().any(|s| n.contains(s))).collect();
+    let hits: Vec<&String> = names
+        .iter()
+        .filter(|n| suspicious.iter().any(|s| n.contains(s)))
+        .collect();
     assert!(hits.is_empty(), "functions to examine: {hits:?}");
-    for sql in ["SELECT input_file_name() FROM t", "SELECT file_row_index() FROM t"] {
+    for sql in [
+        "SELECT input_file_name() FROM t",
+        "SELECT file_row_index() FROM t",
+    ] {
         let err = e.sql(sql).unwrap_err().to_string();
-        assert!(!err.contains(segs.to_str().unwrap()), "leaks the path: {err}");
+        assert!(
+            !err.contains(segs.to_str().unwrap()),
+            "leaks the path: {err}"
+        );
     }
 }
-
-
 
 /// `error(text)` as DuckDB has it: the statement fails with the text wherever a row reaches it, and
 /// a `CASE` that does not take its branch never does.
 #[test]
 fn error_raises_only_where_it_is_reached() {
     let engine = Engine::open_empty().unwrap();
-    let err = engine.sql("SELECT error('the tripwire') AS e").map(|_| ()).unwrap_err().to_string();
+    let err = engine
+        .sql("SELECT error('the tripwire') AS e")
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("the tripwire"), "{err}");
     let err = engine
         .sql("SELECT CASE WHEN x > 1 THEN error('two is too many') ELSE x END AS y FROM (VALUES (1), (2)) t(x)")
@@ -76,7 +86,10 @@ fn first_and_last_are_duckdbs_aggregates() {
              FROM (VALUES (1, 5), (NULL, 9), (3, 2), (4, 6)) t(x, y)",
         )
         .unwrap();
-    let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
+    let rows: Vec<_> = got
+        .iter()
+        .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+        .collect();
     assert_eq!(rows, vec![serde_json::json!({"a": null, "b": 3, "c": 4})]);
 }
 
@@ -88,10 +101,15 @@ fn bignum_is_the_38_digit_decimal() {
     let engine = Engine::open_empty().unwrap();
     let one = |sql: &str| -> serde_json::Value {
         let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
-        got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).next().unwrap()
+        got.iter()
+            .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+            .next()
+            .unwrap()
     };
     assert_eq!(
-        one("SELECT CAST(CAST('9000000000000000000000000000' AS BIGNUM) + CAST('1000000000000000000' AS BIGNUM) AS VARCHAR) AS x"),
+        one(
+            "SELECT CAST(CAST('9000000000000000000000000000' AS BIGNUM) + CAST('1000000000000000000' AS BIGNUM) AS VARCHAR) AS x"
+        ),
         serde_json::json!({"x": "9000000001000000000000000000"})
     );
     assert_eq!(
@@ -99,7 +117,9 @@ fn bignum_is_the_38_digit_decimal() {
         serde_json::json!({"x": "-7"})
     );
     assert_eq!(
-        one("SELECT CAST(sum(CAST(v AS BIGNUM)) AS VARCHAR) AS x FROM (VALUES ('5000000000000000000000000000'), ('5000000000000000000000000000')) t(v)"),
+        one(
+            "SELECT CAST(sum(CAST(v AS BIGNUM)) AS VARCHAR) AS x FROM (VALUES ('5000000000000000000000000000'), ('5000000000000000000000000000')) t(v)"
+        ),
         serde_json::json!({"x": "10000000000000000000000000000"})
     );
     let refused = engine
@@ -122,8 +142,15 @@ fn a_materialized_cte_answers_as_a_plain_one() {
         assert_eq!(got.iter().map(|b| b.num_rows()).sum::<usize>(), 1, "{sql}");
     }
     let got = engine.sql("SELECT 'AS MATERIALIZED (' AS n").unwrap();
-    let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
-    assert_eq!(rows, vec![serde_json::json!({"n": "AS MATERIALIZED ("})], "a string is left as written");
+    let rows: Vec<_> = got
+        .iter()
+        .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![serde_json::json!({"n": "AS MATERIALIZED ("})],
+        "a string is left as written"
+    );
 }
 
 /// What the network nest's controller and escrow views call: a whole-string regex match, and `hex`
@@ -138,10 +165,15 @@ fn regexp_full_match_and_hex_as_duckdb_has_them() {
              lpad(hex(7 & 255), 2, '0') AS d",
         )
         .unwrap();
-    let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
+    let rows: Vec<_> = got
+        .iter()
+        .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+        .collect();
     assert_eq!(
         rows,
-        vec![serde_json::json!({"whole": true, "part": false, "a": "A", "b": "FF", "c": "0", "d": "07"})]
+        vec![
+            serde_json::json!({"whole": true, "part": false, "a": "A", "b": "FF", "c": "0", "d": "07"})
+        ]
     );
 }
 
@@ -156,7 +188,10 @@ fn a_repeated_expression_inside_a_cte_is_not_a_clash() {
              UNION ALL SELECT a + 1, b, c, d FROM f WHERE a < 3) SELECT count(*) AS n FROM f",
         )
         .unwrap_or_else(|e| panic!("{e}"));
-    let rows: Vec<_> = got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect();
+    let rows: Vec<_> = got
+        .iter()
+        .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+        .collect();
     assert_eq!(rows, vec![serde_json::json!({"n": 3})]);
 }
 
@@ -167,11 +202,16 @@ fn shifts_are_duckdbs() {
     let engine = Engine::open_empty().unwrap();
     let one = |sql: &str| -> serde_json::Value {
         let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
-        got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).next().unwrap()
+        got.iter()
+            .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+            .next()
+            .unwrap()
     };
     assert_eq!(
-        one("SELECT CAST(1000 AS BIGINT) >> 64 AS a, CAST(-1000 AS BIGINT) >> 3 AS b, CAST(1000 AS UBIGINT) >> -1 AS c, \
-             (CAST(66051 AS UBIGINT) >> 8) & 255 AS d, CAST(3 AS BIGINT) << 2 AS e"),
+        one(
+            "SELECT CAST(1000 AS BIGINT) >> 64 AS a, CAST(-1000 AS BIGINT) >> 3 AS b, CAST(1000 AS UBIGINT) >> -1 AS c, \
+             (CAST(66051 AS UBIGINT) >> 8) & 255 AS d, CAST(3 AS BIGINT) << 2 AS e"
+        ),
         serde_json::json!({"a": 0, "b": -125, "c": 0, "d": 2, "e": 12})
     );
     for sql in [
@@ -190,18 +230,31 @@ fn information_schema_follows_the_views() {
     let mut engine = Engine::open_empty().unwrap();
     let rows = |engine: &Engine, sql: &str| -> Vec<serde_json::Value> {
         let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
-        got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect()
+        got.iter()
+            .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+            .collect()
     };
     let tables = "SELECT table_name FROM information_schema.tables ORDER BY 1";
     engine.register_view("a", "SELECT 1 AS x").unwrap();
-    assert_eq!(rows(&engine, tables), vec![serde_json::json!({"table_name": "a"})]);
-    engine.register_view("b", "SELECT 'y' AS y, 2 AS z").unwrap();
     assert_eq!(
         rows(&engine, tables),
-        vec![serde_json::json!({"table_name": "a"}), serde_json::json!({"table_name": "b"})]
+        vec![serde_json::json!({"table_name": "a"})]
+    );
+    engine
+        .register_view("b", "SELECT 'y' AS y, 2 AS z")
+        .unwrap();
+    assert_eq!(
+        rows(&engine, tables),
+        vec![
+            serde_json::json!({"table_name": "a"}),
+            serde_json::json!({"table_name": "b"})
+        ]
     );
     assert_eq!(
-        rows(&engine, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'b' ORDER BY ordinal_position"),
+        rows(
+            &engine,
+            "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'b' ORDER BY ordinal_position"
+        ),
         vec![
             serde_json::json!({"column_name": "y", "data_type": "VARCHAR"}),
             serde_json::json!({"column_name": "z", "data_type": "BIGINT"}),
@@ -216,10 +269,16 @@ fn a_statement_that_does_not_plan_is_a_plan_error() {
     use burrmill::BurrmillError;
     let mut engine = Engine::open_empty().unwrap();
     engine.register_view("t", "SELECT 1 AS x").unwrap();
-    for sql in ["SELECT no_such_column FROM t", "SELECT x + 'a' FROM t", "SELECT * FROM t WHERE x < 'a'"] {
+    for sql in [
+        "SELECT no_such_column FROM t",
+        "SELECT x + 'a' FROM t",
+        "SELECT * FROM t WHERE x < 'a'",
+    ] {
         let e = engine.sql(sql).expect_err(sql);
         assert!(matches!(e, BurrmillError::Plan(_)), "{sql}: {e:?}");
     }
-    let e = engine.sql("SELECT error('at a row') FROM t").expect_err("raised at a row");
+    let e = engine
+        .sql("SELECT error('at a row') FROM t")
+        .expect_err("raised at a row");
     assert!(matches!(e, BurrmillError::Substrate(_)), "{e:?}");
 }

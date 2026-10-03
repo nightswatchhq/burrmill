@@ -59,7 +59,8 @@ fn materialized_after_as(b: &[u8], at: usize) -> Option<usize> {
     let word = |i: usize, w: &str| {
         b.len() >= i + w.len()
             && b[i..i + w.len()].eq_ignore_ascii_case(w.as_bytes())
-            && b.get(i + w.len()).is_none_or(|c| !(c.is_ascii_alphanumeric() || *c == b'_'))
+            && b.get(i + w.len())
+                .is_none_or(|c| !(c.is_ascii_alphanumeric() || *c == b'_'))
     };
     let space = |mut i: usize| {
         while b.get(i).is_some_and(u8::is_ascii_whitespace) {

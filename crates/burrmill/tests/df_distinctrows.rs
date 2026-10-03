@@ -13,7 +13,9 @@ use burrmill::Engine;
 type Row = (i64, Option<String>, Option<String>);
 
 fn lcg(seed: &mut u64) -> u64 {
-    *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *seed = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     *seed >> 33
 }
 
@@ -21,7 +23,9 @@ fn fixture() -> (tempfile::TempDir, Engine, Vec<Row>) {
     let mut s = 11;
     let text = |s: &mut u64, n: u64| (lcg(s) % 9 != 0).then(|| format!("v{}", lcg(s) % n));
     // The empty string beside NULL, and values that would collide if fields were only concatenated.
-    let mut rows: Vec<Row> = (0..4000).map(|_| ((lcg(&mut s) % 7) as i64, text(&mut s, 12), text(&mut s, 5))).collect();
+    let mut rows: Vec<Row> = (0..4000)
+        .map(|_| ((lcg(&mut s) % 7) as i64, text(&mut s, 12), text(&mut s, 5)))
+        .collect();
     rows.push((0, Some("ab".into()), Some("c".into())));
     rows.push((0, Some("a".into()), Some("bc".into())));
     rows.push((0, Some(String::new()), None));
@@ -41,9 +45,15 @@ fn write(segs: &Path, rows: &[Row]) {
         Field::new("b", DataType::Utf8, true),
     ]));
     let arrays: Vec<ArrayRef> = vec![
-        Arc::new(Int64Array::from(rows.iter().map(|r| r.0).collect::<Vec<_>>())),
-        Arc::new(StringArray::from(rows.iter().map(|r| r.1.clone()).collect::<Vec<_>>())),
-        Arc::new(StringArray::from(rows.iter().map(|r| r.2.clone()).collect::<Vec<_>>())),
+        Arc::new(Int64Array::from(
+            rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+        )),
+        Arc::new(StringArray::from(
+            rows.iter().map(|r| r.1.clone()).collect::<Vec<_>>(),
+        )),
+        Arc::new(StringArray::from(
+            rows.iter().map(|r| r.2.clone()).collect::<Vec<_>>(),
+        )),
     ];
     let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
     let f = std::fs::File::create(segs.join(format!("t-{:064x}.parquet", 1))).unwrap();
@@ -55,7 +65,13 @@ fn write(segs: &Path, rows: &[Row]) {
 fn counts(e: &Engine, sql: &str) -> BTreeMap<i64, (i64, i64)> {
     let mut out = BTreeMap::new();
     for b in e.sql(sql).unwrap_or_else(|err| panic!("{sql}\n{err}")) {
-        let col = |i: usize| b.column(i).as_any().downcast_ref::<Int64Array>().unwrap().clone();
+        let col = |i: usize| {
+            b.column(i)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .clone()
+        };
         let (k, n, m) = (col(0), col(1), col(2));
         for i in 0..b.num_rows() {
             out.insert(k.value(i), (n.value(i), m.value(i)));
@@ -76,8 +92,10 @@ fn a_distinct_row_is_counted_by_its_key_and_the_count_is_the_same() {
             firsts.entry(*k).or_default().insert(a.clone());
         }
     }
-    let expect: BTreeMap<i64, (i64, i64)> =
-        pairs.iter().map(|(k, p)| (*k, (p.len() as i64, firsts[k].len() as i64))).collect();
+    let expect: BTreeMap<i64, (i64, i64)> = pairs
+        .iter()
+        .map(|(k, p)| (*k, (p.len() as i64, firsts[k].len() as i64)))
+        .collect();
     assert_eq!(counts(&e, sql), expect);
 
     let mut plan = String::new();

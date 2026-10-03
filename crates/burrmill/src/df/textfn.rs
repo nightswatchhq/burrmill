@@ -46,7 +46,11 @@ impl TextFn {
             vec![TypeSignature::Uniform(arity, text.to_vec())],
             Volatility::Immutable,
         );
-        Arc::new(ScalarUDF::from(Self { name: name.to_string(), sig, f }))
+        Arc::new(ScalarUDF::from(Self {
+            name: name.to_string(),
+            sig,
+            f,
+        }))
     }
 }
 

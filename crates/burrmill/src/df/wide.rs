@@ -285,21 +285,38 @@ pub fn duck_number(s: &str) -> Option<DuckNumber> {
     let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     let part = |p: &str| {
         p.is_empty()
-            || (!p.starts_with('_') && !p.ends_with('_') && p.chars().all(|c| c.is_ascii_digit() || c == '_'))
+            || (!p.starts_with('_')
+                && !p.ends_with('_')
+                && p.chars().all(|c| c.is_ascii_digit() || c == '_'))
     };
     if int.is_empty() && frac.is_empty() || !part(int) || !part(frac) {
         return None;
     }
-    let all: Vec<u8> = int.chars().chain(frac.chars()).filter(|&c| c != '_').map(|c| c as u8 - b'0').collect();
+    let all: Vec<u8> = int
+        .chars()
+        .chain(frac.chars())
+        .filter(|&c| c != '_')
+        .map(|c| c as u8 - b'0')
+        .collect();
     let point = exp as i64 - frac.chars().filter(|&c| c != '_').count() as i64;
     if point >= 0 {
-        return Some(DuckNumber { neg, digits: all, zeros: point.min(u32::MAX as i64) as u32, round_up: false });
+        return Some(DuckNumber {
+            neg,
+            digits: all,
+            zeros: point.min(u32::MAX as i64) as u32,
+            round_up: false,
+        });
     }
     let drop = point.unsigned_abs() as usize;
     let cut = all.len().saturating_sub(drop);
     // The first digit dropped decides, and it exists only if the point stays within the digits.
     let round_up = drop <= all.len() && all[cut] >= 5;
-    Some(DuckNumber { neg, digits: all[..cut].to_vec(), zeros: 0, round_up })
+    Some(DuckNumber {
+        neg,
+        digits: all[..cut].to_vec(),
+        zeros: 0,
+        round_up,
+    })
 }
 
 impl<const N: usize> std::fmt::Display for Wide<N> {
@@ -383,11 +400,25 @@ mod tests {
     #[test]
     fn reads_integers_as_duckdb_does() {
         for (s, v) in [
-            ("010", Some("10")), (" 7 ", Some("7")), ("+1", Some("1")), ("7.0", Some("7")),
-            ("-0", Some("0")), ("-007.00", Some("-7")), (".0", Some("0")), ("7.9", Some("8")),
-            ("1e3", Some("1000")), ("1_000", Some("1000")), ("0x10", None), ("", None), ("-", None),
-            (".", None), ("7.", Some("7")), ("-7.5", Some("-8")), ("1e-1", Some("0")),
-            ("abc", None), (".5", Some("1")),
+            ("010", Some("10")),
+            (" 7 ", Some("7")),
+            ("+1", Some("1")),
+            ("7.0", Some("7")),
+            ("-0", Some("0")),
+            ("-007.00", Some("-7")),
+            (".0", Some("0")),
+            ("7.9", Some("8")),
+            ("1e3", Some("1000")),
+            ("1_000", Some("1000")),
+            ("0x10", None),
+            ("", None),
+            ("-", None),
+            (".", None),
+            ("7.", Some("7")),
+            ("-7.5", Some("-8")),
+            ("1e-1", Some("0")),
+            ("abc", None),
+            (".5", Some("1")),
         ] {
             let got = I320::parse_integer(s).unwrap().map(|w| w.to_string());
             assert_eq!(got.as_deref(), v, "{s:?}");

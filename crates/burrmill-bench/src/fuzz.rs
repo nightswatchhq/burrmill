@@ -21,7 +21,12 @@ use serde_json::Value;
 
 use crate::generate::Rng;
 
-fn write(dir: &std::path::Path, name: &str, schema: Arc<Schema>, cols: Vec<ArrayRef>) -> anyhow::Result<()> {
+fn write(
+    dir: &std::path::Path,
+    name: &str,
+    schema: Arc<Schema>,
+    cols: Vec<ArrayRef>,
+) -> anyhow::Result<()> {
     let batch = RecordBatch::try_new(schema.clone(), cols)?;
     let f = std::fs::File::create(dir.join(format!("{name}-{:064x}.parquet", 1)))?;
     let mut w = parquet::arrow::ArrowWriter::try_new(f, schema, None)?;
@@ -32,15 +37,39 @@ fn write(dir: &std::path::Path, name: &str, schema: Arc<Schema>, cols: Vec<Array
 
 fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
     let mut r = Rng(7);
-    let addrs = [Some("0xa"), Some("0xA"), Some("0xb"), Some("0xc"), Some("0xd"), None];
+    let addrs = [
+        Some("0xa"),
+        Some("0xA"),
+        Some("0xb"),
+        Some("0xc"),
+        Some("0xd"),
+        None,
+    ];
     let values = [
-        Some("10"), Some("4"), Some("0"), Some("-5"), Some("010"), Some("7"), Some("123456789"),
-        Some("250000000000000000000"), Some("abc"), Some(""), None,
+        Some("10"),
+        Some("4"),
+        Some("0"),
+        Some("-5"),
+        Some("010"),
+        Some("7"),
+        Some("123456789"),
+        Some("250000000000000000000"),
+        Some("abc"),
+        Some(""),
+        None,
     ];
     let n = 120;
     let pick = |r: &mut Rng, xs: &[Option<&'static str>]| xs[r.below(xs.len())];
-    let (mut bn, mut li, mut from, mut to, mut value, mut amount, mut flag, mut kind) =
-        (vec![], vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    let (mut bn, mut li, mut from, mut to, mut value, mut amount, mut flag, mut kind) = (
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    );
     let (mut ts, mut memo, mut doc) = (vec![], vec![], vec![]);
     let docs = [
         Some(r#"{"a": 1, "b": "x", "c": [1, 2, {"d": "deep"}]}"#),
@@ -52,8 +81,16 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
         None,
     ];
     let memos = [
-        Some("swap 12 GRT"), Some("Swap 7 grt"), Some("stake:alice"), Some("stake:Bob"), Some(""),
-        Some("a,b,,c"), Some("  padded  "), Some("0xDEADbeef"), Some("naïve café"), None,
+        Some("swap 12 GRT"),
+        Some("Swap 7 grt"),
+        Some("stake:alice"),
+        Some("stake:Bob"),
+        Some(""),
+        Some("a,b,,c"),
+        Some("  padded  "),
+        Some("0xDEADbeef"),
+        Some("naïve café"),
+        None,
     ];
     for i in 0..n {
         bn.push(1 + (i / 3) as u64);
@@ -61,7 +98,11 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
         from.push(pick(&mut r, &addrs));
         to.push(pick(&mut r, &addrs));
         value.push(pick(&mut r, &values));
-        amount.push(if r.below(8) == 0 { None } else { Some(r.below(200) as i64 - 60) });
+        amount.push(if r.below(8) == 0 {
+            None
+        } else {
+            Some(r.below(200) as i64 - 60)
+        });
         flag.push(pick(&mut r, &[Some("true"), Some("false"), None]));
         kind.push(pick(&mut r, &[Some("in"), Some("out")]));
         // Two years from 2023-11-14, with some rows on the exact day, month and year boundaries.
@@ -114,9 +155,30 @@ fn fixture(dir: &std::path::Path) -> anyhow::Result<()> {
         "lbl",
         schema,
         vec![
-            s(vec![Some("0xa"), Some("0xb"), Some("0xb"), Some("0xC"), None, Some("0xe")]),
-            s(vec![Some("alice"), Some("bob"), Some("Bob"), None, Some("nobody"), Some("eve")]),
-            Arc::new(Int64Array::from(vec![Some(3), Some(-1), None, Some(10), Some(0), Some(7)])),
+            s(vec![
+                Some("0xa"),
+                Some("0xb"),
+                Some("0xb"),
+                Some("0xC"),
+                None,
+                Some("0xe"),
+            ]),
+            s(vec![
+                Some("alice"),
+                Some("bob"),
+                Some("Bob"),
+                None,
+                Some("nobody"),
+                Some("eve"),
+            ]),
+            Arc::new(Int64Array::from(vec![
+                Some(3),
+                Some(-1),
+                None,
+                Some(10),
+                Some(0),
+                Some(7),
+            ])),
         ],
     )?;
     Ok(())
@@ -154,7 +216,9 @@ impl Gen<'_> {
         match self.r.below(27) {
             // Unsigned targets take a magnitude: a negative there is DuckDB's error, not a test of the cast.
             20 => match self.one(&["INTEGER", "SMALLINT", "UBIGINT", "HUGEINT", "UINTEGER"]) {
-                t @ ("UBIGINT" | "UINTEGER") => format!("CAST(abs({}) AS {t})", self.int(sc, d - 1)),
+                t @ ("UBIGINT" | "UINTEGER") => {
+                    format!("CAST(abs({}) AS {t})", self.int(sc, d - 1))
+                }
                 t => format!("CAST({} AS {t})", self.int(sc, d - 1)),
             },
             0 => format!("({} + {})", self.int(sc, d - 1), self.int(sc, d - 1)),
@@ -174,10 +238,26 @@ impl Gen<'_> {
             9 => format!("length({})", self.text(sc, d - 1)),
             10 => format!("CAST({} AS BIGINT)", self.int(sc, d - 1)),
             11 => format!("greatest({}, {})", self.int(sc, d - 1), self.int(sc, d - 1)),
-            12 => format!("{}({})", self.one(&["year", "month", "day", "hour", "dayofweek", "epoch"]), self.time(sc, d - 1)),
-            13 => format!("extract({} FROM {})", self.one(&["year", "month", "minute", "doy", "quarter"]), self.time(sc, d - 1)),
-            14 => format!("date_part('{}', {})", self.one(&["hour", "dow", "week", "second"]), self.time(sc, d - 1)),
-            15 => format!("strpos({}, '{}')", self.text(sc, d - 1), self.one(&["a", "0x", ":", " "])),
+            12 => format!(
+                "{}({})",
+                self.one(&["year", "month", "day", "hour", "dayofweek", "epoch"]),
+                self.time(sc, d - 1)
+            ),
+            13 => format!(
+                "extract({} FROM {})",
+                self.one(&["year", "month", "minute", "doy", "quarter"]),
+                self.time(sc, d - 1)
+            ),
+            14 => format!(
+                "date_part('{}', {})",
+                self.one(&["hour", "dow", "week", "second"]),
+                self.time(sc, d - 1)
+            ),
+            15 => format!(
+                "strpos({}, '{}')",
+                self.text(sc, d - 1),
+                self.one(&["a", "0x", ":", " "])
+            ),
             16 => format!("NULLIF({}, {})", self.int(sc, d - 1), self.r.below(5)),
             17 => format!("sign({})", self.int(sc, d - 1)),
             18 => format!("CAST(floor({} / 7.0) AS BIGINT)", self.int(sc, d - 1)),
@@ -210,7 +290,12 @@ impl Gen<'_> {
                     "list_reduce([CAST(strpos('0123456789abcdef', c) - 1 AS HUGEINT) FOR c IN string_split('{hex}', '')], lambda acc, d: acc * 16 + d)"
                 )
             }
-            _ => format!("date_diff('{}', {}, {})", self.one(&["day", "hour", "month"]), self.time(sc, d - 1), self.time(sc, d - 1)),
+            _ => format!(
+                "date_diff('{}', {}, {})",
+                self.one(&["day", "hour", "month"]),
+                self.time(sc, d - 1),
+                self.time(sc, d - 1)
+            ),
         }
     }
 
@@ -221,9 +306,18 @@ impl Gen<'_> {
             return base.into();
         }
         match self.r.below(5) {
-            0 => format!("date_trunc('{}', {})", self.one(&["day", "hour", "month", "year", "week"]), self.time(sc, d - 1)),
+            0 => format!(
+                "date_trunc('{}', {})",
+                self.one(&["day", "hour", "month", "year", "week"]),
+                self.time(sc, d - 1)
+            ),
             1 => format!("CAST({} AS DATE)", self.time(sc, d - 1)),
-            2 => format!("({} + INTERVAL {} {})", self.time(sc, d - 1), self.r.below(40), self.one(&["DAY", "HOUR", "MINUTE"])),
+            2 => format!(
+                "({} + INTERVAL {} {})",
+                self.time(sc, d - 1),
+                self.r.below(40),
+                self.one(&["DAY", "HOUR", "MINUTE"])
+            ),
             3 => format!("to_timestamp(e.ts + {})", self.int(sc, d - 1)),
             _ => base.into(),
         }
@@ -231,12 +325,22 @@ impl Gen<'_> {
 
     fn text(&mut self, sc: &Scope, d: usize) -> String {
         if d == 0 || self.chance(3) {
-            let mut cols = vec!["e.\"from\"", "e.\"to\"", "e.value", "e.flag", "e.kind", "e.memo"];
+            let mut cols = vec![
+                "e.\"from\"",
+                "e.\"to\"",
+                "e.value",
+                "e.flag",
+                "e.kind",
+                "e.memo",
+            ];
             if sc.joined {
                 cols.extend(["l.addr", "l.name"]);
             }
             return match self.r.below(5) {
-                0 => format!("'{}'", self.one(&["0xa", "0xA", "in", "", "x y", "Bob", "10"])),
+                0 => format!(
+                    "'{}'",
+                    self.one(&["0xa", "0xA", "in", "", "x y", "Bob", "10"])
+                ),
                 _ => self.one(&cols).to_string(),
             };
         }
@@ -244,7 +348,12 @@ impl Gen<'_> {
             0 => format!("lower({})", self.text(sc, d - 1)),
             1 => format!("upper({})", self.text(sc, d - 1)),
             2 => format!("({} || {})", self.text(sc, d - 1), self.text(sc, d - 1)),
-            3 => format!("substr({}, {}, {})", self.text(sc, d - 1), 1 + self.r.below(3), self.r.below(4)),
+            3 => format!(
+                "substr({}, {}, {})",
+                self.text(sc, d - 1),
+                1 + self.r.below(3),
+                self.r.below(4)
+            ),
             4 => format!("COALESCE({}, 'z')", self.text(sc, d - 1)),
             5 => format!("CAST({} AS VARCHAR)", self.int(sc, d - 1)),
             6 => format!(
@@ -254,22 +363,61 @@ impl Gen<'_> {
                 self.text(sc, d - 1)
             ),
             7 => format!("replace({}, '0x', '')", self.text(sc, d - 1)),
-            8 => format!("split_part({}, '{}', {})", self.text(sc, d - 1), self.one(&[",", ":", " "]), 1 + self.r.below(3)),
-            9 => format!("{}({})", self.one(&["trim", "ltrim", "rtrim", "reverse"]), self.text(sc, d - 1)),
-            10 => format!("{}({}, {})", self.one(&["left", "right"]), self.text(sc, d - 1), self.r.below(5)),
-            11 => format!("{}({}, {}, '*')", self.one(&["lpad", "rpad"]), self.text(sc, d - 1), self.r.below(12)),
-            12 => format!("regexp_replace({}, '{}', '{}')", self.text(sc, d - 1), self.one(&["[0-9]+", "^s", "[aeiou]", "(\\w+):(\\w+)"]), self.one(&["#", "", "\\2-\\1"])),
-            13 => format!("regexp_extract({}, '{}')", self.text(sc, d - 1), self.one(&["[0-9]+", "[A-Za-z]+", "0x[0-9a-fA-F]+"])),
-            14 => format!("strftime({}, '{}')", self.time(sc, d - 1), self.one(&["%Y-%m-%d", "%H:%M", "%Y-%m-%d %H:%M:%S", "%b %d"])),
+            8 => format!(
+                "split_part({}, '{}', {})",
+                self.text(sc, d - 1),
+                self.one(&[",", ":", " "]),
+                1 + self.r.below(3)
+            ),
+            9 => format!(
+                "{}({})",
+                self.one(&["trim", "ltrim", "rtrim", "reverse"]),
+                self.text(sc, d - 1)
+            ),
+            10 => format!(
+                "{}({}, {})",
+                self.one(&["left", "right"]),
+                self.text(sc, d - 1),
+                self.r.below(5)
+            ),
+            11 => format!(
+                "{}({}, {}, '*')",
+                self.one(&["lpad", "rpad"]),
+                self.text(sc, d - 1),
+                self.r.below(12)
+            ),
+            12 => format!(
+                "regexp_replace({}, '{}', '{}')",
+                self.text(sc, d - 1),
+                self.one(&["[0-9]+", "^s", "[aeiou]", "(\\w+):(\\w+)"]),
+                self.one(&["#", "", "\\2-\\1"])
+            ),
+            13 => format!(
+                "regexp_extract({}, '{}')",
+                self.text(sc, d - 1),
+                self.one(&["[0-9]+", "[A-Za-z]+", "0x[0-9a-fA-F]+"])
+            ),
+            14 => format!(
+                "strftime({}, '{}')",
+                self.time(sc, d - 1),
+                self.one(&["%Y-%m-%d", "%H:%M", "%Y-%m-%d %H:%M:%S", "%b %d"])
+            ),
             15 => format!("CAST({} AS VARCHAR)", self.time(sc, d - 1)),
-            16 => format!("concat_ws('-', {}, {})", self.text(sc, d - 1), self.text(sc, d - 1)),
+            16 => format!(
+                "concat_ws('-', {}, {})",
+                self.text(sc, d - 1),
+                self.text(sc, d - 1)
+            ),
             17 => format!("repeat({}, {})", self.text(sc, d - 1), self.r.below(3)),
             18 => format!(
                 "TRY(json_extract_string(e.doc, '{}'))",
                 self.one(&["$.a", "$.b", "$.c[2].d", "$[1]", "$.b.a", "$.n", "a", "$[#-1]"])
             ),
             19 => format!("TRY(e.doc ->> '{}')", self.one(&["a", "$.c[0]", "$.b"])),
-            20 => format!("TRY(json_type(e.doc, '{}'))", self.one(&["$.a", "$.c", "$.n", "$"])),
+            20 => format!(
+                "TRY(json_type(e.doc, '{}'))",
+                self.one(&["$.a", "$.c", "$.n", "$"])
+            ),
             // A negative start counts from the end, and a negative length runs backwards.
             22 => format!(
                 "substr({}, {}, {})",
@@ -285,7 +433,10 @@ impl Gen<'_> {
             ),
             // decode, so the result is text. A bare blob in a string operation is a different
             // type, and DuckDB refuses it where a cast to text would answer.
-            24 => format!("decode(from_hex('{}'))", self.one(&["", "61", "6162", "20", "0a"])),
+            24 => format!(
+                "decode(from_hex('{}'))",
+                self.one(&["", "61", "6162", "20", "0a"])
+            ),
             25 => format!("({}::VARCHAR)", self.int(sc, d - 1)),
             26 => format!(
                 "[c FOR c IN string_split(COALESCE({}, 'ab'), '{}') IF c <> ''][1]",
@@ -300,8 +451,16 @@ impl Gen<'_> {
         match self.r.below(5) {
             0 => "TRY_CAST(e.value AS HUGEINT)".into(),
             1 => format!("CAST({} AS HUGEINT)", self.int(sc, d.saturating_sub(1))),
-            2 => format!("({} * {})", self.dec(sc, d.saturating_sub(1)), self.one(&["1.5", "0.25", "2", "-3"])),
-            3 => format!("({} + {})", self.dec(sc, d.saturating_sub(1)), self.dec(sc, d.saturating_sub(1))),
+            2 => format!(
+                "({} * {})",
+                self.dec(sc, d.saturating_sub(1)),
+                self.one(&["1.5", "0.25", "2", "-3"])
+            ),
+            3 => format!(
+                "({} + {})",
+                self.dec(sc, d.saturating_sub(1)),
+                self.dec(sc, d.saturating_sub(1))
+            ),
             _ => format!("TRY_CAST(e.value AS DECIMAL(20,2))"),
         }
     }
@@ -310,16 +469,47 @@ impl Gen<'_> {
     fn num(&mut self, sc: &Scope, d: usize) -> String {
         let d = d.max(1);
         match self.r.below(12) {
-            0 => format!("({} {} {})", self.int(sc, d - 1), self.one(&["+", "-", "*"]), self.one(&["1.5", "0.1", "2.25", "-0.5"])),
-            1 => format!("({} / {})", self.int(sc, d - 1), self.one(&["3", "7", "2.5", "0.3"])),
+            0 => format!(
+                "({} {} {})",
+                self.int(sc, d - 1),
+                self.one(&["+", "-", "*"]),
+                self.one(&["1.5", "0.1", "2.25", "-0.5"])
+            ),
+            1 => format!(
+                "({} / {})",
+                self.int(sc, d - 1),
+                self.one(&["3", "7", "2.5", "0.3"])
+            ),
             2 => format!("CAST({} AS DOUBLE)", self.int(sc, d - 1)),
             3 => format!("round({} / 7, {})", self.int(sc, d - 1), self.r.below(3)),
-            4 => format!("CASE WHEN {} THEN {} ELSE {} END", self.pred(sc, d - 1), self.int(sc, d - 1), self.one(&["2.5", "0.125", "CAST(1 AS DOUBLE)"])),
-            5 => format!("COALESCE({}, {})", self.int(sc, d - 1), self.one(&["0.5", "1e2"])),
-            6 => format!("greatest({}, {})", self.int(sc, d - 1), self.one(&["1.5", "20.75"])),
+            4 => format!(
+                "CASE WHEN {} THEN {} ELSE {} END",
+                self.pred(sc, d - 1),
+                self.int(sc, d - 1),
+                self.one(&["2.5", "0.125", "CAST(1 AS DOUBLE)"])
+            ),
+            5 => format!(
+                "COALESCE({}, {})",
+                self.int(sc, d - 1),
+                self.one(&["0.5", "1e2"])
+            ),
+            6 => format!(
+                "greatest({}, {})",
+                self.int(sc, d - 1),
+                self.one(&["1.5", "20.75"])
+            ),
             7 => format!("({} + {})", self.dec(sc, d - 1), self.int(sc, d - 1)),
-            8 => format!("CAST({} AS DECIMAL({}, {}))", self.int(sc, d - 1), 10 + self.r.below(9), self.r.below(4)),
-            10 => format!("power({}, {})", self.one(&["2", "10", "-2", "1.5"]), self.r.below(5)),
+            8 => format!(
+                "CAST({} AS DECIMAL({}, {}))",
+                self.int(sc, d - 1),
+                10 + self.r.below(9),
+                self.r.below(4)
+            ),
+            10 => format!(
+                "power({}, {})",
+                self.one(&["2", "10", "-2", "1.5"]),
+                self.r.below(5)
+            ),
             11 => format!("({}::DOUBLE)", self.int(sc, d - 1)),
             _ => format!("({} - {})", self.num(sc, d - 1), self.int(sc, d - 1)),
         }
@@ -329,9 +519,25 @@ impl Gen<'_> {
         let d = d.min(3);
         if d > 0 && self.chance(8) {
             return match self.r.below(3) {
-                0 => format!("{} {} {}", self.num(sc, d), self.one(&["=", "<>", "<", ">", "<=", ">="]), self.num(sc, d)),
-                1 => format!("{} {}IN ({}, NULL, {})", self.int(sc, d), self.one(&["", "NOT "]), self.r.below(10), self.r.below(60)),
-                _ => format!("{} {} {}", self.int(sc, d), self.one(&["<", ">=", "="]), self.one(&["2.5", "10.0", "-0.5", "1e1"])),
+                0 => format!(
+                    "{} {} {}",
+                    self.num(sc, d),
+                    self.one(&["=", "<>", "<", ">", "<=", ">="]),
+                    self.num(sc, d)
+                ),
+                1 => format!(
+                    "{} {}IN ({}, NULL, {})",
+                    self.int(sc, d),
+                    self.one(&["", "NOT "]),
+                    self.r.below(10),
+                    self.r.below(60)
+                ),
+                _ => format!(
+                    "{} {} {}",
+                    self.int(sc, d),
+                    self.one(&["<", ">=", "="]),
+                    self.one(&["2.5", "10.0", "-0.5", "1e1"])
+                ),
             };
         }
         match self.r.below(if d == 0 { 7 } else { 14 }) {
@@ -384,7 +590,11 @@ impl Gen<'_> {
     fn from(&mut self, sc: &Scope) -> String {
         if sc.joined {
             let kind = self.one(&["JOIN", "LEFT JOIN"]);
-            let on = self.one(&["l.addr = e.\"to\"", "l.addr = e.\"from\"", "lower(l.addr) = lower(e.\"to\")"]);
+            let on = self.one(&[
+                "l.addr = e.\"to\"",
+                "l.addr = e.\"from\"",
+                "lower(l.addr) = lower(e.\"to\")",
+            ]);
             format!("ev e {kind} lbl l ON {on}")
         } else {
             "ev e".into()
@@ -393,9 +603,15 @@ impl Gen<'_> {
 
     /// A query and whether its row order is part of the answer.
     fn query(&mut self) -> (String, bool) {
-        let sc = Scope { joined: self.chance(3) };
+        let sc = Scope {
+            joined: self.chance(3),
+        };
         let from = self.from(&sc);
-        let filter = if self.chance(2) { format!(" WHERE {}", self.pred(&sc, 2)) } else { String::new() };
+        let filter = if self.chance(2) {
+            format!(" WHERE {}", self.pred(&sc, 2))
+        } else {
+            String::new()
+        };
         match self.r.below(17) {
             // Grouped over a derived table, keys and values computed inside.
             8 => {
@@ -728,17 +944,26 @@ fn float_close(w: &[String], g: &[String], ordered: bool) -> bool {
     fn close(a: &Value, b: &Value) -> bool {
         match (a, b) {
             (Value::Number(x), Value::Number(y)) if x.is_f64() || y.is_f64() => {
-                let (x, y) = (x.as_f64().unwrap_or(f64::NAN), y.as_f64().unwrap_or(f64::NAN));
+                let (x, y) = (
+                    x.as_f64().unwrap_or(f64::NAN),
+                    y.as_f64().unwrap_or(f64::NAN),
+                );
                 x == y || (x - y).abs() <= 1e-12 * x.abs().max(y.abs())
             }
             (Value::Object(x), Value::Object(y)) => {
                 x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|u| close(v, u)))
             }
-            (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(a, b)| close(a, b)),
+            (Value::Array(x), Value::Array(y)) => {
+                x.len() == y.len() && x.iter().zip(y).all(|(a, b)| close(a, b))
+            }
             (a, b) => a == b,
         }
     }
-    let parse = |v: &[String]| v.iter().map(|r| serde_json::from_str::<Value>(r)).collect::<Result<Vec<_>, _>>();
+    let parse = |v: &[String]| {
+        v.iter()
+            .map(|r| serde_json::from_str::<Value>(r))
+            .collect::<Result<Vec<_>, _>>()
+    };
     let (Ok(w), Ok(g)) = (parse(w), parse(g)) else {
         return false;
     };
@@ -749,13 +974,14 @@ fn float_close(w: &[String], g: &[String], ordered: bool) -> bool {
         return w.iter().zip(&g).all(|(a, b)| close(a, b));
     }
     let mut left: Vec<&Value> = w.iter().collect();
-    g.iter().all(|r| match left.iter().position(|x| close(x, r)) {
-        Some(i) => {
-            left.swap_remove(i);
-            true
-        }
-        None => false,
-    })
+    g.iter()
+        .all(|r| match left.iter().position(|x| close(x, r)) {
+            Some(i) => {
+                left.swap_remove(i);
+                true
+            }
+            None => false,
+        })
 }
 
 fn duck_rows(conn: &duckdb::Connection, sql: &str) -> Result<Vec<String>, String> {
@@ -792,18 +1018,36 @@ pub fn run() -> anyhow::Result<()> {
         segs.display()
     ))?;
     let s2 = segs.clone();
-    let engine = std::thread::spawn(move || burrmill::Engine::open_segments(&s2)).join().expect("open")?;
+    let engine = std::thread::spawn(move || burrmill::Engine::open_segments(&s2))
+        .join()
+        .expect("open")?;
     let engine = Arc::new(engine);
 
     // `SQL=<query>` runs that one query against the fixture and prints both answers.
     if let Ok(q) = std::env::var("SQL") {
         println!("duckdb   {:?}", duck_rows(&duck, &q));
         let e2 = Arc::clone(&engine);
-        println!("burrmill {:?}", std::thread::spawn(move || burrmill_rows(&e2, &q)).join().expect("engine thread"));
-        std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+        println!(
+            "burrmill {:?}",
+            std::thread::spawn(move || burrmill_rows(&e2, &q))
+                .join()
+                .expect("engine thread")
+        );
+        std::thread::spawn(move || drop(engine))
+            .join()
+            .expect("drop engine");
         return Ok(());
     }
-    let (mut same, mut both, mut stricter, mut looser, mut differ, mut designed, mut overflow_order, mut designed_exact) = (0, 0, 0, 0, 0, 0, 0, 0);
+    let (
+        mut same,
+        mut both,
+        mut stricter,
+        mut looser,
+        mut differ,
+        mut designed,
+        mut overflow_order,
+        mut designed_exact,
+    ) = (0, 0, 0, 0, 0, 0, 0, 0);
     let mut float_order = 0;
     let mut stricter_why: std::collections::BTreeMap<String, usize> = Default::default();
     for i in 0..cases {
@@ -813,7 +1057,9 @@ pub fn run() -> anyhow::Result<()> {
         let want = duck_rows(&duck, &sql);
         let e2 = Arc::clone(&engine);
         let q = sql.clone();
-        let got = std::thread::spawn(move || burrmill_rows(&e2, &q)).join().expect("engine thread");
+        let got = std::thread::spawn(move || burrmill_rows(&e2, &q))
+            .join()
+            .expect("engine thread");
         let tag = match (&want, &got) {
             (Ok(w), Ok(g)) => {
                 let (mut w, mut g) = (w.clone(), g.clone());
@@ -908,9 +1154,23 @@ pub fn run() -> anyhow::Result<()> {
                         None => right.push(r),
                     }
                 }
-                let show = |v: &[&String]| v.iter().take(4).map(|s| s.as_str()).collect::<Vec<_>>().join(",");
-                println!("    duckdb only   ({}) {}", left.len(), show(&left).chars().take(400).collect::<String>());
-                println!("    burrmill only ({}) {}", right.len(), show(&right).chars().take(400).collect::<String>());
+                let show = |v: &[&String]| {
+                    v.iter()
+                        .take(4)
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                println!(
+                    "    duckdb only   ({}) {}",
+                    left.len(),
+                    show(&left).chars().take(400).collect::<String>()
+                );
+                println!(
+                    "    burrmill only ({}) {}",
+                    right.len(),
+                    show(&right).chars().take(400).collect::<String>()
+                );
             } else if tag != "SAME" {
                 println!("    duckdb   {}", clip(&want));
                 println!("    burrmill {}", clip(&got));
@@ -926,6 +1186,8 @@ pub fn run() -> anyhow::Result<()> {
     println!(
         "FUZZ\tseed={seed}\tcases={cases}\tsame={same}\tboth_refuse={both}\tdesigned_refusal={designed}\tdesigned_exact={designed_exact}\toverflow_order={overflow_order}\tfloat_order={float_order}\tstricter={stricter}\tlooser={looser}\tdiffer={differ}"
     );
-    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+    std::thread::spawn(move || drop(engine))
+        .join()
+        .expect("drop engine");
     Ok(())
 }

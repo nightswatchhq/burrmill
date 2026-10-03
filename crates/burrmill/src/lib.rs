@@ -45,32 +45,37 @@
 //! # Ok::<(), burrmill::BurrmillError>(())
 //! ```
 
+#[cfg(feature = "datafusion")]
+pub mod df;
 pub mod error;
+pub mod exec;
 pub mod gate;
 pub mod inspect;
-pub mod exec;
 pub mod limits;
 mod listcomp;
 pub mod plan;
 pub mod seam;
 pub mod segment;
-#[cfg(feature = "datafusion")]
-pub mod df;
 
 pub use error::{BurrmillError, Result};
 
 /// This build of the engine, for a host's reuse keys: it changes with any change to Burrmill's source
 /// or manifest, so an answer computed by one build is never taken for another's.
-pub const ENGINE: &str = concat!("burrmill ", env!("CARGO_PKG_VERSION"), "+", env!("BURRMILL_SOURCE_HASH"));
+pub const ENGINE: &str = concat!(
+    "burrmill ",
+    env!("CARGO_PKG_VERSION"),
+    "+",
+    env!("BURRMILL_SOURCE_HASH")
+);
+#[cfg(feature = "datafusion")]
+pub use df::{Budget, Engine};
 pub use exec::agg::Rows;
 pub use exec::{CancelToken, FoldMetrics};
-pub use limits::Limits;
 pub use gate::Gate;
+pub use limits::Limits;
 pub use plan::{Plan, SignedFold};
 pub use seam::{HotRow, HotSnapshot, HotTip, MemoryTip};
 pub use segment::{Catalog, SealedSegments};
-#[cfg(feature = "datafusion")]
-pub use df::{Budget, Engine};
 
 use std::path::Path;
 
@@ -171,15 +176,19 @@ pub fn default_width(pool_threads: usize) -> usize {
 }
 
 fn build_pool(threads: usize) -> Result<std::sync::Arc<rayon::ThreadPool>> {
-    let want = threads
-        .max(1)
-        .min(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(threads.max(1)));
+    let want = threads.max(1).min(
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(threads.max(1)),
+    );
     rayon::ThreadPoolBuilder::new()
         .num_threads(want)
         .thread_name(|i| format!("burrmill-{i}"))
         .build()
         .map(std::sync::Arc::new)
-        .map_err(|e| BurrmillError::Substrate(format!("could not build the fold's thread pool: {e}")))
+        .map_err(|e| {
+            BurrmillError::Substrate(format!("could not build the fold's thread pool: {e}"))
+        })
 }
 
 impl Burrmill {
@@ -245,7 +254,11 @@ impl Burrmill {
                 "no segment in {} matches `{prefix}`; {} table prefixes are present{}: {}",
                 segments_dir.display(),
                 found.len(),
-                if found.len() > shown.len() { ", first 12" } else { "" },
+                if found.len() > shown.len() {
+                    ", first 12"
+                } else {
+                    ""
+                },
                 shown.join(", ")
             )));
         }
@@ -302,13 +315,18 @@ impl Burrmill {
         let mut resolved: Vec<SealedSegments> = Vec::with_capacity(fold.branches.len());
         for b in &fold.branches {
             let set = self.catalog.resolve(&b.table)?;
-            resolved.push(if snapshot.is_some() { set.refresh()? } else { set.clone() });
+            resolved.push(if snapshot.is_some() {
+                set.refresh()?
+            } else {
+                set.clone()
+            });
         }
         let segments: Vec<&SealedSegments> = resolved.iter().collect();
 
-        let seam = snapshot
-            .as_ref()
-            .map(|s| exec::signed_fold::Seam { snapshot: s, block_col: &self.block_col });
+        let seam = snapshot.as_ref().map(|s| exec::signed_fold::Seam {
+            snapshot: s,
+            block_col: &self.block_col,
+        });
 
         // **Through the gate, then into the pool.** The gate is taken before `install` and released
         // when this scope ends, so a query waits in a queue whose order we control rather than in
@@ -338,7 +356,11 @@ impl Burrmill {
             }
             exec.run()
         })?;
-        Ok(Answer { rows, plan: plan.clone(), metrics })
+        Ok(Answer {
+            rows,
+            plan: plan.clone(),
+            metrics,
+        })
     }
 
     /// What the query would do, without doing it.

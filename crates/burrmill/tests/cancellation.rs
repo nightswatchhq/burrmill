@@ -34,16 +34,28 @@ fn fixture(dir: &Path, rows: usize, segments: usize) {
     ]));
     let per = rows / segments;
     for s in 0..segments {
-        let from: Vec<String> = (0..per).map(|i| format!("0x{:040x}", (s * per + i) % 90_000)).collect();
-        let to: Vec<String> = (0..per).map(|i| format!("0x{:040x}", (s * per + i) * 7 % 90_000)).collect();
-        let value: Vec<String> = (0..per).map(|i| (1_000_000 + i as u64 % 97).to_string()).collect();
+        let from: Vec<String> = (0..per)
+            .map(|i| format!("0x{:040x}", (s * per + i) % 90_000))
+            .collect();
+        let to: Vec<String> = (0..per)
+            .map(|i| format!("0x{:040x}", (s * per + i) * 7 % 90_000))
+            .collect();
+        let value: Vec<String> = (0..per)
+            .map(|i| (1_000_000 + i as u64 % 97).to_string())
+            .collect();
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
                 Arc::new(UInt64Array::from((0..per as u64).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(from.iter().map(|s| s.as_str()).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(to.iter().map(|s| s.as_str()).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(value.iter().map(|s| s.as_str()).collect::<Vec<_>>())),
+                Arc::new(StringArray::from(
+                    from.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    to.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    value.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                )),
             ],
         )
         .unwrap();
@@ -71,7 +83,10 @@ fn a_running_query_stops_promptly() {
     let whole = Instant::now();
     db.query(SQL, Limits::default()).unwrap();
     let whole = whole.elapsed();
-    assert!(whole > Duration::from_millis(60), "fixture too small to interrupt: {whole:?}");
+    assert!(
+        whole > Duration::from_millis(60),
+        "fixture too small to interrupt: {whole:?}"
+    );
 
     let token = CancelToken::new();
     let t = token.clone();
@@ -96,7 +111,10 @@ fn a_running_query_stops_promptly() {
         "stopping took {delay:?}, against a whole query of {whole:?}. The delay is supposed to be \
          bounded by one morsel, not by the rest of the scan"
     );
-    assert!(started.elapsed() < whole * 2, "the query outlived its own uninterrupted runtime");
+    assert!(
+        started.elapsed() < whole * 2,
+        "the query outlived its own uninterrupted runtime"
+    );
 }
 
 /// **A query still waiting for its turn stops too, and this is the one the gate broke.**
@@ -135,7 +153,11 @@ fn a_queued_query_stops_without_waiting_for_its_turn() {
     let delay = asked.elapsed();
     let _ = hog.join();
 
-    assert!(matches!(got, Err(BurrmillError::Cancelled)), "got {:?}", got.map(|a| a.rows().len()));
+    assert!(
+        matches!(got, Err(BurrmillError::Cancelled)),
+        "got {:?}",
+        got.map(|a| a.rows().len())
+    );
     assert!(
         delay < whole / 3,
         "a queued query took {delay:?} to notice it had been cancelled, against a whole query of \

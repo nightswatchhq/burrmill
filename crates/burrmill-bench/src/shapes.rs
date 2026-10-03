@@ -88,7 +88,11 @@ impl Shape {
         if self.0.is_empty() {
             return "scan-only".into();
         }
-        self.0.iter().map(|f| f.label()).collect::<Vec<_>>().join("+")
+        self.0
+            .iter()
+            .map(|f| f.label())
+            .collect::<Vec<_>>()
+            .join("+")
     }
 
     /// The same statement at the granularity a **planner** cares about.
@@ -225,7 +229,10 @@ fn walk_expr(e: &Expr, sh: &mut Shape) {
             if let FunctionArguments::List(l) = &f.args {
                 for a in &l.args {
                     if let FunctionArg::Unnamed(FunctionArgExpr::Expr(x))
-                    | FunctionArg::Named { arg: FunctionArgExpr::Expr(x), .. } = a
+                    | FunctionArg::Named {
+                        arg: FunctionArgExpr::Expr(x),
+                        ..
+                    } = a
                     {
                         walk_expr(x, sh);
                     }
@@ -306,12 +313,16 @@ fn fold_tables(q: &Query) -> Vec<String> {
 }
 
 fn is_n_table_signed_fold(q: &Query) -> Option<usize> {
-    let SetExpr::Select(sel) = q.body.as_ref() else { return None };
+    let SetExpr::Select(sel) = q.body.as_ref() else {
+        return None;
+    };
     // One grouped SUM over a derived table.
     if sel.from.len() != 1 || !sel.from[0].joins.is_empty() {
         return None;
     }
-    let TableFactor::Derived { subquery, .. } = &sel.from[0].relation else { return None };
+    let TableFactor::Derived { subquery, .. } = &sel.from[0].relation else {
+        return None;
+    };
     let grouped = !matches!(&sel.group_by,
         sqlparser::ast::GroupByExpr::Expressions(v, _) if v.is_empty());
     if !grouped {
@@ -341,7 +352,12 @@ fn is_n_table_signed_fold(q: &Query) -> Option<usize> {
                 *out += 1;
                 ok
             }
-            SetExpr::SetOperation { left, right, op, set_quantifier } => {
+            SetExpr::SetOperation {
+                left,
+                right,
+                op,
+                set_quantifier,
+            } => {
                 matches!(op, sqlparser::ast::SetOperator::Union)
                     && matches!(set_quantifier, sqlparser::ast::SetQuantifier::All)
                     && branches(left, out)
@@ -388,7 +404,9 @@ pub fn extract_folds(roots: &[String]) -> anyhow::Result<Vec<String>> {
     let mut out = Vec::new();
     for f in collect_files(roots)? {
         let text = std::fs::read_to_string(&f)?;
-        let Ok(parsed) = Parser::parse_sql(&dialect, &text) else { continue };
+        let Ok(parsed) = Parser::parse_sql(&dialect, &text) else {
+            continue;
+        };
         for stmt in &parsed {
             let inner = match stmt {
                 Statement::Query(q) => Some(q.as_ref()),
@@ -408,7 +426,11 @@ pub fn extract_folds(roots: &[String]) -> anyhow::Result<Vec<String>> {
 fn collect_files(roots: &[String]) -> anyhow::Result<Vec<std::path::PathBuf>> {
     let mut files = Vec::new();
     for root in roots {
-        for e in walkdir::WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+        for e in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let p = e.path();
             if p.extension().is_some_and(|x| x == "sql")
                 && p.components().any(|c| c.as_os_str() == "views")
@@ -426,7 +448,11 @@ fn collect_files(roots: &[String]) -> anyhow::Result<Vec<std::path::PathBuf>> {
 pub fn run(roots: &[String]) -> anyhow::Result<()> {
     let mut files = Vec::new();
     for root in roots {
-        for e in walkdir::WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+        for e in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let p = e.path();
             if p.extension().is_some_and(|x| x == "sql")
                 && p.components().any(|c| c.as_os_str() == "views")
@@ -503,9 +529,12 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
                         Ok(_) => subplans_admitted += 1,
                         Err(e) => {
                             if std::env::var("DUMP").is_ok() {
-                                eprintln!("--- refused: {e}
+                                eprintln!(
+                                    "--- refused: {e}
 {}
-", fq);
+",
+                                    fq
+                                );
                             }
                             *subplan_refusals
                                 .entry(e.to_string().chars().take(72).collect())
@@ -521,7 +550,12 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
                 Ok(_) => admitted += 1,
                 Err(e) => {
                     let reason = e.to_string();
-                    let head = reason.split(':').nth(1).unwrap_or(&reason).trim().to_string();
+                    let head = reason
+                        .split(':')
+                        .nth(1)
+                        .unwrap_or(&reason)
+                        .trim()
+                        .to_string();
                     *refusals.entry(head.chars().take(72).collect()).or_default() += 1;
                 }
             }
@@ -535,8 +569,14 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
     println!("  files          {}", files.len());
     println!("  statements     {statements}");
     println!("  unparsed files {unparsed}");
-    println!("  DISTINCT SHAPES  {}  (expression granularity: which aggregates, casts, arithmetic)", shapes.len());
-    println!("  PLAN FAMILIES    {}  (what an operator actually has to be)", families.len());
+    println!(
+        "  DISTINCT SHAPES  {}  (expression granularity: which aggregates, casts, arithmetic)",
+        shapes.len()
+    );
+    println!(
+        "  PLAN FAMILIES    {}  (what an operator actually has to be)",
+        families.len()
+    );
     println!(
         "  admitted today  {admitted}/{statements}  ({:.1}% coverage ratio, §4.6)",
         100.0 * admitted as f64 / statements.max(1) as f64
@@ -567,7 +607,10 @@ pub fn run(roots: &[String]) -> anyhow::Result<()> {
     }
     println!(
         "\n  n-table signed folds: {folds}/{statements} statements, branch counts {:?}",
-        nfold.iter().map(|(n, c)| format!("{n}x{c}")).collect::<Vec<_>>()
+        nfold
+            .iter()
+            .map(|(n, c)| format!("{n}x{c}"))
+            .collect::<Vec<_>>()
     );
     println!(
         "  Of those, {one_table} read ONE table - the ERC-20 `Transfer` shape, where a single row\n           carries both a payer and a payee - and {multi_table} read several, because for most events a\n           credit and a debit are different events and therefore different tables. The first version of\n           this said the one-table shape occurred ZERO times, which was wrong: the detector counted\n           union arms without checking whether the tables differed."

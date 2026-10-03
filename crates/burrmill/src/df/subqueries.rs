@@ -66,7 +66,10 @@ fn set_expr(b: &mut SetExpr, known: &Known, ctes: &mut Ctes, rename: bool) -> Op
     }
 }
 
-fn with_column_aliases(names: Option<Vec<String>>, aliases: &[sq::TableAliasColumnDef]) -> Option<Vec<String>> {
+fn with_column_aliases(
+    names: Option<Vec<String>>,
+    aliases: &[sq::TableAliasColumnDef],
+) -> Option<Vec<String>> {
     if aliases.is_empty() {
         return names;
     }
@@ -101,7 +104,12 @@ fn dedupe(names: &[String]) -> Vec<String> {
 
 fn factor(t: &mut TableFactor, known: &Known, ctes: &mut Ctes, out: &mut Vec<Relation>) {
     match t {
-        TableFactor::Table { name, alias, args: None, .. } => {
+        TableFactor::Table {
+            name,
+            alias,
+            args: None,
+            ..
+        } => {
             let table = name.0.last().map(|p| p.to_string()).unwrap_or_default();
             let lower = table.trim_matches('"').to_lowercase();
             let columns = if name.0.len() == 1 {
@@ -113,25 +121,47 @@ fn factor(t: &mut TableFactor, known: &Known, ctes: &mut Ctes, out: &mut Vec<Rel
                 known.columns(&lower)
             };
             let (qualifier, columns) = match alias {
-                Some(a) => (a.name.value.clone(), with_column_aliases(columns, &a.columns)),
+                Some(a) => (
+                    a.name.value.clone(),
+                    with_column_aliases(columns, &a.columns),
+                ),
                 None => (table.trim_matches('"').to_string(), columns),
             };
-            out.push(Relation { qualifier: Some(qualifier), columns });
+            out.push(Relation {
+                qualifier: Some(qualifier),
+                columns,
+            });
         }
-        TableFactor::Derived { subquery, alias, .. } => {
+        TableFactor::Derived {
+            subquery, alias, ..
+        } => {
             let names = query(subquery, known, ctes, true);
             match alias {
                 Some(a) => out.push(Relation {
                     qualifier: Some(a.name.value.clone()),
                     columns: with_column_aliases(names, &a.columns),
                 }),
-                None => out.push(Relation { qualifier: None, columns: names }),
+                None => out.push(Relation {
+                    qualifier: None,
+                    columns: names,
+                }),
             }
         }
-        TableFactor::NestedJoin { table_with_joins, alias: None } => {
-            from(std::slice::from_mut(table_with_joins.as_mut()), known, ctes, out);
+        TableFactor::NestedJoin {
+            table_with_joins,
+            alias: None,
+        } => {
+            from(
+                std::slice::from_mut(table_with_joins.as_mut()),
+                known,
+                ctes,
+                out,
+            );
         }
-        _ => out.push(Relation { qualifier: None, columns: None }),
+        _ => out.push(Relation {
+            qualifier: None,
+            columns: None,
+        }),
     }
 }
 
@@ -149,12 +179,17 @@ fn from(tables: &mut [TableWithJoins], known: &Known, ctes: &mut Ctes, out: &mut
                 | JoinOperator::Right(c)
                 | JoinOperator::RightOuter(c)
                 | JoinOperator::FullOuter(c)
-                | JoinOperator::CrossJoin(c) => matches!(c, JoinConstraint::On(_) | JoinConstraint::None),
+                | JoinOperator::CrossJoin(c) => {
+                    matches!(c, JoinConstraint::On(_) | JoinConstraint::None)
+                }
                 _ => false,
             };
             factor(&mut j.relation, known, ctes, out);
             if !plain {
-                out.push(Relation { qualifier: None, columns: None });
+                out.push(Relation {
+                    qualifier: None,
+                    columns: None,
+                });
             }
         }
     }
@@ -192,11 +227,19 @@ fn item_names(item: &SelectItem, relations: &[Relation]) -> Option<Vec<(String, 
         {
             let q = n.0.last()?.to_string();
             let q = q.trim_matches('"');
-            let r = relations
-                .iter()
-                .find(|r| r.qualifier.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(q)))?;
+            let r = relations.iter().find(|r| {
+                r.qualifier
+                    .as_deref()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(q))
+            })?;
             let qualifier = r.qualifier.clone()?;
-            Some(r.columns.as_ref()?.iter().map(|c| (c.clone(), Some(qualifier.clone()))).collect())
+            Some(
+                r.columns
+                    .as_ref()?
+                    .iter()
+                    .map(|c| (c.clone(), Some(qualifier.clone())))
+                    .collect(),
+            )
         }
         _ => None,
     }
@@ -205,40 +248,55 @@ fn item_names(item: &SelectItem, relations: &[Relation]) -> Option<Vec<(String, 
 fn select(s: &mut Select, known: &Known, ctes: &mut Ctes, rename: bool) -> Option<Vec<String>> {
     let mut relations = Vec::new();
     from(&mut s.from, known, ctes, &mut relations);
-    let items: Vec<Option<Vec<(String, Option<String>)>>> =
-        s.projection.iter().map(|i| item_names(i, &relations)).collect();
+    let items: Vec<Option<Vec<(String, Option<String>)>>> = s
+        .projection
+        .iter()
+        .map(|i| item_names(i, &relations))
+        .collect();
     let items: Vec<Vec<(String, Option<String>)>> = items.into_iter().collect::<Option<_>>()?;
     let written: Vec<String> = items.iter().flatten().map(|(n, _)| n.clone()).collect();
     let finals = dedupe(&written);
     if !rename {
         return Some(finals);
     }
-    let unnamed = |i: &SelectItem| {
-        matches!(i, SelectItem::UnnamedExpr(e) if !matches!(e, Expr::Identifier(_) | Expr::CompoundIdentifier(_)))
-    };
+    let unnamed = |i: &SelectItem| matches!(i, SelectItem::UnnamedExpr(e) if !matches!(e, Expr::Identifier(_) | Expr::CompoundIdentifier(_)));
     if finals == written && !s.projection.iter().any(unnamed) {
         return Some(finals);
     }
     let mut next = finals.iter();
     let mut projection = Vec::with_capacity(finals.len());
     for (item, cols) in s.projection.drain(..).zip(items) {
-        let renamed: Vec<&String> = cols.iter().map(|_| next.next().expect("one name per column")).collect();
+        let renamed: Vec<&String> = cols
+            .iter()
+            .map(|_| next.next().expect("one name per column"))
+            .collect();
         let changed = cols.iter().zip(&renamed).any(|((w, _), f)| w != *f);
         match item {
             SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..) if changed => {
                 for ((col, qualifier), f) in cols.into_iter().zip(renamed) {
                     let qualifier = qualifier.expect("a wildcard's columns are qualified");
                     projection.push(SelectItem::ExprWithAlias {
-                        expr: Expr::CompoundIdentifier(vec![Ident::with_quote('"', qualifier), Ident::with_quote('"', col)]),
+                        expr: Expr::CompoundIdentifier(vec![
+                            Ident::with_quote('"', qualifier),
+                            Ident::with_quote('"', col),
+                        ]),
                         alias: Ident::with_quote('"', f.clone()),
                     });
                 }
             }
-            SelectItem::UnnamedExpr(e) if changed || unnamed(&SelectItem::UnnamedExpr(e.clone())) => {
-                projection.push(SelectItem::ExprWithAlias { expr: e, alias: Ident::with_quote('"', renamed[0].clone()) });
+            SelectItem::UnnamedExpr(e)
+                if changed || unnamed(&SelectItem::UnnamedExpr(e.clone())) =>
+            {
+                projection.push(SelectItem::ExprWithAlias {
+                    expr: e,
+                    alias: Ident::with_quote('"', renamed[0].clone()),
+                });
             }
             SelectItem::ExprWithAlias { expr, .. } if changed => {
-                projection.push(SelectItem::ExprWithAlias { expr, alias: Ident::with_quote('"', renamed[0].clone()) });
+                projection.push(SelectItem::ExprWithAlias {
+                    expr,
+                    alias: Ident::with_quote('"', renamed[0].clone()),
+                });
             }
             item => projection.push(item),
         }
@@ -253,7 +311,11 @@ fn select(s: &mut Select, known: &Known, ctes: &mut Ctes, rename: bool) -> Optio
 /// false against no rows, NULL for a NULL operand, true on a match, NULL where only a NULL could
 /// have matched, false otherwise. Only a plain subquery is rewritten (one SELECT, no grouping,
 /// `DISTINCT`, `LIMIT` or aggregate); anything else is left for DataFusion to refuse.
-pub fn predicates_as_counts(q: &mut Query, known: &Known, ctes: &std::collections::HashSet<String>) -> Result<(), String> {
+pub fn predicates_as_counts(
+    q: &mut Query,
+    known: &Known,
+    ctes: &std::collections::HashSet<String>,
+) -> Result<(), String> {
     each_select(q.body.as_mut(), &mut |s| {
         hoist_from_aggregates(s);
         let outer = Outer::of(s, known, ctes);
@@ -262,7 +324,9 @@ pub fn predicates_as_counts(q: &mut Query, known: &Known, ctes: &std::collection
         if let Some(h) = s.having.as_mut() {
             at_this_level(h, &mut |x| {
                 let Expr::Function(f) = x else { return };
-                if f.over.is_some() || !AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str()) {
+                if f.over.is_some()
+                    || !AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str())
+                {
                     return;
                 }
                 let mut inner = Expr::Function(f.clone());
@@ -274,7 +338,10 @@ pub fn predicates_as_counts(q: &mut Query, known: &Known, ctes: &std::collection
                 *x = inner;
             });
         }
-        for clause in [s.selection.as_mut(), s.having.as_mut()].into_iter().flatten() {
+        for clause in [s.selection.as_mut(), s.having.as_mut()]
+            .into_iter()
+            .flatten()
+        {
             filter_predicates(clause, true)?;
         }
         for item in s.projection.iter_mut() {
@@ -294,7 +361,10 @@ pub fn predicates_as_counts(q: &mut Query, known: &Known, ctes: &std::collection
 
 /// The SELECTs of a query body, each branch of a set operation included; a parenthesised query is
 /// a query of its own and visited as one.
-fn each_select(b: &mut SetExpr, f: &mut dyn FnMut(&mut Select) -> Result<(), String>) -> Result<(), String> {
+fn each_select(
+    b: &mut SetExpr,
+    f: &mut dyn FnMut(&mut Select) -> Result<(), String>,
+) -> Result<(), String> {
     match b {
         SetExpr::Select(s) => f(s),
         SetExpr::SetOperation { left, right, .. } => {
@@ -312,7 +382,11 @@ fn each_select(b: &mut SetExpr, f: &mut dyn FnMut(&mut Select) -> Result<(), Str
 /// subquery that is not a plain SELECT, the statement is refused rather than answered wrongly.
 fn filter_predicates(e: &mut Expr, top: bool) -> Result<(), String> {
     match e {
-        Expr::BinaryOp { left, op: sq::BinaryOperator::And, right } if top => {
+        Expr::BinaryOp {
+            left,
+            op: sq::BinaryOperator::And,
+            right,
+        } if top => {
             filter_predicates(left, true)?;
             filter_predicates(right, true)
         }
@@ -354,7 +428,9 @@ impl Outer {
                 | JoinOperator::Right(c)
                 | JoinOperator::RightOuter(c)
                 | JoinOperator::FullOuter(c)
-                | JoinOperator::CrossJoin(c) => matches!(c, JoinConstraint::On(_) | JoinConstraint::None),
+                | JoinOperator::CrossJoin(c) => {
+                    matches!(c, JoinConstraint::On(_) | JoinConstraint::None)
+                }
                 _ => false,
             });
             if !plain {
@@ -362,7 +438,12 @@ impl Outer {
             }
             for f in std::iter::once(&t.relation).chain(t.joins.iter().map(|j| &j.relation)) {
                 let (name, columns) = match f {
-                    TableFactor::Table { name, alias, args: None, .. } => {
+                    TableFactor::Table {
+                        name,
+                        alias,
+                        args: None,
+                        ..
+                    } => {
                         let Some(sq::ObjectNamePart::Identifier(table)) = name.0.last() else {
                             return Outer(Vec::new());
                         };
@@ -372,7 +453,12 @@ impl Outer {
                             _ if name.0.len() == 1 && ctes.contains(&lower) => None,
                             _ => known.columns(&lower),
                         };
-                        (alias.as_ref().map_or_else(|| table.clone(), |a| a.name.clone()), columns)
+                        (
+                            alias
+                                .as_ref()
+                                .map_or_else(|| table.clone(), |a| a.name.clone()),
+                            columns,
+                        )
                     }
                     TableFactor::Derived { alias: Some(a), .. } => (a.name.clone(), None),
                     _ => return Outer(Vec::new()),
@@ -389,7 +475,10 @@ impl Outer {
         if let [(q, _)] = self.0.as_slice() {
             return Some(q.clone());
         }
-        let mut having = self.0.iter().map(|(q, c)| c.as_ref().map(|c| (q, c.iter().any(|n| n.eq_ignore_ascii_case(&column.value)))));
+        let mut having = self.0.iter().map(|(q, c)| {
+            c.as_ref()
+                .map(|c| (q, c.iter().any(|n| n.eq_ignore_ascii_case(&column.value))))
+        });
         let mut found = None;
         for r in &mut having {
             match r? {
@@ -456,7 +545,9 @@ fn movable(x: &Expr, sub: &Select) -> bool {
     });
     for t in &sub.from {
         for f in std::iter::once(&t.relation).chain(t.joins.iter().map(|j| &j.relation)) {
-            if let TableFactor::Table { alias: Some(a), .. } | TableFactor::Derived { alias: Some(a), .. } = f {
+            if let TableFactor::Table { alias: Some(a), .. }
+            | TableFactor::Derived { alias: Some(a), .. } = f
+            {
                 bound.insert(a.name.value.to_lowercase());
             }
         }
@@ -464,8 +555,15 @@ fn movable(x: &Expr, sub: &Select) -> bool {
     let mut ok = true;
     let _ = sq::visit_expressions(x, |e| {
         match e {
-            Expr::Identifier(_) | Expr::Subquery(_) | Expr::Exists { .. } | Expr::InSubquery { .. } => ok = false,
-            Expr::CompoundIdentifier(v) if v.len() < 2 || bound.contains(&v[v.len() - 2].value.to_lowercase()) => ok = false,
+            Expr::Identifier(_)
+            | Expr::Subquery(_)
+            | Expr::Exists { .. }
+            | Expr::InSubquery { .. } => ok = false,
+            Expr::CompoundIdentifier(v)
+                if v.len() < 2 || bound.contains(&v[v.len() - 2].value.to_lowercase()) =>
+            {
+                ok = false
+            }
             _ => {}
         }
         std::ops::ControlFlow::<()>::Continue(())
@@ -480,11 +578,23 @@ fn hoist_from_aggregates(s: &mut Select) {
     let [TableWithJoins { relation, joins }] = s.from.as_mut_slice() else {
         return;
     };
-    if !joins.is_empty() || s.projection.iter().any(|i| matches!(i, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..))) {
+    if !joins.is_empty()
+        || s.projection.iter().any(|i| {
+            matches!(
+                i,
+                SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(..)
+            )
+        })
+    {
         return;
     }
     let qualifier = match relation {
-        TableFactor::Table { name, alias, args: None, .. } => match alias {
+        TableFactor::Table {
+            name,
+            alias,
+            args: None,
+            ..
+        } => match alias {
             Some(a) if a.columns.is_empty() => a.name.clone(),
             None => match name.0.last() {
                 Some(sq::ObjectNamePart::Identifier(i)) => i.clone(),
@@ -505,7 +615,8 @@ fn hoist_from_aggregates(s: &mut Select) {
                 at_this_level(&mut inner, &mut |y| {
                     if matches!(y, Expr::Exists { .. } | Expr::InSubquery { .. }) {
                         let name = format!("__burrmill_pred{}", hoisted.len());
-                        let col = Expr::CompoundIdentifier(vec![qualifier.clone(), Ident::new(&name)]);
+                        let col =
+                            Expr::CompoundIdentifier(vec![qualifier.clone(), Ident::new(&name)]);
                         hoisted.push((name, std::mem::replace(y, col)));
                     }
                 });
@@ -528,10 +639,20 @@ fn hoist_from_aggregates(s: &mut Select) {
         SelectItemQualifiedWildcardKind::ObjectName(sq::ObjectName::from(vec![qualifier.clone()])),
         sq::WildcardAdditionalOptions::default(),
     )];
-    projection.extend(hoisted.into_iter().map(|(name, e)| SelectItem::ExprWithAlias { expr: e, alias: Ident::new(name) }));
+    projection.extend(
+        hoisted
+            .into_iter()
+            .map(|(name, e)| SelectItem::ExprWithAlias {
+                expr: e,
+                alias: Ident::new(name),
+            }),
+    );
     let inner = sq::Select {
         projection,
-        from: vec![TableWithJoins { relation: relation.clone(), joins: vec![] }],
+        from: vec![TableWithJoins {
+            relation: relation.clone(),
+            joins: vec![],
+        }],
         ..empty_select()
     };
     *relation = TableFactor::Derived {
@@ -548,25 +669,59 @@ fn hoist_from_aggregates(s: &mut Select) {
             format_clause: None,
             pipe_operators: vec![],
         }),
-        alias: Some(sq::TableAlias { explicit: true, name: qualifier, columns: vec![], at: None }),
+        alias: Some(sq::TableAlias {
+            explicit: true,
+            name: qualifier,
+            columns: vec![],
+            at: None,
+        }),
         sample: None,
     };
 }
 
 /// A SELECT with nothing in it, to fill in.
 fn empty_select() -> sq::Select {
-    let Ok(stmts) = sqlparser::parser::Parser::parse_sql(&sqlparser::dialect::DuckDbDialect {}, "SELECT 1") else {
+    let Ok(stmts) =
+        sqlparser::parser::Parser::parse_sql(&sqlparser::dialect::DuckDbDialect {}, "SELECT 1")
+    else {
         unreachable!("a constant statement parses")
     };
-    let Some(sq::Statement::Query(q)) = stmts.into_iter().next() else { unreachable!() };
-    let SetExpr::Select(s) = *q.body else { unreachable!() };
+    let Some(sq::Statement::Query(q)) = stmts.into_iter().next() else {
+        unreachable!()
+    };
+    let SetExpr::Select(s) = *q.body else {
+        unreachable!()
+    };
     *s
 }
 
 const AGGREGATES: &[&str] = &[
-    "count", "sum", "min", "max", "avg", "mean", "any_value", "first", "last", "string_agg", "list",
-    "array_agg", "bool_and", "bool_or", "stddev", "variance", "median", "arg_max", "arg_min",
-    "approx_count_distinct", "count_star", "group_concat", "listagg", "arg_extreme", "max_by", "min_by",
+    "count",
+    "sum",
+    "min",
+    "max",
+    "avg",
+    "mean",
+    "any_value",
+    "first",
+    "last",
+    "string_agg",
+    "list",
+    "array_agg",
+    "bool_and",
+    "bool_or",
+    "stddev",
+    "variance",
+    "median",
+    "arg_max",
+    "arg_min",
+    "approx_count_distinct",
+    "count_star",
+    "group_concat",
+    "listagg",
+    "arg_extreme",
+    "max_by",
+    "min_by",
 ];
 
 fn plain(q: &Query) -> Option<&Select> {
@@ -576,8 +731,14 @@ fn plain(q: &Query) -> Option<&Select> {
     let SetExpr::Select(s) = q.body.as_ref() else {
         return None;
     };
-    let grouped = !matches!(&s.group_by, sq::GroupByExpr::Expressions(v, m) if v.is_empty() && m.is_empty());
-    if grouped || s.distinct.is_some() || s.having.is_some() || s.qualify.is_some() || s.top.is_some() {
+    let grouped =
+        !matches!(&s.group_by, sq::GroupByExpr::Expressions(v, m) if v.is_empty() && m.is_empty());
+    if grouped
+        || s.distinct.is_some()
+        || s.having.is_some()
+        || s.qualify.is_some()
+        || s.top.is_some()
+    {
         return None;
     }
     let mut aggregate = false;
@@ -597,7 +758,9 @@ fn plain(q: &Query) -> Option<&Select> {
 fn count(q: &Query, extra: Option<Expr>) -> Expr {
     let mut c = q.clone();
     c.order_by = None;
-    let SetExpr::Select(s) = c.body.as_mut() else { unreachable!("checked plain") };
+    let SetExpr::Select(s) = c.body.as_mut() else {
+        unreachable!("checked plain")
+    };
     s.projection = vec![SelectItem::UnnamedExpr(Expr::Function(sq::Function {
         name: sq::ObjectName::from(vec![Ident::new("count")]),
         uses_odbc_syntax: false,
@@ -626,11 +789,19 @@ fn nested(e: Expr) -> Expr {
 }
 
 fn and(a: Expr, b: Expr) -> Expr {
-    Expr::BinaryOp { left: Box::new(a), op: sq::BinaryOperator::And, right: Box::new(b) }
+    Expr::BinaryOp {
+        left: Box::new(a),
+        op: sq::BinaryOperator::And,
+        right: Box::new(b),
+    }
 }
 
 fn cmp(a: Expr, op: sq::BinaryOperator, n: i64) -> Expr {
-    Expr::BinaryOp { left: Box::new(a), op, right: Box::new(Expr::Value(sq::Value::Number(n.to_string(), false).into())) }
+    Expr::BinaryOp {
+        left: Box::new(a),
+        op,
+        right: Box::new(Expr::Value(sq::Value::Number(n.to_string(), false).into())),
+    }
 }
 
 /// `x [NOT] IN (S)` in a filter, with DataFusion's membership test kept (its mark join gets that
@@ -638,31 +809,70 @@ fn cmp(a: Expr, op: sq::BinaryOperator, n: i64) -> Expr {
 /// no rows is false, a NULL `x` is NULL, a match true, a NULL in `S` NULL, else false.
 fn with_nulls(e: &Expr) -> Option<Expr> {
     use sq::BinaryOperator::{Eq, Gt};
-    let Expr::InSubquery { expr, subquery, negated } = e else {
+    let Expr::InSubquery {
+        expr,
+        subquery,
+        negated,
+    } = e
+    else {
         return None;
     };
     let s = plain(subquery)?;
-    let [SelectItem::UnnamedExpr(y) | SelectItem::ExprWithAlias { expr: y, .. }] = s.projection.as_slice() else {
+    let [SelectItem::UnnamedExpr(y) | SelectItem::ExprWithAlias { expr: y, .. }] =
+        s.projection.as_slice()
+    else {
         return None;
     };
-    let lit = |b: Option<bool>| Expr::Value(match b {
-        Some(b) => sq::Value::Boolean(b),
-        None => sq::Value::Null,
-    }.into());
-    let member = Expr::InSubquery { expr: expr.clone(), subquery: subquery.clone(), negated: false };
+    let lit = |b: Option<bool>| {
+        Expr::Value(
+            match b {
+                Some(b) => sq::Value::Boolean(b),
+                None => sq::Value::Null,
+            }
+            .into(),
+        )
+    };
+    let member = Expr::InSubquery {
+        expr: expr.clone(),
+        subquery: subquery.clone(),
+        negated: false,
+    };
     let case = Expr::Case {
         case_token: sq::helpers::attached_token::AttachedToken::empty(),
         end_token: sq::helpers::attached_token::AttachedToken::empty(),
         operand: None,
         conditions: vec![
-            sq::CaseWhen { condition: cmp(count(subquery, None), Eq, 0), result: lit(Some(false)) },
-            sq::CaseWhen { condition: Expr::IsNull(Box::new(nested(expr.as_ref().clone()))), result: lit(None) },
-            sq::CaseWhen { condition: member, result: lit(Some(true)) },
-            sq::CaseWhen { condition: cmp(count(subquery, Some(Expr::IsNull(Box::new(nested(y.clone()))))), Gt, 0), result: lit(None) },
+            sq::CaseWhen {
+                condition: cmp(count(subquery, None), Eq, 0),
+                result: lit(Some(false)),
+            },
+            sq::CaseWhen {
+                condition: Expr::IsNull(Box::new(nested(expr.as_ref().clone()))),
+                result: lit(None),
+            },
+            sq::CaseWhen {
+                condition: member,
+                result: lit(Some(true)),
+            },
+            sq::CaseWhen {
+                condition: cmp(
+                    count(subquery, Some(Expr::IsNull(Box::new(nested(y.clone()))))),
+                    Gt,
+                    0,
+                ),
+                result: lit(None),
+            },
         ],
         else_result: Some(Box::new(lit(Some(false)))),
     };
-    Some(if *negated { Expr::UnaryOp { op: sq::UnaryOperator::Not, expr: Box::new(nested(case)) } } else { nested(case) })
+    Some(if *negated {
+        Expr::UnaryOp {
+            op: sq::UnaryOperator::Not,
+            expr: Box::new(nested(case)),
+        }
+    } else {
+        nested(case)
+    })
 }
 
 fn as_counts(x: &Expr, outer: &Outer) -> Option<Expr> {
@@ -670,11 +880,21 @@ fn as_counts(x: &Expr, outer: &Outer) -> Option<Expr> {
     match x {
         Expr::Exists { subquery, negated } => {
             plain(subquery)?;
-            Some(nested(cmp(count(subquery, None), if *negated { Eq } else { Gt }, 0)))
+            Some(nested(cmp(
+                count(subquery, None),
+                if *negated { Eq } else { Gt },
+                0,
+            )))
         }
-        Expr::InSubquery { expr, subquery, negated } => {
+        Expr::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => {
             let s = plain(subquery)?;
-            let [SelectItem::UnnamedExpr(y) | SelectItem::ExprWithAlias { expr: y, .. }] = s.projection.as_slice() else {
+            let [SelectItem::UnnamedExpr(y) | SelectItem::ExprWithAlias { expr: y, .. }] =
+                s.projection.as_slice()
+            else {
                 return None;
             };
             let expr = qualified(expr, outer);
@@ -683,27 +903,56 @@ fn as_counts(x: &Expr, outer: &Outer) -> Option<Expr> {
             }
             let (x, y) = (nested(expr), nested(y.clone()));
             let lit = |b: Option<bool>| {
-                Expr::Value(match b {
-                    Some(b) => sq::Value::Boolean(b),
-                    None => sq::Value::Null,
-                }.into())
+                Expr::Value(
+                    match b {
+                        Some(b) => sq::Value::Boolean(b),
+                        None => sq::Value::Null,
+                    }
+                    .into(),
+                )
             };
             let all = count(subquery, None);
-            let matched = count(subquery, Some(Expr::BinaryOp { left: Box::new(y.clone()), op: Eq, right: Box::new(x.clone()) }));
+            let matched = count(
+                subquery,
+                Some(Expr::BinaryOp {
+                    left: Box::new(y.clone()),
+                    op: Eq,
+                    right: Box::new(x.clone()),
+                }),
+            );
             let nulls = count(subquery, Some(Expr::IsNull(Box::new(y))));
             let case = Expr::Case {
                 case_token: sq::helpers::attached_token::AttachedToken::empty(),
                 end_token: sq::helpers::attached_token::AttachedToken::empty(),
                 operand: None,
                 conditions: vec![
-                    sq::CaseWhen { condition: cmp(all, Eq, 0), result: lit(Some(false)) },
-                    sq::CaseWhen { condition: Expr::IsNull(Box::new(x)), result: lit(None) },
-                    sq::CaseWhen { condition: cmp(matched, Gt, 0), result: lit(Some(true)) },
-                    sq::CaseWhen { condition: cmp(nulls, Gt, 0), result: lit(None) },
+                    sq::CaseWhen {
+                        condition: cmp(all, Eq, 0),
+                        result: lit(Some(false)),
+                    },
+                    sq::CaseWhen {
+                        condition: Expr::IsNull(Box::new(x)),
+                        result: lit(None),
+                    },
+                    sq::CaseWhen {
+                        condition: cmp(matched, Gt, 0),
+                        result: lit(Some(true)),
+                    },
+                    sq::CaseWhen {
+                        condition: cmp(nulls, Gt, 0),
+                        result: lit(None),
+                    },
                 ],
                 else_result: Some(Box::new(lit(Some(false)))),
             };
-            Some(if *negated { Expr::UnaryOp { op: sq::UnaryOperator::Not, expr: Box::new(nested(case)) } } else { nested(case) })
+            Some(if *negated {
+                Expr::UnaryOp {
+                    op: sq::UnaryOperator::Not,
+                    expr: Box::new(nested(case)),
+                }
+            } else {
+                nested(case)
+            })
         }
         _ => None,
     }
@@ -733,7 +982,9 @@ pub fn distinct_aggregate_names(q: &mut Query) {
     for e in exprs {
         at_this_level(e, &mut |x| {
             let Expr::Function(f) = x else { return };
-            if f.over.is_some() || !AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str()) {
+            if f.over.is_some()
+                || !AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str())
+            {
                 return;
             }
             let full = f.to_string();
@@ -751,7 +1002,11 @@ pub fn distinct_aggregate_names(q: &mut Query) {
             });
             if n > 0 {
                 let lit = || Expr::Value(sq::Value::Number(n.to_string(), false).into());
-                let tag = Expr::BinaryOp { left: Box::new(lit()), op: sq::BinaryOperator::Eq, right: Box::new(lit()) };
+                let tag = Expr::BinaryOp {
+                    left: Box::new(lit()),
+                    op: sq::BinaryOperator::Eq,
+                    right: Box::new(lit()),
+                };
                 f.filter = Some(Box::new(match f.filter.take() {
                     Some(w) => and(nested(*w), tag),
                     None => tag,
