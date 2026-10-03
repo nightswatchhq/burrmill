@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use arrow::array::{StringArray, UInt64Array};
+use arrow::array::{Array, AsArray, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use burrmill::Engine;
@@ -497,4 +497,52 @@ fn expression_keys() {
         })
         .collect();
     assert!(failed.is_empty(), "refused or over budget: {failed:?}");
+}
+
+/// #51: a cross join collects its left side and charges each batch as it arrives. An aggregate's
+/// output arrives as 128-row slices that each keep the whole partition's buffers, and 130,000 groups
+/// refused under 1 GiB. The join may add this many times the rows' own size to its left side's peak.
+const HELD_FACTOR: usize = 2;
+
+#[test]
+fn cross_join_charges_what_its_left_side_holds() {
+    let e = engine();
+    let left = "SELECT block_number % 130000 AS k, max(who) AS w, sum(block_number) AS s \
+                FROM t GROUP BY 1";
+    let sql = format!(
+        "SELECT count(*) AS n, max(p.w) AS w, max(p.s + q.n) AS s FROM ({left}) p \
+         CROSS JOIN (SELECT count(*) AS n FROM t) q"
+    );
+    let shown = plan(&e, &sql);
+    assert!(
+        shown.contains("CrossJoinExec"),
+        "no cross join, so this does not test it:\n{shown}"
+    );
+    // A host's admission bound reads the same plan, and refuses an operator it does not know.
+    assert_eq!(e.parquet_scans(&sql).unwrap(), 2);
+    let (_, alone) = run(&e, left).unwrap();
+    let batches = e.sql(left).unwrap();
+    let held = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
+    let live: usize = held
+        .columns()
+        .iter()
+        .map(|c| match c.as_string_view_opt() {
+            Some(v) => v.gc().get_array_memory_size(),
+            None => c.get_array_memory_size(),
+        })
+        .sum();
+    let got = run(&e, &sql);
+    eprintln!(
+        "MATRIX | cross join, collected side | live {live} | left alone {alone} | {}",
+        match &got {
+            Ok((_, p)) => p.to_string(),
+            Err(m) => format!("refused: {}", m.lines().next().unwrap_or_default()),
+        }
+    );
+    let (rows, peak) = got.unwrap_or_else(|m| panic!("the cross join refused: {m}"));
+    assert_eq!(rows[0]["n"], 130000);
+    assert!(
+        peak <= alone + HELD_FACTOR * live,
+        "the cross join peaked at {peak} bytes, its left side at {alone} alone, holding {live}"
+    );
 }

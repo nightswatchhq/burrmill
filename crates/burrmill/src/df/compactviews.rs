@@ -12,11 +12,15 @@
 //! repartition queues its coalesced batches against the pool, and a sort charges each run once per
 //! batch it slices the run into, so a sort #40 ran in 18 MB as `Utf8` refused at 1 GiB as views.
 //! They run over the same columns as `Utf8`, with views restored above them.
+//!
+//! A cross join charges each batch of its left side as it collects it, and an aggregate's output
+//! reaches it as slices that each keep the whole of it: 130,000 groups were charged 885 MB (#51).
+//! That side is copied to what its rows hold, primitives included, before it is charged.
 
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, AsArray, MutableArrayData, make_array};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
@@ -31,7 +35,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::async_func::AsyncFuncExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec, SortMergeJoinExec,
 };
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -46,17 +50,23 @@ use futures::StreamExt;
 #[derive(Debug)]
 pub(super) struct CompactViewsExec {
     inner: Arc<dyn ExecutionPlan>,
+    /// Every sliced column is copied too, not only the views.
+    held: bool,
 }
 
 impl DisplayAs for CompactViewsExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CompactViewsExec")
+        write!(f, "{}", self.name())
     }
 }
 
 impl ExecutionPlan for CompactViewsExec {
     fn name(&self) -> &str {
-        "CompactViewsExec"
+        if self.held {
+            "CompactHeldExec"
+        } else {
+            "CompactViewsExec"
+        }
     }
     fn properties(&self) -> &Arc<PlanProperties> {
         self.inner.properties()
@@ -76,6 +86,7 @@ impl ExecutionPlan for CompactViewsExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self {
             inner: children.pop().expect("one child"),
+            held: self.held,
         }))
     }
     fn execute(
@@ -85,21 +96,30 @@ impl ExecutionPlan for CompactViewsExec {
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.inner.execute(partition, ctx)?;
         let schema = stream.schema();
-        let compacted = stream.map(|item| item.and_then(compact));
+        let held = self.held;
+        let compacted = stream.map(move |item| item.and_then(|b| compact(b, held)));
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, compacted)))
     }
 }
 
-fn compact(batch: RecordBatch) -> Result<RecordBatch> {
-    let columns: Vec<ArrayRef> = batch
+fn compact(batch: RecordBatch, held: bool) -> Result<RecordBatch> {
+    let columns = batch
         .columns()
         .iter()
-        .map(|c| match c.data_type() {
-            DataType::Utf8View => Arc::new(c.as_string_view().gc()) as ArrayRef,
-            DataType::BinaryView => Arc::new(c.as_binary_view().gc()),
-            _ => Arc::clone(c),
+        .map(|c| {
+            Ok(match c.data_type() {
+                DataType::Utf8View => Arc::new(c.as_string_view().gc()) as ArrayRef,
+                DataType::BinaryView => Arc::new(c.as_binary_view().gc()),
+                _ if held && c.to_data().get_slice_memory_size()? < c.get_array_memory_size() => {
+                    let data = c.to_data();
+                    let mut copy = MutableArrayData::new(vec![&data], false, c.len());
+                    copy.try_extend(0, 0, c.len())?;
+                    make_array(copy.freeze())
+                }
+                _ => Arc::clone(c),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     RecordBatch::try_new(batch.schema(), columns).map_err(DataFusionError::from)
 }
 
@@ -251,8 +271,8 @@ fn over_offsets(p: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     }))
 }
 
-/// Runs every operator that [`charges_inside`] over offsets, and puts [`CompactViewsExec`] over
-/// every other operator that [`bloats`] and emits view columns.
+/// Runs every operator that [`charges_inside`] over offsets, puts [`CompactViewsExec`] over every
+/// other operator that [`bloats`] and emits view columns, and compacts a cross join's left side.
 #[derive(Debug)]
 pub(super) struct CompactViews;
 
@@ -263,15 +283,24 @@ impl PhysicalOptimizerRule for CompactViews {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|p| {
+            if let Some(j) = p.downcast_ref::<CrossJoinExec>() {
+                let left = Arc::new(CompactViewsExec {
+                    inner: Arc::clone(j.left()),
+                    held: true,
+                });
+                let right = Arc::clone(j.right());
+                return replace_children_if_necessary(p, vec![left, right]).map(Transformed::yes);
+            }
             if charges_inside(&p) && holds_views(p.children()[0]) {
                 return over_offsets(p).map(Transformed::yes);
             }
             if !bloats(&p) || !has_views(&p) {
                 return Ok(Transformed::no(p));
             }
-            Ok(Transformed::yes(
-                Arc::new(CompactViewsExec { inner: p }) as Arc<dyn ExecutionPlan>
-            ))
+            Ok(Transformed::yes(Arc::new(CompactViewsExec {
+                inner: p,
+                held: false,
+            }) as Arc<dyn ExecutionPlan>))
         })
         .map(|t| t.data)
     }
