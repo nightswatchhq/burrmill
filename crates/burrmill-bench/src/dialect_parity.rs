@@ -332,6 +332,9 @@ const CORPUS: &[&str] = &[
     "SELECT TRY_CAST('1e38' AS DECIMAL(38,0)) a, TRY_CAST('99999999999999999999999999999999999999.5' AS DECIMAL(38,0)) c, TRY_CAST('123' AS DECIMAL(2,0)) d, TRY_CAST('1e2' AS DECIMAL(3,0)) e, TRY_CAST('1e-1' AS DECIMAL(38,0)) h, TRY_CAST('5e-1' AS HUGEINT) i, TRY_CAST('1E3' AS DECIMAL(38,0)) j, TRY_CAST('1__0' AS HUGEINT) k, TRY_CAST('1__0' AS BIGINT) l, TRY_CAST('1_0e1_0' AS HUGEINT) m, TRY_CAST('1_0.5_5' AS DECIMAL(38,0)) n",
     "SELECT CAST('1e3' AS DECIMAL(38,0)) a, CAST('1_000' AS HUGEINT) b, CAST(' 7 ' AS HUGEINT) c, CAST('1.5' AS DECIMAL(38,0)) d",
     "SELECT CAST('1e39' AS DECIMAL(38,0)) a",
+    // HUGEINT is DECIMAL(38,0) here: 10^38 refuses where DuckDB's 128 bits hold it (#42).
+    "SELECT CAST('100000000000000000000000000000000000000' AS HUGEINT) AS a",
+    "SELECT CAST('99999999999999999999999999999999999999' AS HUGEINT) AS a",
     "SELECT TRY_CAST(\"value\" || 'e1' AS HUGEINT) AS a, TRY_CAST(\"value\" || '.5' AS DECIMAL(38,0)) AS b FROM transfer ORDER BY block_number, log_index",
     // Statements DuckDB answered and burrmill refused (#20).
     "SELECT to_json(1.5::DOUBLE) a, to_json(0.1::DOUBLE) b, to_json(1e20::DOUBLE) c, to_json(1e-7::DOUBLE) d, to_json(2.0::DOUBLE) e, to_json(-0.0::DOUBLE) f, to_json(1e21::DOUBLE) g, to_json(1e-6::DOUBLE) h, to_json(123456789012345678901234.0::DOUBLE) i, to_json('nan'::DOUBLE) j, to_json('-inf'::DOUBLE) k, to_json(0.1::FLOAT) l, to_json(1/3) m",
@@ -372,6 +375,12 @@ const CORPUS: &[&str] = &[
 
 /// Differences that stand, and why.
 const KNOWN: &[(&str, &str)] = &[
+    (
+        "SELECT CAST('100000000000000000000000000000000000000' AS HUGEINT) AS a",
+        "HUGEINT is DECIMAL(38,0), the type nuthatch's planner gives every HUGEINT column, so 10^38 \
+         to 2^127 - 1 refuses as a cast to it does; DuckDB's 128-bit HUGEINT holds them. Widening \
+         would change every HUGEINT column's type (#42)",
+    ),
     (
         "SELECT typeof(1) AS a",
         "a whole-number literal is a BIGINT here and an INTEGER in DuckDB; the values agree, the \

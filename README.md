@@ -144,7 +144,9 @@ Said plainly, because a README that implies otherwise is the thing this project 
 - **Small queries.** An eight-row view runs eighteen DataFusion operators. `lodestar_disputes` is
   0.80x DuckDB after the small-input rule, and the worst ratio on the nest.
 - **`HUGEINT` stops at 38 digits.** `DECIMAL(38,0)` reaches 10^38 - 1 where DuckDB's reaches
-  2^127 - 1. A value between refuses; it does not answer wrongly. No real nest has produced one.
+  2^127 - 1, and widening it would change the type of every HUGEINT column nuthatch plans. A `CAST`
+  of a value between refuses (#42); a `TRY_CAST` of one answers NULL where DuckDB answers the value
+  (#44). No real nest has produced one.
 - **An integer compared with a boolean** (`1 = false`) casts in DuckDB and refuses here.
 - **What DuckDB computes and Burrmill refuses, by design**: a `SUM` over a `TRY_CAST` that DuckDB
   answers by dropping what did not fit. The fuzzer counts these separately and they are allowed.
