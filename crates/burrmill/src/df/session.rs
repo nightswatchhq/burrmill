@@ -203,6 +203,13 @@ impl MiniSession {
             aggregate.insert("array_agg".into(), Arc::clone(&f));
             aggregate.insert("list".into(), f);
         }
+        if let Some(f) = aggregate.get("string_agg").cloned() {
+            let f = super::ordered_agg::SelfSortingStringAgg::udaf(f);
+            for a in f.aliases() {
+                aggregate.insert(a.clone(), Arc::clone(&f));
+            }
+            aggregate.insert("string_agg".into(), f);
+        }
         let exact_text = CheckedAgg::udaf(Mode::SumText, None);
         aggregate.insert(exact_text.name().to_string(), exact_text);
         let mut window = HashMap::new();

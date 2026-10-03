@@ -617,3 +617,44 @@ fn modulo_by_zero_is_null_as_duckdb_has_it() {
         r#"[{"x":7,"a":null,"b":null,"d":null,"e":null,"f":null,"g":null,"h":null},{"x":7,"a":1,"b":null,"d":null,"e":null,"f":1,"g":-1,"h":1.5},{"x":8,"a":null,"b":null,"d":null,"e":null,"f":null,"g":null,"h":null}]"#
     );
 }
+
+#[test]
+fn an_ordered_aggregate_leaves_an_unordered_list_beside_it_in_source_order() {
+    // DuckDB 1.5's answers: string_agg's ORDER BY orders its own input, not list()'s.
+    assert_eq!(
+        value(
+            "SELECT string_agg(x, ',' ORDER BY x DESC) AS s, to_json(array_agg(x)) AS l, \
+             to_json(list(x)) AS m FROM (VALUES ('a'), ('c'), ('b'), (NULL)) t(x)"
+        ),
+        r#"[{"s":"c,b,a","l":"[\"a\",\"c\",\"b\",null]","m":"[\"a\",\"c\",\"b\",null]"}]"#
+    );
+    assert_eq!(
+        value(
+            "SELECT k, string_agg(x, ',' ORDER BY x DESC) AS s, to_json(list(x ORDER BY x)) AS o, \
+             to_json(list(x)) AS m FROM (VALUES (1, 'a'), (1, 'c'), (2, 'z'), (1, 'b'), (2, 'y')) \
+             t(k, x) GROUP BY k ORDER BY k"
+        ),
+        r#"[{"k":1,"s":"c,b,a","o":"[\"a\",\"b\",\"c\"]","m":"[\"a\",\"c\",\"b\"]"},{"k":2,"s":"z,y","o":"[\"y\",\"z\"]","m":"[\"z\",\"y\"]"}]"#
+    );
+}
+
+#[test]
+fn a_string_agg_over_input_already_sorted_the_other_way_plans() {
+    // DuckDB 1.5's answers. Reversed to the built-in, the aggregate would be refused by
+    // DataFusion's OptimizeAggregateOrder.
+    assert_eq!(
+        value(
+            "SELECT string_agg(x, ',' ORDER BY x DESC) AS s FROM \
+             (SELECT x FROM (VALUES ('a'), ('c'), ('b')) t(x) ORDER BY x LIMIT 10)"
+        ),
+        r#"[{"s":"c,b,a"}]"#
+    );
+    assert_eq!(
+        value(
+            "SELECT k, string_agg(x, ',' ORDER BY x DESC) AS s FROM (SELECT k, x FROM \
+             (VALUES (1, 'a'), (1, 'c'), (2, 'b')) t(k, x) ORDER BY k, x LIMIT 10) \
+             GROUP BY k ORDER BY k"
+        ),
+        r#"[{"k":1,"s":"c,a"},{"k":2,"s":"b"}]"#
+    );
+}

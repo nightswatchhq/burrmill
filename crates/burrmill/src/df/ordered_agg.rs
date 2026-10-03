@@ -103,6 +103,63 @@ impl AggregateUDFImpl for OrderedArrayAgg {
     }
 }
 
+/// `string_agg(x, sep ORDER BY k)`. The built-in sorts what it keeps and still has DataFusion sort
+/// its input, which every other aggregate of the statement then reads: an unordered `list(x)`
+/// beside it came out sorted, where DuckDB keeps source order. Asking for no input order, it sorts
+/// alone.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SelfSortingStringAgg {
+    inner: Arc<AggregateUDF>,
+}
+
+impl SelfSortingStringAgg {
+    pub fn udaf(inner: Arc<AggregateUDF>) -> Arc<AggregateUDF> {
+        Arc::new(AggregateUDF::from(Self { inner }))
+    }
+}
+
+impl AggregateUDFImpl for SelfSortingStringAgg {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn aliases(&self) -> &[String] {
+        self.inner.aliases()
+    }
+    fn signature(&self) -> &Signature {
+        self.inner.signature()
+    }
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(arg_types)
+    }
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        self.inner.state_fields(args)
+    }
+    fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
+        datafusion_expr::utils::AggregateOrderSensitivity::Beneficial
+    }
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        _beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Ok(Some(self))
+    }
+    fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(args)
+    }
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::NotSupported
+    }
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        self.inner.groups_accumulator_supported(args)
+    }
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        self.inner.create_groups_accumulator(args)
+    }
+}
+
 struct Ordered {
     item: FieldRef,
     keys: Fields,
