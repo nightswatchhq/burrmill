@@ -6,13 +6,14 @@
 //! 60 GB and killed where DuckDB answers in 512 MB. The catalogue knows what each scan reads, as
 //! [`super::smallinputs`] already uses, and that is enough to choose. Swapping is DataFusion's own
 //! `swap_inputs`, which `JoinSelection` uses, so no answer changes; it runs straight after that
-//! rule, before repartitions and dynamic filters are placed on the join's children.
+//! rule, before repartitions and dynamic filters are placed on the join's children. Semi and anti
+//! joins hold their build side the same way, so they swap too; a null-aware anti join cannot.
 
 use std::sync::Arc;
 
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{JoinType, Result};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::HashJoinExec;
 use datafusion_session::PhysicalOptimizerRule;
@@ -32,10 +33,7 @@ impl PhysicalOptimizerRule for BuildOnSmaller {
             let Some(j) = p.downcast_ref::<HashJoinExec>() else {
                 return Ok(Transformed::no(p));
             };
-            if !matches!(
-                j.join_type(),
-                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full
-            ) {
+            if !j.join_type().supports_swap() || j.null_aware {
                 return Ok(Transformed::no(p));
             }
             match (bytes_read(j.left()), bytes_read(j.right())) {
