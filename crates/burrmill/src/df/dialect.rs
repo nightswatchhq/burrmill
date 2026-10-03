@@ -1130,12 +1130,12 @@ impl VisitorMut for Rewriter {
         if let (Some(o), Some(n)) = (q.order_by.as_mut(), width)
             && let sq::OrderByKind::All(options) = &o.kind
         {
-            let options = options.clone();
+            let options = *options;
             o.kind = sq::OrderByKind::Expressions(
                 (1..=n)
                     .map(|i| sq::OrderByExpr {
                         expr: SqlExpr::Value(sq::Value::Number(i.to_string(), false).into()),
-                        options: options.clone(),
+                        options,
                         with_fill: None,
                     })
                     .collect(),
@@ -1648,7 +1648,7 @@ impl AnalyzerRule for DuckSemantics {
                     let t = t.transform_data(|e| timestamp_as_text(e, &schema))?;
                     let t = t.transform_data(|e| dates_as_duckdb(e, &schema))?;
                     let t = t.transform_data(|e| case_nullability(e, &schema))?;
-                    let t = t.transform_data(|e| try_as_duckdb(e))?;
+                    let t = t.transform_data(try_as_duckdb)?;
                     t.transform_data(|e| hugeint_rounding(e, &schema, &self.round))
                 })?;
                 if t.transformed && names_matter && t.data.schema_name().to_string() != name {
@@ -1848,16 +1848,18 @@ fn dates_as_duckdb(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
                 ));
                 cast(cast(sum, DataType::Int32), DataType::Date32)
             };
-            if lt == DataType::Date32 && matches!(rt, DataType::Interval(_)) {
-                if let Some(n) = days(&right) {
-                    return Ok(Transformed::yes(add_days(*left, op, n)));
-                }
-            }
-            if rt == DataType::Date32 && matches!(lt, DataType::Interval(_)) && op == Operator::Plus
+            if lt == DataType::Date32
+                && matches!(rt, DataType::Interval(_))
+                && let Some(n) = days(&right)
             {
-                if let Some(n) = days(&left) {
-                    return Ok(Transformed::yes(add_days(*right, op, n)));
-                }
+                return Ok(Transformed::yes(add_days(*left, op, n)));
+            }
+            if rt == DataType::Date32
+                && matches!(lt, DataType::Interval(_))
+                && op == Operator::Plus
+                && let Some(n) = days(&left)
+            {
+                return Ok(Transformed::yes(add_days(*right, op, n)));
             }
             if date(&lt) && interval(&rt, &right) {
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(

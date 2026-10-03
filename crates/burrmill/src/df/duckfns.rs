@@ -554,7 +554,7 @@ fn json_array(t: &DataType, values: &[Option<&serde_json::Value>]) -> Result<Arr
         DataType::Decimal128(p, sc) => {
             let mut b = Decimal128Builder::with_capacity(values.len());
             for v in values {
-                b.append_option(v.and_then(|v| int(v)));
+                b.append_option(v.and_then(&int));
             }
             Arc::new(b.finish().with_precision_and_scale(*p, *sc)?)
         }
@@ -966,7 +966,7 @@ fn strftime(t: NaiveDateTime, fmt: &str) -> Result<String> {
                 format!("{n:02}")
             }
         };
-        let hour12 = if t.hour() % 12 == 0 {
+        let hour12 = if t.hour().is_multiple_of(12) {
             12
         } else {
             t.hour() % 12

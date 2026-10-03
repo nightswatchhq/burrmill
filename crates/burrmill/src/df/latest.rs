@@ -12,7 +12,7 @@
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, Result, TableReference};
+use datafusion_common::{Column, Result};
 use datafusion_expr::expr::Sort as SortExpr;
 use datafusion_expr::logical_plan::{FetchType, Join, JoinType, Limit, SkipType};
 use datafusion_expr::utils::{conjunction, split_conjunction_owned};
@@ -384,9 +384,7 @@ fn lateral(j: &Join, n: &mut usize) -> Result<Option<LogicalPlan>> {
         let right = bound
             .into_iter()
             .map(|(e, name)| match &alias {
-                Some(a) => {
-                    Ok(unouter(e)?.alias_qualified(Some(TableReference::from(a.clone())), name))
-                }
+                Some(a) => Ok(unouter(e)?.alias_qualified(Some(a.clone()), name)),
                 None => Ok(unouter(e)?.alias(name)),
             })
             .collect::<Result<Vec<_>>>()?;
@@ -422,7 +420,7 @@ fn lateral(j: &Join, n: &mut usize) -> Result<Option<LogicalPlan>> {
     let right = private.iter().zip(&names).map(|(p, name)| {
         let e = Expr::Column(Column::new_unqualified(p));
         match &alias {
-            Some(a) => e.alias_qualified(Some(TableReference::from(a.clone())), name),
+            Some(a) => e.alias_qualified(Some(a.clone()), name),
             None => e.alias(name),
         }
     });

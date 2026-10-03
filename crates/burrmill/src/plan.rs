@@ -700,22 +700,21 @@ fn key_parts(expr: &Expr, out: &mut Vec<KeyPart>) -> Result<()> {
         data_type,
         ..
     } = expr
-    {
-        if matches!(
+        && matches!(
             data_type,
             DataType::Varchar(_) | DataType::Text | DataType::String(_) | DataType::Char(_)
-        ) {
-            return key_parts(inner, out);
-        }
+        )
+    {
+        return key_parts(inner, out);
     }
     if let Expr::Nested(inner) = expr {
         return key_parts(inner, out);
     }
-    if let Expr::Value(v) = expr {
-        if let sqlparser::ast::Value::SingleQuotedString(lit) = &v.value {
-            out.push(KeyPart::Literal(lit.clone()));
-            return Ok(());
-        }
+    if let Expr::Value(v) = expr
+        && let sqlparser::ast::Value::SingleQuotedString(lit) = &v.value
+    {
+        out.push(KeyPart::Literal(lit.clone()));
+        return Ok(());
     }
     if let Some(name) = ident_name(expr) {
         out.push(KeyPart::Column { name, key_fn: None });
@@ -727,21 +726,18 @@ fn key_parts(expr: &Expr, out: &mut Vec<KeyPart>) -> Result<()> {
             "upper" => Some(KeyFn::Upper),
             _ => None,
         };
-        if let (Some(kf), sqlparser::ast::FunctionArguments::List(l)) = (key_fn, &f.args) {
-            if l.args.len() == 1 {
-                if let sqlparser::ast::FunctionArg::Unnamed(
-                    sqlparser::ast::FunctionArgExpr::Expr(inner),
-                ) = &l.args[0]
-                {
-                    if let Some(col) = ident_name(inner) {
-                        out.push(KeyPart::Column {
-                            name: col,
-                            key_fn: Some(kf),
-                        });
-                        return Ok(());
-                    }
-                }
-            }
+        if let (Some(kf), sqlparser::ast::FunctionArguments::List(l)) = (key_fn, &f.args)
+            && l.args.len() == 1
+            && let sqlparser::ast::FunctionArg::Unnamed(sqlparser::ast::FunctionArgExpr::Expr(
+                inner,
+            )) = &l.args[0]
+            && let Some(col) = ident_name(inner)
+        {
+            out.push(KeyPart::Column {
+                name: col,
+                key_fn: Some(kf),
+            });
+            return Ok(());
         }
     }
     Err(not_allowed(

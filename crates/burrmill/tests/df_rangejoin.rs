@@ -42,7 +42,7 @@ fn fixture(seed: u64) -> (tempfile::TempDir, Engine, Vec<Row>, Vec<Interval>) {
         .map(|i| {
             (
                 i,
-                if lcg(&mut s) % 50 == 0 {
+                if lcg(&mut s).is_multiple_of(50) {
                     None
                 } else {
                     Some((lcg(&mut s) % 1000) as i64)
@@ -54,12 +54,12 @@ fn fixture(seed: u64) -> (tempfile::TempDir, Engine, Vec<Row>, Vec<Interval>) {
         .map(|k| {
             let lo = (lcg(&mut s) % 1000) as i64;
             // Mostly short, some long, so intervals overlap; a few NULL or empty.
-            let len = if lcg(&mut s) % 5 == 0 {
+            let len = if lcg(&mut s).is_multiple_of(5) {
                 (lcg(&mut s) % 400) as i64
             } else {
                 (lcg(&mut s) % 20) as i64
             };
-            let hi = if lcg(&mut s) % 7 == 0 {
+            let hi = if lcg(&mut s).is_multiple_of(7) {
                 lo - 1
             } else {
                 lo + len

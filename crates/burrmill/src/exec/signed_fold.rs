@@ -456,10 +456,10 @@ impl<'a> SignedFoldExec<'a> {
             for i in 0..batch.num_rows() {
                 if let (Some(blocks), Some(seam)) = (&blocks, self.seam) {
                     // `None` means nothing has been sealed, so nothing in a segment can be cold.
-                    if !seam
+                    if seam
                         .snapshot
                         .sealed_through
-                        .is_some_and(|w| blocks.value(i) <= w)
+                        .is_none_or(|w| blocks.value(i) > w)
                     {
                         rows_skipped += 1;
                         continue;

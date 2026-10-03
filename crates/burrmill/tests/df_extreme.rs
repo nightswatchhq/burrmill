@@ -48,12 +48,12 @@ fn fixture() -> (tempfile::TempDir, Engine, Vec<Row>) {
     // 40 keys and a NULL one, values 0..30 so every partition has ties, some values NULL.
     let rows: Vec<Row> = (0..5000)
         .map(|i| {
-            let k = if lcg(&mut s) % 37 == 0 {
+            let k = if lcg(&mut s).is_multiple_of(37) {
                 None
             } else {
                 Some((lcg(&mut s) % 40) as i64)
             };
-            let x = if lcg(&mut s) % 11 == 0 {
+            let x = if lcg(&mut s).is_multiple_of(11) {
                 None
             } else {
                 Some((lcg(&mut s) % 30) as i64)
