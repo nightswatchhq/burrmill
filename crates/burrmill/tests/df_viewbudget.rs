@@ -425,3 +425,76 @@ fn hash_join_partitioned_binary() {
         "SELECT count(*) AS n, max(b.amount) AS m FROM s a JOIN s b ON a.who = b.who",
     );
 }
+
+/// #46: a key that is an expression over a view column was planned for views, and the operator now
+/// reads offsets. Each statement must answer as it does over `Utf8`, within the factor.
+#[test]
+fn expression_keys() {
+    let cases = [
+        (
+            "sort on a column then LOWER (#46)",
+            "TopK",
+            "SELECT who FROM s ORDER BY who, LOWER(amount) LIMIT 3",
+        ),
+        (
+            "sort on LOWER",
+            "SortExec",
+            "SELECT count(*) AS n, max(r) AS r FROM \
+             (SELECT row_number() OVER (ORDER BY LOWER(who) DESC, amount) AS r FROM s)",
+        ),
+        (
+            "top-k on CONCAT",
+            "TopK",
+            "SELECT who FROM s ORDER BY CONCAT(amount, who) DESC, who LIMIT 3",
+        ),
+        (
+            "top-k on CASE",
+            "TopK",
+            "SELECT who FROM s ORDER BY CASE WHEN block_number % 2 = 0 THEN who ELSE amount END, \
+             block_number LIMIT 3",
+        ),
+        (
+            "top-k on COALESCE",
+            "TopK",
+            "SELECT who FROM s ORDER BY block_number % 3, COALESCE(NULLIF(who, amount), 'z') DESC, \
+             who LIMIT 3",
+        ),
+        (
+            "top-k on a cast",
+            "TopK",
+            "SELECT who FROM s ORDER BY CAST(amount AS VARCHAR) DESC, block_number LIMIT 3",
+        ),
+        (
+            "sort on COALESCE alone",
+            "SortExec",
+            "SELECT count(*) AS n, max(r) AS r FROM \
+             (SELECT row_number() OVER (ORDER BY COALESCE(NULLIF(who, amount), amount) DESC) AS r FROM s)",
+        ),
+        (
+            "group by LOWER",
+            "AggregateExec",
+            "SELECT count(*) AS n, max(c) AS c FROM \
+             (SELECT LOWER(who) AS w, count(*) AS c FROM s GROUP BY LOWER(who))",
+        ),
+        (
+            "join on LOWER",
+            "HashJoinExec",
+            "SELECT count(*) AS n, max(b.amount) AS m FROM s a JOIN s b ON LOWER(a.who) = LOWER(b.amount)",
+        ),
+        (
+            "partition by LOWER",
+            "Hash([lower(",
+            "SELECT count(*) AS n, max(p) AS p FROM \
+             (SELECT max(amount) OVER (PARTITION BY LOWER(who)) AS p FROM s)",
+        ),
+    ];
+    let failed: Vec<String> = cases
+        .iter()
+        .filter_map(|(operator, marker, body)| {
+            std::panic::catch_unwind(|| within(operator, marker, body))
+                .err()
+                .map(|_| operator.to_string())
+        })
+        .collect();
+    assert!(failed.is_empty(), "refused or over budget: {failed:?}");
+}

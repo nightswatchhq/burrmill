@@ -24,7 +24,10 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::expressions::{CastExpr, Column};
+use datafusion_physical_expr::{
+    EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
+};
 use datafusion_physical_plan::async_func::AsyncFuncExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{
@@ -242,7 +245,7 @@ fn over_offsets(p: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     });
     let views = Arc::clone(p.properties());
     Ok(Arc::new(CastViewsExec {
-        inner: replace_children_if_necessary(p, vec![offsets])?,
+        inner: with_keys_as_planned(p, offsets)?,
         props: views,
     }))
 }
@@ -279,4 +282,71 @@ impl PhysicalOptimizerRule for CompactViews {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// `e` over its input cast to offsets, with each view column it reads inside a function cast back to
+/// the type `e` was planned for. A bare column key reads offsets as they are.
+fn as_planned(
+    e: &Arc<dyn PhysicalExpr>,
+    planned: &Schema,
+) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+    if e.downcast_ref::<Column>().is_some() {
+        return Ok(Transformed::no(Arc::clone(e)));
+    }
+    Arc::clone(e).transform_up(|n| {
+        let Some(c) = n.downcast_ref::<Column>() else {
+            return Ok(Transformed::no(n));
+        };
+        let t = planned.field(c.index()).data_type();
+        match offsets(t) {
+            Some(_) => Ok(Transformed::yes(
+                Arc::new(CastExpr::new(n, t.clone(), None)) as Arc<dyn PhysicalExpr>,
+            )),
+            None => Ok(Transformed::no(n)),
+        }
+    })
+}
+
+/// `p` over `child`, its keys rebuilt by [`as_planned`] against the schema they were planned for.
+fn with_keys_as_planned(
+    p: Arc<dyn ExecutionPlan>,
+    child: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let planned = p.children()[0].schema();
+    if let Some(s) = p.downcast_ref::<SortExec>() {
+        let keys = s
+            .expr()
+            .iter()
+            .map(|k| {
+                Ok(as_planned(&k.expr, &planned)?
+                    .update_data(|e| PhysicalSortExpr::new(e, k.options)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if keys.iter().any(|k| k.transformed) {
+            // A fresh top-k filter: the scan's copy of the old one matches its keys by equality, and
+            // a predicate over these would reach the scan unmapped.
+            let ordering =
+                LexOrdering::new(keys.into_iter().map(|k| k.data)).expect("a sort has keys");
+            let sort = SortExec::new(ordering, child)
+                .with_preserve_partitioning(s.preserve_partitioning())
+                .with_fetch(s.fetch());
+            return Ok(Arc::new(sort));
+        }
+    }
+    if let Some(r) = p.downcast_ref::<RepartitionExec>()
+        && let Partitioning::Hash(keys, n) = r.partitioning()
+    {
+        let keys = keys
+            .iter()
+            .map(|k| as_planned(k, &planned))
+            .collect::<Result<Vec<_>>>()?;
+        if keys.iter().any(|k| k.transformed) {
+            let keys = keys.into_iter().map(|k| k.data).collect();
+            return Ok(Arc::new(RepartitionExec::try_new(
+                child,
+                Partitioning::Hash(keys, *n),
+            )?));
+        }
+    }
+    replace_children_if_necessary(p, vec![child])
 }
