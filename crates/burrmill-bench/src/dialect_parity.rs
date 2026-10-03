@@ -313,6 +313,8 @@ const CORPUS: &[&str] = &[
     "SELECT \"from\" AS who, sum(value_dec) AS s FROM transfer GROUP BY who ORDER BY -s",
     "SELECT \"from\" AS who, sum(value_dec) AS s FROM transfer GROUP BY who ORDER BY s::DOUBLE DESC, who",
     "SELECT \"from\" AS who, sum(value_dec) AS s FROM transfer GROUP BY who ORDER BY CAST(s AS VARCHAR), who",
+    // `%` by zero is NULL, a row at a time.
+    "SELECT block_number % 0 AS a, log_index % 0 AS b, 7 % 0 AS c, 7.5::DOUBLE % 0 AS d, 7.5 % 0 AS e, value_dec % 0 AS f, block_number % log_index AS g FROM transfer ORDER BY block_number, log_index",
 ];
 
 /// Differences that stand, and why.

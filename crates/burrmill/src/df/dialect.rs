@@ -1859,6 +1859,7 @@ impl AnalyzerRule for DuckSemantics {
                 let name = e.schema_name().to_string();
                 let t = e.transform_up(|e| {
                     let t = divide_as_double(e, &schema)?;
+                    let t = t.transform_data(|e| modulo_by_zero(e, &schema))?;
                     let t = t.transform_data(|e| timestamp_as_duckdb(e, &schema))?;
                     let t = t.transform_data(|e| round_before_int_cast(e, &schema, &self.round))?;
                     let t = t.transform_data(|e| timestamp_as_text(e, &schema))?;
@@ -2148,6 +2149,40 @@ fn numeric(t: &DataType) -> bool {
     t.is_integer()
         || t.is_floating()
         || matches!(t, DataType::Decimal128(..) | DataType::Decimal256(..))
+}
+
+/// `x % 0` is NULL in DuckDB, where Arrow's kernel refuses the statement; the divisor becomes
+/// `nullif(y, 0)`, which the kernel skips. A non-zero literal divisor is left as written.
+fn modulo_by_zero(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
+    let Expr::BinaryExpr(BinaryExpr {
+        left,
+        op: Operator::Modulo,
+        right,
+    }) = e
+    else {
+        return Ok(Transformed::no(e));
+    };
+    let rt = right.get_type(schema)?;
+    let zero = numeric(&rt)
+        .then(|| ScalarValue::new_zero(&rt))
+        .transpose()?;
+    let Some(zero) = zero.filter(|z| !matches!(right.as_ref(), Expr::Literal(v, _) if v != z))
+    else {
+        return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Modulo,
+            right,
+        })));
+    };
+    let divisor = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+        datafusion_functions::core::nullif(),
+        vec![*right, Expr::Literal(zero, None)],
+    ));
+    Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+        left,
+        Operator::Modulo,
+        Box::new(divisor),
+    ))))
 }
 
 fn divide_as_double(e: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
