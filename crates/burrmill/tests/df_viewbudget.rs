@@ -545,6 +545,15 @@ fn expression_keys() {
             "SELECT count(*) AS n, max(p) AS p FROM \
              (SELECT max(amount) OVER (PARTITION BY LOWER(who)) AS p FROM s)",
         ),
+        (
+            "join on a window partitioned by LOWER (#1790)",
+            "HashJoinExec: mode=Partitioned",
+            "SELECT count(*) AS n, count(c.amount) AS m FROM \
+             (SELECT LOWER(who) AS k, LOWER(amount) AS v FROM s GROUP BY 1, 2) f \
+             LEFT JOIN (SELECT * FROM (SELECT LOWER(who) AS k, LOWER(amount) AS v, amount, \
+             ROW_NUMBER() OVER (PARTITION BY LOWER(who), LOWER(amount) ORDER BY block_number DESC) \
+             AS rn FROM s) WHERE rn = 1) c ON c.k = f.k AND c.v = f.v",
+        ),
     ];
     let failed: Vec<String> = cases
         .iter()
@@ -554,7 +563,10 @@ fn expression_keys() {
                 .map(|_| operator.to_string())
         })
         .collect();
-    assert!(failed.is_empty(), "refused or over budget: {failed:?}");
+    assert!(
+        failed.is_empty(),
+        "refused, over budget or answering differently: {failed:?}"
+    );
 }
 
 /// #51: a cross join collects its left side and charges each batch as it arrives. An aggregate's
@@ -656,4 +668,24 @@ fn cross_join_with_no_left_columns() {
         }
     }
     assert!(refused.is_empty(), "refused:\n{}", refused.join("\n"));
+}
+
+/// #1790: under a budget a hash repartition reads offsets, and a key that is an expression over a
+/// view hashed as a view where a bare column key hashed as offsets. A partitioned join between the
+/// two met only the keys both hashes happened to send to one partition.
+#[test]
+fn a_join_partitioned_by_a_window_key_meets_every_row() {
+    let e = engine();
+    let sql = "SELECT count(*) AS n, count(c.amount) AS matched FROM \
+               (SELECT LOWER(who) AS k, LOWER(amount) AS v FROM t GROUP BY 1, 2) f \
+               LEFT JOIN (SELECT * FROM (SELECT LOWER(who) AS k, LOWER(amount) AS v, amount, \
+               ROW_NUMBER() OVER (PARTITION BY LOWER(who), LOWER(amount) ORDER BY block_number DESC) \
+               AS rn FROM t) WHERE rn = 1) c ON c.k = f.k AND c.v = f.v";
+    let shown = plan(&e, sql);
+    assert!(
+        shown.contains("HashJoinExec: mode=Partitioned") && shown.contains("CastViewsExec"),
+        "the join is not partitioned over offsets, so this does not test it:\n{shown}"
+    );
+    let (rows, _) = run(&e, sql).unwrap();
+    assert_eq!(rows, vec![serde_json::json!({"n": ROWS, "matched": ROWS})]);
 }
