@@ -113,3 +113,46 @@ fn the_build_side_is_the_smaller_input_and_the_answer_is_the_same() {
         matched.to_string()
     );
 }
+
+/// A semi or anti join holds its build side too: the QoS nest's rows, written first and filtered by
+/// two small tables, were held whole in each of two nested semi joins and refused out of memory.
+#[test]
+fn a_semi_or_anti_join_builds_on_the_smaller_input_and_the_answer_is_the_same() {
+    let (_tmp, e) = fixture();
+    let keep = |anti: bool| {
+        (0..50_000i64)
+            .filter(|i| {
+                let k = (i % 211 != 0).then_some(i % 100);
+                k.is_some_and(|k| k >= 95) != anti
+            })
+            .collect::<Vec<_>>()
+    };
+    for (sql, anti) in [
+        (
+            "SELECT count(*), coalesce(sum(b.v), 0) FROM big b WHERE EXISTS (SELECT 1 FROM small s WHERE s.k = b.k)",
+            false,
+        ),
+        (
+            "SELECT count(*), coalesce(sum(b.v), 0) FROM big b WHERE NOT EXISTS (SELECT 1 FROM small s WHERE s.k = b.k)",
+            true,
+        ),
+    ] {
+        assert_eq!(build_side(&e, sql), "small", "{sql}");
+        let rows = keep(anti);
+        let want = (rows.len().to_string(), rows.iter().sum::<i64>().to_string());
+        assert_eq!(one(&e, sql), want, "{sql}");
+    }
+}
+
+/// `NOT IN` is a null-aware anti join, which DataFusion cannot swap: a NULL key is never kept.
+#[test]
+fn not_in_keeps_its_answer() {
+    let (_tmp, e) = fixture();
+    let rows: Vec<i64> = (0..50_000i64)
+        .filter(|i| i % 211 != 0 && i % 100 < 95)
+        .collect();
+    let want = (rows.len().to_string(), rows.iter().sum::<i64>().to_string());
+    let sql =
+        "SELECT count(*), coalesce(sum(b.v), 0) FROM big b WHERE b.k NOT IN (SELECT k FROM small)";
+    assert_eq!(one(&e, sql), want, "{sql}");
+}
