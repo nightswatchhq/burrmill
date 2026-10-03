@@ -19,7 +19,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use arrow::array::{StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -138,15 +138,17 @@ fn no_row_is_double_counted_or_dropped_while_the_nest_seals_underneath() {
     }
 
     let stop = Arc::new(AtomicBool::new(false));
+    let folds = Arc::new(AtomicUsize::new(0));
     let max_block = rows.iter().map(|r| r.block).max().unwrap();
 
     std::thread::scope(|scope| {
         let sealer = {
-            let (tip, dir, stop, rows) = (
+            let (tip, dir, stop, rows, folds) = (
                 tip.clone(),
                 dir.path().to_path_buf(),
                 stop.clone(),
                 rows.clone(),
+                folds.clone(),
             );
             scope.spawn(move || {
                 // Seal in ragged steps, so the boundary lands at every sort of place relative to a
@@ -172,17 +174,28 @@ fn no_row_is_double_counted_or_dropped_while_the_nest_seals_underneath() {
                     // segment is durable would leave a window where the range is in neither half.
                     seal_segment(&dir, &format!("{at:06}"), &batch);
                     tip.seal_through(at);
-                    // Slow enough that folds actually overlap seals. Without it the sealer finishes
-                    // in a few milliseconds and the reader spends its whole run on a settled nest,
-                    // which would pass just as happily with the invariant broken.
-                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    // Wait for a fold before the next seal, so folds overlap seals however slow a
+                    // fold is. A fixed 2 ms sleep gave 18 overlaps on a CI runner. Bounded, so a
+                    // reader that panicked cannot hang the sealer.
+                    let seen = folds.load(Ordering::Acquire);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while folds.load(Ordering::Acquire) == seen
+                        && std::time::Instant::now() < deadline
+                    {
+                        std::thread::sleep(std::time::Duration::from_micros(200));
+                    }
                 }
                 stop.store(true, Ordering::Release);
             })
         };
 
         let reader = {
-            let (tip, dir, stop) = (tip.clone(), dir.path().to_path_buf(), stop.clone());
+            let (tip, dir, stop, folds) = (
+                tip.clone(),
+                dir.path().to_path_buf(),
+                stop.clone(),
+                folds.clone(),
+            );
             scope.spawn(move || {
                 let mut runs = 0usize;
                 let mut raced = 0usize;
@@ -205,6 +218,7 @@ fn no_row_is_double_counted_or_dropped_while_the_nest_seals_underneath() {
                          Either a row was counted on both sides of the seam or it fell between them."
                     );
                     runs += 1;
+                    folds.fetch_add(1, Ordering::Release);
                     if still_sealing {
                         raced += 1;
                     }
