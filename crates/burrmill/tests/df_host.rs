@@ -238,9 +238,9 @@ fn a_cancel_stops_a_join_of_ranges() {
 }
 
 /// A statement cancelled while it holds memory gives all of it back: a grouped cross join, stopped
-/// once its hash table holds 64 MB of a bounded pool, leaves the pool at zero. Not at once: the
-/// partition tasks unwind a few milliseconds after the caller has its error, and by then the join
-/// has grown for a whole input batch past the cancel (hundreds of MB here).
+/// once its hash table holds 64 MB of a bounded pool, leaves the pool at zero when its tasks have
+/// stopped. They stop after the caller has its error, each at its next yield, and on a loaded runner
+/// that was more than a second later (#62).
 #[test]
 fn a_cancelled_join_returns_its_memory() {
     let tmp = tempfile::tempdir().unwrap();
@@ -285,7 +285,11 @@ fn a_cancelled_join_returns_its_memory() {
         r.map(|_| ())
     );
     let returned = std::time::Instant::now();
-    while engine.memory_reserved() > 0 && returned.elapsed() < std::time::Duration::from_secs(1) {
+    while engine.tasks_alive() > 0 {
+        assert!(
+            returned.elapsed() < std::time::Duration::from_secs(30),
+            "the cancelled statement's tasks never stopped"
+        );
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert_eq!(

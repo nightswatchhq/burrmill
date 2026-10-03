@@ -284,6 +284,12 @@ impl Engine {
         self.session.runtime_env().memory_pool.reserved()
     }
 
+    /// Tasks alive on the engine's runtime. A cancelled statement returns before its partition tasks
+    /// stop, each at its next yield, and its memory goes back as they do: zero here is when it has.
+    pub fn tasks_alive(&self) -> usize {
+        self.runtime().metrics().num_alive_tasks()
+    }
+
     /// The most the statements have held against a budgeted engine's pool since the last call, and
     /// zero without a budget.
     pub fn take_memory_peak(&self) -> usize {
