@@ -649,3 +649,108 @@ fn an_unnested_list_is_tainted_only_by_what_went_into_it() {
     );
     assert!(why.contains("TRY_CAST"), "{why}");
 }
+
+/// #44: HUGEINT is `DECIMAL(38,0)` here, so 10^38 to 2^127 - 1 cannot be held, while DuckDB's
+/// `TRY_CAST(... AS HUGEINT)` answers them. Where the value itself is read it refuses by name; a
+/// NULL test and a sum answer what DuckDB answers. `AS DECIMAL(38,0)` is NULL there, as in DuckDB.
+#[test]
+fn hugeint_try_cast_past_38_digits_refuses_or_answers_as_duckdb() {
+    const WINDOW: &str = "150000000000000000000000000000000000000";
+    const LEAST: &str = "-170141183460469231731687303715884105728";
+    const BACK: &str = "-149999999999999999999999999999999999999";
+    let (_t, e) = transfers(&[&[("w", WINDOW), ("u", U256_MAX), ("f", "5"), ("l", LEAST)]]);
+    for p in ["w", "l"] {
+        let m = refused(
+            &e,
+            &format!("SELECT TRY_CAST(value AS HUGEINT) FROM transfer WHERE party = '{p}'"),
+        );
+        assert!(m.contains("HUGEINT"), "{p}: {m}");
+    }
+    assert_eq!(
+        one(
+            &e,
+            "SELECT TRY_CAST(value AS DECIMAL(38,0)) FROM transfer WHERE party = 'w'"
+        ),
+        "NULL"
+    );
+    assert_eq!(
+        rows(
+            &e,
+            "SELECT party, TRY_CAST(value AS HUGEINT) IS NULL, TRY_CAST(value AS HUGEINT) IS NOT NULL \
+             FROM transfer ORDER BY party"
+        ),
+        vec![
+            vec!["f".to_string(), "false".into(), "true".into()],
+            vec!["l".to_string(), "false".into(), "true".into()],
+            vec!["u".to_string(), "true".into(), "false".into()],
+            vec!["w".to_string(), "false".into(), "true".into()],
+        ]
+    );
+    assert_eq!(
+        one(
+            &e,
+            "SELECT count(*) FROM transfer WHERE value IS NOT NULL AND TRY_CAST(value AS HUGEINT) IS NULL"
+        ),
+        "1"
+    );
+
+    let (_t, e) = transfers(&[&[("a", WINDOW), ("a", BACK), ("a", U256_MAX), ("a", "x")]]);
+    assert_eq!(
+        one(&e, "SELECT SUM(TRY_CAST(value AS HUGEINT)) FROM transfer"),
+        "1"
+    );
+    assert_eq!(
+        one(
+            &e,
+            "SELECT SUM(d) FROM (SELECT TRY_CAST(value AS HUGEINT) AS d FROM transfer) s"
+        ),
+        "1"
+    );
+    assert_eq!(
+        one(
+            &e,
+            "SELECT SUM(d) FROM (SELECT TRY_CAST(value AS HUGEINT) AS d FROM transfer UNION ALL \
+             SELECT -TRY_CAST(value AS HUGEINT) FROM transfer) u"
+        ),
+        "0"
+    );
+    // The signed fold refuses uint256 text where substituted, so this one holds only what fits i128.
+    let (_t, f) = transfers(&[&[("a", WINDOW), ("a", BACK)]]);
+    assert_eq!(
+        rows(
+            &f,
+            "SELECT addr, SUM(d) FROM ( \
+               SELECT party AS addr, TRY_CAST(value AS HUGEINT) AS d FROM transfer \
+               UNION ALL \
+               SELECT 'sink' AS addr, -TRY_CAST(value AS HUGEINT) AS d FROM transfer \
+             ) GROUP BY addr HAVING SUM(d) <> 0 ORDER BY addr"
+        ),
+        vec![
+            vec!["a".to_string(), "1".into()],
+            vec!["sink".to_string(), "-1".into()]
+        ]
+    );
+    let fold = "SELECT addr, SUM(d) FROM ( \
+                SELECT party AS addr, TRY_CAST(value AS HUGEINT) AS d FROM transfer \
+                UNION ALL \
+                SELECT 'sink' AS addr, -TRY_CAST(value AS HUGEINT) AS d FROM transfer \
+                ) GROUP BY addr";
+    let plan: String = f
+        .sql(&format!("EXPLAIN {fold}"))
+        .unwrap()
+        .iter()
+        .map(|b| {
+            arrow::util::pretty::pretty_format_batches(std::slice::from_ref(b))
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert!(plan.contains("OwnedSignedFold"), "{plan}");
+    let m = refused(&e, "SELECT MAX(TRY_CAST(value AS HUGEINT)) FROM transfer");
+    assert!(m.contains("HUGEINT") || m.contains("did not fit"), "{m}");
+
+    // Each fits HUGEINT and their sum does not fit DECIMAL(38,0): refused, as DuckDB refuses past 2^127.
+    let (_t, e) = transfers(&[&[("a", WINDOW), ("a", WINDOW)]]);
+    let m = refused(&e, "SELECT SUM(TRY_CAST(value AS HUGEINT)) FROM transfer");
+    assert!(m.contains("does not fit"), "{m}");
+}

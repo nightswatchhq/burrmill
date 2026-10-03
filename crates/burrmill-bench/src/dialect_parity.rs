@@ -118,6 +118,10 @@ const CORPUS: &[&str] = &[
     "SELECT 1 IS DISTINCT FROM 2 AND 3 IS DISTINCT FROM 3 OR 4 IS NOT DISTINCT FROM 4 AS v",
     "SELECT block_number FROM transfer WHERE \"from\" IS DISTINCT FROM '0xa' AND log_index = 0 OR \"to\" IS NOT DISTINCT FROM '0xe' ORDER BY 1",
     "SELECT CAST(2.5::DOUBLE AS HUGEINT) AS a, CAST(-3.5::DOUBLE AS HUGEINT) AS b, CAST(2.5::DOUBLE AS DECIMAL(38,0)) AS c",
+    // #44: TRY_CAST to HUGEINT of 10^38: refused where its value is read, answered where it is tested or summed.
+    "SELECT TRY_CAST('100000000000000000000000000000000000000' AS HUGEINT) AS a",
+    "SELECT value, TRY_CAST(value AS HUGEINT) IS NULL AS a, TRY_CAST(value AS HUGEINT) IS NOT NULL AS b, TRY_CAST(value AS DECIMAL(38,0)) AS c FROM wide ORDER BY 1",
+    "SELECT sum(TRY_CAST(value AS HUGEINT)) AS s, (SELECT sum(d) FROM (SELECT TRY_CAST(value AS HUGEINT) AS d FROM wide) t) AS t FROM wide",
     "SELECT CAST(CAST('47582028310819253533' AS HUGEINT) AS DOUBLE) AS a, CAST(CAST('9791626625542365.709860864' AS DECIMAL(38,9)) AS DOUBLE) AS b",
     "SELECT CAST(value AS HUGEINT)::DOUBLE / 3 AS d FROM transfer ORDER BY 1",
     "SELECT 1.5 AS a, 1.5 + 1 AS b, 1.5 * 2.25 AS c, 0.5 AS d, -2.50 AS e, 100.0 / 3 AS f, 1e3 AS g, 1.5e2 AS h, 0.001 AS i",
@@ -380,6 +384,12 @@ const CORPUS: &[&str] = &[
 
 /// Differences that stand, and why.
 const KNOWN: &[(&str, &str)] = &[
+    (
+        "SELECT TRY_CAST('100000000000000000000000000000000000000' AS HUGEINT) AS a",
+        "the same 10^38 to 2^127 - 1 as the CAST of it, which DECIMAL(38,0) cannot hold. TRY_CAST \
+         refuses it by name rather than answering NULL, a value DuckDB does not give; a NULL test \
+         or a sum of the cast still answers as DuckDB does (#44)",
+    ),
     (
         "SELECT CAST('100000000000000000000000000000000000000' AS HUGEINT) AS a",
         "HUGEINT is DECIMAL(38,0), the type nuthatch's planner gives every HUGEINT column, so 10^38 \

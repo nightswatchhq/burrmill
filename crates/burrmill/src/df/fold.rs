@@ -398,6 +398,13 @@ impl FoldSubstitution {
             if *target != DataType::Decimal128(38, 0) {
                 return None;
             }
+            // The owned fold reads the whole i128, as DuckDB's HUGEINT does.
+            let source = match source {
+                Expr::ScalarFunction(f) if f.func.name() == super::fastcast::HUGEINT_TEXT => {
+                    &f.args[0]
+                }
+                s => s,
+            };
             let (t, col, is_null, ty) = branch_column(input, source)?;
             if !same_table(t.clone()) || !is_text(&ty) || !self.0.tables.contains_key(&t) {
                 return None;

@@ -818,6 +818,8 @@ pub struct ExactWide {
     neg: bool,
     /// The `TRY_CAST` read was to a 64-bit integer, which takes `0x`/`0b` text.
     hex: bool,
+    /// The `TRY_CAST` was written as HUGEINT: text past i128 is NULL, as DuckDB reads it.
+    hugeint: bool,
 }
 
 impl ExactWide {
@@ -826,6 +828,16 @@ impl ExactWide {
             sig: Signature::user_defined(Volatility::Immutable),
             neg,
             hex,
+            hugeint: false,
+        }))
+    }
+
+    pub fn hugeint_udf(neg: bool) -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(Self {
+            sig: Signature::user_defined(Volatility::Immutable),
+            neg,
+            hex: false,
+            hugeint: true,
         }))
     }
 }
@@ -833,6 +845,8 @@ impl ExactWide {
 impl ScalarUDFImpl for ExactWide {
     fn name(&self) -> &str {
         match (self.neg, self.hex) {
+            _ if self.hugeint && self.neg => "exact_wide_neg_hugeint",
+            _ if self.hugeint => "exact_wide_hugeint",
             (false, false) => "exact_wide",
             (true, false) => "exact_wide_neg",
             (false, true) => "exact_wide_hex",
@@ -867,6 +881,32 @@ impl ScalarUDFImpl for ExactWide {
             .iter()
             .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
+        if self.hugeint {
+            let mut b = FixedSizeBinaryBuilder::with_capacity(a.len(), WIDE_BYTES);
+            let mut buf = [0u8; WIDE_BYTES as usize];
+            super::fastcast::each_text(&a, |s| {
+                match s.and_then(super::fastcast::duck_hugeint) {
+                    Some(v) => {
+                        let w = Wide::<5>::from_i128(v);
+                        let w = if self.neg {
+                            w.checked_neg().expect("i128 negates in 320 bits")
+                        } else {
+                            w
+                        };
+                        w.write_le(&mut buf);
+                        b.append_value(buf)?;
+                    }
+                    None => b.append_null(),
+                }
+                Ok(())
+            })?;
+            let out: ArrayRef = Arc::new(b.finish());
+            return Ok(if all_scalar {
+                ColumnarValue::Scalar(ScalarValue::try_from_array(&out, 0)?)
+            } else {
+                ColumnarValue::Array(out)
+            });
+        }
         let spec = Spec {
             mode: Mode::Sum,
             name: if self.neg {
