@@ -330,6 +330,14 @@ fn as_planned(
     if e.downcast_ref::<Column>().is_some() {
         return Ok(Transformed::no(Arc::clone(e)));
     }
+    views_as_planned(e, planned)
+}
+
+/// `e` with every view column it reads, itself included, cast back to the type it was planned for.
+fn views_as_planned(
+    e: &Arc<dyn PhysicalExpr>,
+    planned: &Schema,
+) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     Arc::clone(e).transform_up(|n| {
         let Some(c) = n.downcast_ref::<Column>() else {
             return Ok(Transformed::no(n));
@@ -378,9 +386,11 @@ fn with_keys_as_planned(
     if let Some(r) = p.downcast_ref::<RepartitionExec>()
         && let Partitioning::Hash(keys, n) = r.partitioning()
     {
+        // A bare key is hashed as its view too: Arrow hashes a view and its offsets differently, and
+        // a partitioned join's other side may hash the same key as a view.
         let keys = keys
             .iter()
-            .map(|k| as_planned(k, &planned))
+            .map(|k| views_as_planned(k, &planned))
             .collect::<Result<Vec<_>>>()?;
         if keys.iter().any(|k| k.transformed) {
             let keys = keys.into_iter().map(|k| k.data).collect();
