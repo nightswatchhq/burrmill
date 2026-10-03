@@ -22,7 +22,11 @@ use std::path::Path;
 use burrmill::{Burrmill, BurrmillError, SealedSegments};
 
 fn touch(dir: &Path, name: &str) {
-    std::fs::write(dir.join(name), b"not a real parquet, only its name matters here").unwrap();
+    std::fs::write(
+        dir.join(name),
+        b"not a real parquet, only its name matters here",
+    )
+    .unwrap();
 }
 
 /// The naming convention Burrmill assumes: `<contract>__<event>-<content hash>.parquet`, with the
@@ -39,9 +43,18 @@ const HASH: &str = "bb04b072d5ecb39489f65ddbb5dac50d78c2ad8a407ebb721fdc6ae5c9f9
 #[test]
 fn a_table_whose_name_prefixes_another_is_not_absorbed_by_it() {
     let dir = tempfile::tempdir().unwrap();
-    touch(dir.path(), &format!("staking__stake_delegated-{HASH}.parquet"));
-    touch(dir.path(), &format!("staking__stake_delegated_withdrawn-{HASH}.parquet"));
-    touch(dir.path(), &format!("staking__stake_delegated_withdrawn-{HASH}1.parquet"));
+    touch(
+        dir.path(),
+        &format!("staking__stake_delegated-{HASH}.parquet"),
+    );
+    touch(
+        dir.path(),
+        &format!("staking__stake_delegated_withdrawn-{HASH}.parquet"),
+    );
+    touch(
+        dir.path(),
+        &format!("staking__stake_delegated_withdrawn-{HASH}1.parquet"),
+    );
 
     let all = SealedSegments::discover("_all", dir.path()).unwrap();
     assert_eq!(all.files().len(), 3);
@@ -105,15 +118,26 @@ fn a_real_nest_still_matches_the_layout_this_crate_assumes() {
     };
     let dir = Path::new(&dir);
     let all = SealedSegments::discover("_all", dir).unwrap();
-    assert!(!all.files().is_empty(), "{} holds no .parquet segments", dir.display());
+    assert!(
+        !all.files().is_empty(),
+        "{} holds no .parquet segments",
+        dir.display()
+    );
 
     let mut tables = std::collections::BTreeSet::new();
     for f in all.files() {
-        let name = f.file_name().and_then(|n| n.to_str()).expect("segment names are utf8");
-        let stem = name.strip_suffix(".parquet").expect("discover filtered on the extension");
+        let name = f
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("segment names are utf8");
+        let stem = name
+            .strip_suffix(".parquet")
+            .expect("discover filtered on the extension");
         let (table, hash) = stem.rsplit_once('-').unwrap_or_else(|| {
-            panic!("segment `{name}` has no `-` separating table from content hash; the layout \
-                    Burrmill assumes has changed and every table would now resolve to zero segments")
+            panic!(
+                "segment `{name}` has no `-` separating table from content hash; the layout \
+                    Burrmill assumes has changed and every table would now resolve to zero segments"
+            )
         });
         assert!(
             !hash.is_empty() && hash.chars().all(|c| c.is_ascii_hexdigit()),

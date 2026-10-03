@@ -58,19 +58,15 @@ fn data_type_satisfied_by(original: &DataType, candidate: &DataType) -> bool {
         (
             DataType::FixedSizeList(original_field, original_size),
             DataType::FixedSizeList(candidate_field, candidate_size),
-        ) => {
-            original_size == candidate_size
-                && field_satisfied_by(original_field, candidate_field)
-        }
+        ) => original_size == candidate_size && field_satisfied_by(original_field, candidate_field),
 
         (DataType::LargeList(original_field), DataType::LargeList(candidate_field)) => {
             field_satisfied_by(original_field, candidate_field)
         }
 
-        (
-            DataType::LargeListView(original_field),
-            DataType::LargeListView(candidate_field),
-        ) => field_satisfied_by(original_field, candidate_field),
+        (DataType::LargeListView(original_field), DataType::LargeListView(candidate_field)) => {
+            field_satisfied_by(original_field, candidate_field)
+        }
 
         (DataType::Struct(original_fields), DataType::Struct(candidate_fields)) => {
             fields_satisfied_by(original_fields, candidate_fields)

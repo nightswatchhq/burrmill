@@ -50,7 +50,10 @@ pub fn sample_peak() -> std::sync::Arc<std::sync::Mutex<(usize, usize, usize)>> 
         let page = 4096usize;
         loop {
             if let Ok(t) = std::fs::read_to_string("/proc/self/statm") {
-                let f: Vec<usize> = t.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+                let f: Vec<usize> = t
+                    .split_whitespace()
+                    .filter_map(|x| x.parse().ok())
+                    .collect();
                 let (rss, shared) = (f[1] * page, f[2] * page);
                 let mut g = b.lock().unwrap();
                 if rss > g.0 {

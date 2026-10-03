@@ -3,7 +3,7 @@
 //! A boundary nobody has watched refuse is not a boundary. Each of these is a query that must be
 //! turned away, and the test says why rather than only that.
 
-use burrmill::{plan, BurrmillError};
+use burrmill::{BurrmillError, plan};
 
 const NET_BALANCES: &str = r#"
 SELECT addr, SUM(d) AS net FROM (
@@ -31,10 +31,15 @@ fn the_hot_path_shape_is_recognised() {
     assert_eq!(f.branches[1].table, "t");
     assert_eq!(f.branches[0].key.len(), 1, "one group key column");
     assert!(!f.branches[0].values[0].negated);
-    assert!(matches!(&f.branches[1].key[0].parts[0], plan::KeyPart::Column { name, .. } if name == "from"));
+    assert!(
+        matches!(&f.branches[1].key[0].parts[0], plan::KeyPart::Column { name, .. } if name == "from")
+    );
     assert!(f.branches[1].values[0].negated);
     assert_eq!(f.branches[0].values[0].col, "value");
-    assert!(!f.branches[0].values[0].strict_cast, "the query used TRY_CAST");
+    assert!(
+        !f.branches[0].values[0].strict_cast,
+        "the query used TRY_CAST"
+    );
     assert!(f.drop_zero, "HAVING SUM(d) <> 0 is part of the answer");
 }
 
@@ -81,7 +86,10 @@ fn writes_are_not_expressible() {
         "ATTACH '/etc/passwd' AS p",
     ] {
         assert!(
-            matches!(plan::plan(sql), Err(BurrmillError::NotAllowed(_)) | Err(BurrmillError::Parse(_))),
+            matches!(
+                plan::plan(sql),
+                Err(BurrmillError::NotAllowed(_)) | Err(BurrmillError::Parse(_))
+            ),
             "{sql} must not plan"
         );
     }
@@ -102,10 +110,17 @@ fn writes_are_not_expressible() {
 #[test]
 fn cast_and_try_cast_are_both_admitted_and_mean_different_things() {
     let plan::Plan::SignedFold(lenient) = plan::plan(NET_BALANCES).unwrap();
-    assert!(lenient.branches.iter().all(|b| !b.values[0].strict_cast), "TRY_CAST skips a bad value");
+    assert!(
+        lenient.branches.iter().all(|b| !b.values[0].strict_cast),
+        "TRY_CAST skips a bad value"
+    );
 
-    let plan::Plan::SignedFold(strict) = plan::plan(&NET_BALANCES.replace("TRY_CAST", "CAST")).unwrap();
-    assert!(strict.branches.iter().all(|b| b.values[0].strict_cast), "CAST refuses a bad value");
+    let plan::Plan::SignedFold(strict) =
+        plan::plan(&NET_BALANCES.replace("TRY_CAST", "CAST")).unwrap();
+    assert!(
+        strict.branches.iter().all(|b| b.values[0].strict_cast),
+        "CAST refuses a bad value"
+    );
 }
 
 /// Deduplicating would silently drop a party's second identical transfer. Same query text, different
@@ -126,13 +141,21 @@ fn a_narrower_cast_is_refused() {
 /// unconditionally, so honouring the request is impossible and ignoring it would be a lie.
 #[test]
 fn a_non_canonical_order_is_refused_not_ignored() {
-    assert!(refused(&NET_BALANCES.replace("ORDER BY addr", "ORDER BY net DESC")).contains("canonically"));
-    assert!(refused(&NET_BALANCES.replace("ORDER BY addr", "ORDER BY addr DESC")).contains("ascending"));
+    assert!(
+        refused(&NET_BALANCES.replace("ORDER BY addr", "ORDER BY net DESC"))
+            .contains("canonically")
+    );
+    assert!(
+        refused(&NET_BALANCES.replace("ORDER BY addr", "ORDER BY addr DESC")).contains("ascending")
+    );
 }
 
 #[test]
 fn clauses_the_shape_does_not_implement_are_refused_not_dropped() {
-    assert!(refused(&NET_BALANCES.replace("SELECT addr,", "SELECT DISTINCT addr,")).contains("DISTINCT"));
+    assert!(
+        refused(&NET_BALANCES.replace("SELECT addr,", "SELECT DISTINCT addr,"))
+            .contains("DISTINCT")
+    );
     // Regression: this planned and dropped the LIMIT, which would have handed the caller more
     // rows than they asked for with nothing to indicate it.
     assert!(refused(&format!("{NET_BALANCES} LIMIT 10")).contains("LIMIT"));

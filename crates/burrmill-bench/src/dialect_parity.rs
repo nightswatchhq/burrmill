@@ -342,7 +342,9 @@ fn fixture(root: &std::path::Path) -> anyhow::Result<()> {
         vec![
             u(&[1, 2, 2, 3, 150, 301]),
             u(&[0, 0, 1, 0, 2, 0]),
-            u(&[1700000000, 1700000012, 1700000012, 1700086400, 1700172800, 1703980800]),
+            u(&[
+                1700000000, 1700000012, 1700000012, 1700086400, 1700172800, 1703980800,
+            ]),
             s(&["0xa", "0xb", "0xA", "0xc", "0xa", "0xd"]),
             s(&["0xb", "0xc", "0xc", "0xa", "0xe", "0xa"]),
             s(&["10", "4", "1", "010", "250000000000000000000", "7"]),
@@ -358,7 +360,10 @@ fn fixture(root: &std::path::Path) -> anyhow::Result<()> {
         Field::new("addr", DataType::Utf8, true),
         Field::new("name", DataType::Utf8, true),
     ]));
-    let labels = RecordBatch::try_new(lschema.clone(), vec![s(&["0xa", "0xc"]), s(&["alice", "carol"])])?;
+    let labels = RecordBatch::try_new(
+        lschema.clone(),
+        vec![s(&["0xa", "0xc"]), s(&["alice", "carol"])],
+    )?;
     let f = std::fs::File::create(segs.join(format!("label-{:064x}.parquet", 2)))?;
     let mut w = parquet::arrow::ArrowWriter::try_new(f, lschema, None)?;
     w.write(&labels)?;
@@ -406,7 +411,9 @@ pub fn run() -> anyhow::Result<()> {
         segs.display()
     ))?;
     let root = tmp.path().to_path_buf();
-    let engine = std::thread::spawn(move || burrmill::Engine::open_nest(&root)).join().expect("open")?;
+    let engine = std::thread::spawn(move || burrmill::Engine::open_nest(&root))
+        .join()
+        .expect("open")?;
     let engine = Arc::new(engine);
     let mut failed = 0;
     // `SQL=<query>` runs that one query against the fixture instead of the corpus.
@@ -453,18 +460,27 @@ pub fn run() -> anyhow::Result<()> {
         println!("{tag}  {sql}");
         if (want != got && !both_refuse) || adhoc.is_some() {
             let cap = if adhoc.is_some() { usize::MAX } else { 300 };
-            println!("    duckdb   {}", want.chars().take(cap).collect::<String>());
+            println!(
+                "    duckdb   {}",
+                want.chars().take(cap).collect::<String>()
+            );
             println!("    burrmill {}", got.chars().take(cap).collect::<String>());
         }
     }
     println!("DIALECT\tcases={}\tdiffering={failed}", corpus_len(&adhoc));
-    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+    std::thread::spawn(move || drop(engine))
+        .join()
+        .expect("drop engine");
     anyhow::ensure!(failed == 0, "{failed} dialect differences");
     Ok(())
 }
 
 fn corpus_len(adhoc: &Option<String>) -> usize {
-    if adhoc.is_some() { 1 } else { CORPUS.len() }
+    if adhoc.is_some() {
+        1
+    } else {
+        CORPUS.len()
+    }
 }
 
 /// `duck-names <sql>`: DuckDB's own column names for a statement over an empty `t`, one per line.
@@ -485,7 +501,8 @@ pub fn duck_names(sql: &str) -> anyhow::Result<()> {
 /// `duck-keywords`: DuckDB's keyword list with categories, for the naming printer's quoting rule.
 pub fn duck_keywords() -> anyhow::Result<()> {
     let duck = duckdb::Connection::open_in_memory()?;
-    let mut stmt = duck.prepare("SELECT keyword_name, keyword_category FROM duckdb_keywords() ORDER BY 1")?;
+    let mut stmt =
+        duck.prepare("SELECT keyword_name, keyword_category FROM duckdb_keywords() ORDER BY 1")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let (k, c): (String, String) = (r.get(0)?, r.get(1)?);
@@ -497,6 +514,9 @@ pub fn duck_keywords() -> anyhow::Result<()> {
 /// `duck-eval <sql>`: DuckDB's answer as nuthatch's JSON, for probing semantics.
 pub fn duck_eval(sql: &str) -> anyhow::Result<()> {
     let duck = duckdb::Connection::open_in_memory()?;
-    println!("{}", serde_json::to_string(&crate::encode_parity::nuthatch_rows(&duck, sql)?)?);
+    println!(
+        "{}",
+        serde_json::to_string(&crate::encode_parity::nuthatch_rows(&duck, sql)?)?
+    );
     Ok(())
 }

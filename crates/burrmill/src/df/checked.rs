@@ -679,13 +679,20 @@ pub struct CheckedShift {
 
 impl CheckedShift {
     pub fn udf(left: bool) -> Arc<ScalarUDF> {
-        Arc::new(ScalarUDF::from(Self { sig: Signature::user_defined(Volatility::Immutable), left }))
+        Arc::new(ScalarUDF::from(Self {
+            sig: Signature::user_defined(Volatility::Immutable),
+            left,
+        }))
     }
 }
 
 impl ScalarUDFImpl for CheckedShift {
     fn name(&self) -> &str {
-        if self.left { "checked_shl" } else { "checked_shr" }
+        if self.left {
+            "checked_shl"
+        } else {
+            "checked_shr"
+        }
     }
     fn signature(&self) -> &Signature {
         &self.sig
@@ -693,11 +700,16 @@ impl ScalarUDFImpl for CheckedShift {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
             // Mixed signs have no common integer type here (DuckDB's is HUGEINT); a count needs none.
-            [l, r] if l.is_integer() && r.is_integer() && l.is_signed_integer() != r.is_signed_integer() => {
+            [l, r]
+                if l.is_integer()
+                    && r.is_integer()
+                    && l.is_signed_integer() != r.is_signed_integer() =>
+            {
                 Ok(vec![l.clone(), r.clone()])
             }
             [l, r] if l.is_integer() && r.is_integer() => {
-                let t = BinaryTypeCoercer::new(l, &Operator::BitwiseShiftLeft, r).get_result_type()?;
+                let t =
+                    BinaryTypeCoercer::new(l, &Operator::BitwiseShiftLeft, r).get_result_type()?;
                 Ok(vec![t.clone(), t])
             }
             _ => plan_err!("{} takes two integers", self.name()),
@@ -707,12 +719,19 @@ impl ScalarUDFImpl for CheckedShift {
         Ok(arg_types[0].clone())
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let all_scalar = args.args.iter().all(|a| matches!(a, ColumnarValue::Scalar(_)));
+        let all_scalar = args
+            .args
+            .iter()
+            .all(|a| matches!(a, ColumnarValue::Scalar(_)));
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let t = arrays[0].data_type().clone();
         let bits = (t.primitive_width().unwrap_or(8) * 8) as i128;
         let signed = t.is_signed_integer();
-        let (min, max) = if signed { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) };
+        let (min, max) = if signed {
+            (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+        } else {
+            (0, (1i128 << bits) - 1)
+        };
         let wide = |a: &ArrayRef| -> Result<Vec<Option<i128>>> {
             let d = cast_with_options(a, &DataType::Decimal128(38, 0), &CastOptions::default())?;
             Ok(d.as_primitive::<Decimal128Type>().iter().collect())
@@ -742,7 +761,14 @@ impl ScalarUDFImpl for CheckedShift {
             }));
         }
         let d: ArrayRef = Arc::new(Decimal128Array::from(out).with_precision_and_scale(38, 0)?);
-        let out = cast_with_options(&d, &t, &CastOptions { safe: false, ..Default::default() })?;
+        let out = cast_with_options(
+            &d,
+            &t,
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )?;
         if all_scalar {
             Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(&out, 0)?))
         } else {
@@ -811,7 +837,11 @@ impl ScalarUDFImpl for ExactWide {
         let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
         let spec = Spec {
             mode: Mode::Sum,
-            name: if self.neg { "exact_wide_neg" } else { "exact_wide" },
+            name: if self.neg {
+                "exact_wide_neg"
+            } else {
+                "exact_wide"
+            },
             in_ty: a.data_type().clone(),
             out_ty: DataType::FixedSizeBinary(WIDE_BYTES),
             lenient: true,

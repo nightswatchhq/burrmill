@@ -142,12 +142,21 @@ fn drive(secs: f64, runners: Vec<Runner>) -> Sample {
     });
     let elapsed = started.elapsed().as_secs_f64();
     all.sort_unstable();
-    Sample { by_client, lat: all, secs: elapsed, per_client, warmups }
+    Sample {
+        by_client,
+        lat: all,
+        secs: elapsed,
+        per_client,
+        warmups,
+    }
 }
 
 fn duck_conn(dir: &str) -> anyhow::Result<duckdb::Connection> {
     let conn = duckdb::Connection::open_in_memory()?;
-    conn.execute_batch(&format!("SET threads TO {};", crate::oracles::thread_budget()))?;
+    conn.execute_batch(&format!(
+        "SET threads TO {};",
+        crate::oracles::thread_budget()
+    ))?;
     conn.execute_batch(&format!(
         "CREATE VIEW t AS SELECT * FROM read_parquet('{dir}/*.parquet');"
     ))?;
@@ -166,7 +175,10 @@ fn duck_query(conn: &duckdb::Connection) -> anyhow::Result<usize> {
 }
 
 pub fn run(dir: &str) -> anyhow::Result<()> {
-    let secs: f64 = std::env::var("SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0);
+    let secs: f64 = std::env::var("SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3.0);
     let counts: Vec<usize> = std::env::var("CLIENTS")
         .unwrap_or_else(|_| "1,2,4,8,16,32".into())
         .split(',')
@@ -177,7 +189,10 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
     // disagree is not fast-versus-slow, it is meaningless.
     let db = {
         let mut cat = burrmill::Catalog::new();
-        cat.register(burrmill::SealedSegments::discover("t", std::path::Path::new(dir))?);
+        cat.register(burrmill::SealedSegments::discover(
+            "t",
+            std::path::Path::new(dir),
+        )?);
         let db = burrmill::Burrmill::with_threads(cat, crate::oracles::thread_budget())?;
         match std::env::var("WIDTH").ok().and_then(|w| w.parse().ok()) {
             Some(w) => db.with_admission_width(w),
@@ -187,24 +202,32 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
     let ours = db.query(SQL, burrmill::Limits::default())?.rows().len();
     // The DataFusion path: one Engine shared by every client, as a server would hold it.
     let path = dir.to_string();
-    let engine = std::thread::spawn(move || burrmill::Engine::open_segments(std::path::Path::new(&path)))
-        .join()
-        .expect("engine open")?;
+    let engine =
+        std::thread::spawn(move || burrmill::Engine::open_segments(std::path::Path::new(&path)))
+            .join()
+            .expect("engine open")?;
     let engine = Arc::new(engine);
     let df_rows = |e: &burrmill::Engine| -> anyhow::Result<usize> {
         Ok(e.sql(SQL)?.iter().map(|b| b.num_rows()).sum())
     };
     let e2 = Arc::clone(&engine);
-    let hosted = std::thread::spawn(move || df_rows(&e2)).join().expect("engine thread")?;
-    anyhow::ensure!(hosted == ours, "PARITY FAILED: Engine {hosted} rows against the fold's {ours}");
+    let hosted = std::thread::spawn(move || df_rows(&e2))
+        .join()
+        .expect("engine thread")?;
+    anyhow::ensure!(
+        hosted == ours,
+        "PARITY FAILED: Engine {hosted} rows against the fold's {ours}"
+    );
     let theirs = duck_query(&duck_conn(dir)?)?;
     anyhow::ensure!(
         ours == theirs,
         "PARITY FAILED before the sweep: Burrmill {ours} rows against DuckDB's {theirs}. No \
          throughput is reported."
     );
-    println!("parity:  verified on {ours} parties, {secs}s per point, {} threads per query\n",
-        crate::oracles::thread_budget());
+    println!(
+        "parity:  verified on {ours} parties, {secs}s per point, {} threads per query\n",
+        crate::oracles::thread_budget()
+    );
     println!(
         "{:<8} {:<12} {:>8} {:>8} {:>10} {:>7}  queries per client: min..max",
         "clients", "engine", "qps", "p50_ms", "worstp99", "fair"
@@ -232,7 +255,9 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
             .map(|_| {
                 let db = db.clone();
                 Box::new(move || {
-                    Ok(db.query(SQL, burrmill::Limits::default()).map(|a| a.rows().len())?)
+                    Ok(db
+                        .query(SQL, burrmill::Limits::default())
+                        .map(|a| a.rows().len())?)
                 }) as Runner
             })
             .collect();
@@ -248,7 +273,9 @@ pub fn run(dir: &str) -> anyhow::Result<()> {
         println!();
     }
     println!("peak_rss_mb={}", crate::rss_mb());
-    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+    std::thread::spawn(move || drop(engine))
+        .join()
+        .expect("drop engine");
     Ok(())
 }
 
@@ -259,7 +286,10 @@ pub fn run_views(root: &str) -> anyhow::Result<()> {
     // ARMS=duck or ARMS=engine runs one engine alone, so the process's peak RSS is that engine's.
     let arms = std::env::var("ARMS").unwrap_or_else(|_| "duck,engine".into());
     let arm = |a: &str| arms.split(',').any(|x| x.trim() == a);
-    let secs: f64 = std::env::var("SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(5.0);
+    let secs: f64 = std::env::var("SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5.0);
     let counts: Vec<usize> = std::env::var("CLIENTS")
         .unwrap_or_else(|_| "1,2,4,8,16,32".into())
         .split(',')
@@ -268,7 +298,10 @@ pub fn run_views(root: &str) -> anyhow::Result<()> {
     let (conn, engine, views) = crate::engine_views::both_engines(root)?;
     let engine = Arc::new(engine);
     let views = Arc::new(views);
-    println!("views:   {} answered identically by both, {secs}s per point\n", views.len());
+    println!(
+        "views:   {} answered identically by both, {secs}s per point\n",
+        views.len()
+    );
     println!(
         "{:<8} {:<12} {:>8} {:>8} {:>10} {:>7}  queries per client: min..max",
         "clients", "engine", "qps", "p50_ms", "worstp99", "fair"
@@ -317,7 +350,9 @@ pub fn run_views(root: &str) -> anyhow::Result<()> {
         println!();
     }
     println!("peak_rss_mb={}", crate::rss_mb());
-    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+    std::thread::spawn(move || drop(engine))
+        .join()
+        .expect("drop engine");
     Ok(())
 }
 

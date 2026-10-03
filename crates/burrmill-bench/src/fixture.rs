@@ -60,8 +60,16 @@ pub fn write(dir: &Path, spec: &FixtureSpec) -> anyhow::Result<usize> {
     let mut written = 0usize;
     let mut emitted = 0usize;
     for i in 0..spec.segments {
-        let n = if i < small_count { per_small } else { per_large };
-        let n = if i == spec.segments - 1 { spec.rows - emitted } else { n };
+        let n = if i < small_count {
+            per_small
+        } else {
+            per_large
+        };
+        let n = if i == spec.segments - 1 {
+            spec.rows - emitted
+        } else {
+            n
+        };
         if n == 0 {
             continue;
         }
@@ -85,11 +93,18 @@ fn write_offset(path: &Path, spec: &FixtureSpec, rows: usize, offset: usize) -> 
     let from: Vec<&str> = (0..rows).map(|i| addrs[idx(i) % n_addr].as_str()).collect();
     // A stride coprime with most cardinalities, so credits and debits do not land on the same party
     // and cancel the fold into a trivially empty answer.
-    let to: Vec<&str> = (0..rows).map(|i| addrs[(idx(i) * 7 + 3) % n_addr].as_str()).collect();
+    let to: Vec<&str> = (0..rows)
+        .map(|i| addrs[(idx(i) * 7 + 3) % n_addr].as_str())
+        .collect();
     // Values past i64 and nowhere near i128, which is the reason a 128-bit cast is in the query at
     // all. A fixture of small values would let a broken cast pass unnoticed.
     let value: Vec<String> = (0..rows)
-        .map(|i| format!("{}", 1_000_000_000_000_000_000u128 * (idx(i) as u128 % 97 + 1)))
+        .map(|i| {
+            format!(
+                "{}",
+                1_000_000_000_000_000_000u128 * (idx(i) as u128 % 97 + 1)
+            )
+        })
         .collect();
     let block: Vec<u64> = (0..rows).map(|i| idx(i) as u64 / 100).collect();
 
@@ -118,12 +133,17 @@ fn write_offset(path: &Path, spec: &FixtureSpec, rows: usize, offset: usize) -> 
     // 66-character hex, which is why decoding what you did not ask for is expensive.
     let seq: Vec<u64> = (0..rows).map(|i| idx(i) as u64).collect();
     let log_index: Vec<u64> = (0..rows).map(|i| (idx(i) % 8) as u64).collect();
-    let timestamp: Vec<u64> = (0..rows).map(|i| 1_700_000_000 + idx(i) as u64 / 100 * 12).collect();
-    let block_hash: Vec<String> = (0..rows).map(|i| format!("0x{:064x}", idx(i) / 100)).collect();
+    let timestamp: Vec<u64> = (0..rows)
+        .map(|i| 1_700_000_000 + idx(i) as u64 / 100 * 12)
+        .collect();
+    let block_hash: Vec<String> = (0..rows)
+        .map(|i| format!("0x{:064x}", idx(i) / 100))
+        .collect();
     let tx_hash: Vec<String> = (0..rows).map(|i| format!("0x{:064x}", idx(i))).collect();
     // A second uint256-as-text the fold does not read. `shares` on the real staking table.
-    let shares: Vec<String> =
-        (0..rows).map(|i| format!("{}", 3_141_592_653_589u128 * (idx(i) as u128 % 89 + 1))).collect();
+    let shares: Vec<String> = (0..rows)
+        .map(|i| format!("{}", 3_141_592_653_589u128 * (idx(i) as u128 % 89 + 1)))
+        .collect();
     let contract = "0xf55041e37e12cd407ad00ce2910b8269b01263b9";
     let table_tag = "staking__stake_delegated";
 
@@ -142,7 +162,9 @@ fn write_offset(path: &Path, spec: &FixtureSpec, rows: usize, offset: usize) -> 
         Field::new("value", DataType::Utf8, false),
     ]));
     let str_col = |v: &[String]| -> Arc<StringArray> {
-        Arc::new(StringArray::from(v.iter().map(|s| s.as_str()).collect::<Vec<_>>()))
+        Arc::new(StringArray::from(
+            v.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        ))
     };
     let batch = RecordBatch::try_new(
         schema.clone(),

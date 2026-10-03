@@ -43,7 +43,14 @@ const MAX: &str = "170141183460469231731687303715884105727";
 /// | `boundary` | aa→bb `i128::MAX` | representable exactly, at the very edge |
 /// | `overflow` | aa→bb `i128::MAX`, aa→bb 1 | refused, not wrapped |
 const TABLES: &[(&str, Rows)] = &[
-    ("t", &[("0xaa", "0xbb", "100"), ("0xbb", "0xcc", "30"), ("0xaa", "0xcc", "5")]),
+    (
+        "t",
+        &[
+            ("0xaa", "0xbb", "100"),
+            ("0xbb", "0xcc", "30"),
+            ("0xaa", "0xcc", "5"),
+        ],
+    ),
     ("zeros", &[("0xaa", "0xbb", "50"), ("0xbb", "0xaa", "50")]),
     (
         "nulls",
@@ -72,10 +79,18 @@ fn write_table(dir: &Path, rows: Rows, splits: usize) -> Vec<std::path::PathBuf>
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(UInt64Array::from((0..chunk.len() as u64).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(chunk.iter().map(|r| r.0).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(chunk.iter().map(|r| r.1).collect::<Vec<_>>())),
-                Arc::new(StringArray::from(chunk.iter().map(|r| r.2).collect::<Vec<_>>())),
+                Arc::new(UInt64Array::from(
+                    (0..chunk.len() as u64).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    chunk.iter().map(|r| r.0).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    chunk.iter().map(|r| r.1).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    chunk.iter().map(|r| r.2).collect::<Vec<_>>(),
+                )),
             ],
         )
         .unwrap();
@@ -111,7 +126,9 @@ impl sqllogictest::DB for Db {
         let rows = answer.rows();
         Ok(DBOutput::Rows {
             types: vec![DefaultColumnType::Text, DefaultColumnType::Integer],
-            rows: (0..rows.len()).map(|i| vec![rows.key(i).to_string(), rows.sum(i).to_string()]).collect(),
+            rows: (0..rows.len())
+                .map(|i| vec![rows.key(i).to_string(), rows.sum(i).to_string()])
+                .collect(),
         })
     }
 
@@ -138,7 +155,10 @@ fn the_corpus_holds_at_every_segment_layout() {
             let db = db.clone();
             let mut runner = sqllogictest::Runner::new(|| std::future::ready(Ok(Db(db.clone()))));
             runner.run_file(file).unwrap_or_else(|e| {
-                panic!("{} failed at {splits} segment(s) per table:\n{e}", file.display())
+                panic!(
+                    "{} failed at {splits} segment(s) per table:\n{e}",
+                    file.display()
+                )
             });
         }
     }

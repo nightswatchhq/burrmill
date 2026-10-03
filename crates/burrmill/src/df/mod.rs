@@ -2,8 +2,8 @@
 //!
 //! Off unless the `datafusion` feature is enabled. The default `burrmill` graph stays free of it.
 
-use std::path::Path;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
@@ -19,15 +19,17 @@ use crate::limits::Limits;
 mod cancel;
 mod catalog;
 mod checked;
+mod compactviews;
 pub use textfn::TextFunction;
 mod constants;
 mod correlate;
+mod depth;
+mod dialect;
 mod latest;
 mod nullsub;
 mod onerow;
-mod dialect;
-mod depth;
 pub use depth::check_expr_bounds;
+mod buildside;
 mod distinct;
 mod distinctrows;
 mod doubles;
@@ -43,7 +45,6 @@ mod lists;
 mod names;
 mod ordered_agg;
 mod printf;
-mod buildside;
 mod rangejoin;
 mod rule;
 mod session;
@@ -51,9 +52,9 @@ mod sharing;
 mod smallinputs;
 mod tables;
 pub use tables::duckdb_type;
+mod subqueries;
 mod textfn;
 mod tojson;
-mod subqueries;
 mod topn;
 mod wide;
 
@@ -125,11 +126,7 @@ impl Engine {
         Self::from_tables(tables, Limits::default().max_threads, None)
     }
 
-    fn from_tables(
-        tables: Vec<NestTable>,
-        threads: usize,
-        budget: Option<Budget>,
-    ) -> Result<Self> {
+    fn from_tables(tables: Vec<NestTable>, threads: usize, budget: Option<Budget>) -> Result<Self> {
         let threads = budget.as_ref().map_or(threads, |b| b.threads.max(1));
         let mut rt = tokio::runtime::Builder::new_multi_thread();
         if budget.is_some() {
@@ -249,7 +246,8 @@ impl Engine {
     /// A host's text function under `name`: `arity` text arguments, one text result, NULL in any
     /// argument gives NULL, and `f`'s error refuses the statement.
     pub fn register_text_function(&mut self, name: &str, arity: usize, f: TextFunction) {
-        self.session.register_udf(textfn::TextFn::udf(name, arity, f));
+        self.session
+            .register_udf(textfn::TextFn::udf(name, arity, f));
     }
 
     /// Every scalar, aggregate and window function a statement can call, sorted.
@@ -388,13 +386,20 @@ impl Engine {
         refuse_hidden_names(sql)?;
         let logical = plan_query(&self.session, sql)?;
         refuse_non_query(sql)?;
-        let plan = || self.runtime().block_on(self.session.create_physical_plan(&logical));
+        let plan = || {
+            self.runtime()
+                .block_on(self.session.create_physical_plan(&logical))
+        };
         let physical = if tokio::runtime::Handle::try_current().is_err() {
             plan()
         } else {
-            std::thread::scope(|s| s.spawn(plan).join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+            std::thread::scope(|s| {
+                s.spawn(plan)
+                    .join()
+                    .unwrap_or_else(|p| std::panic::resume_unwind(p))
+            })
         }
-            .map_err(plan_err)?;
+        .map_err(plan_err)?;
         scans(&physical)
     }
 }
@@ -409,12 +414,31 @@ fn scans(p: &Arc<dyn datafusion_physical_plan::ExecutionPlan>) -> Result<u64> {
                 .is_some_and(|d| d.data_source().downcast_ref::<FileScanConfig>().is_some()),
         ),
         "OwnedSignedFoldExec" => 1,
-        "ProjectionExec" | "FilterExec" | "HashJoinExec" | "SortMergeJoinExec" | "CrossJoinExec"
-        | "AggregateExec" | "SortExec" | "SortPreservingMergeExec" | "GlobalLimitExec"
-        | "LocalLimitExec" | "UnionExec" | "InterleaveExec" | "BoundedWindowAggExec"
-        | "WindowAggExec" | "CoalesceBatchesExec" | "CoalescePartitionsExec" | "RepartitionExec"
-        | "UnnestExec" | "EmptyExec" | "PlaceholderRowExec" | "ScalarSubqueryExec"
-        | "CancelExec" | "RangeJoinExec" | "SharedExec" => 0,
+        "ProjectionExec"
+        | "FilterExec"
+        | "HashJoinExec"
+        | "SortMergeJoinExec"
+        | "CrossJoinExec"
+        | "AggregateExec"
+        | "SortExec"
+        | "SortPreservingMergeExec"
+        | "GlobalLimitExec"
+        | "LocalLimitExec"
+        | "UnionExec"
+        | "InterleaveExec"
+        | "BoundedWindowAggExec"
+        | "WindowAggExec"
+        | "CoalesceBatchesExec"
+        | "CoalescePartitionsExec"
+        | "RepartitionExec"
+        | "UnnestExec"
+        | "EmptyExec"
+        | "PlaceholderRowExec"
+        | "ScalarSubqueryExec"
+        | "CancelExec"
+        | "CompactViewsExec"
+        | "RangeJoinExec"
+        | "SharedExec" => 0,
         other => {
             return Err(BurrmillError::NotAllowed(format!(
                 "cannot bound physical plan operator {other:?}"

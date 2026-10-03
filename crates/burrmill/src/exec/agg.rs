@@ -28,8 +28,8 @@ use hashbrown::HashTable;
 use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::hash::Hasher;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{BurrmillError, Result};
 use crate::exec::checked::checked_add;
@@ -134,7 +134,12 @@ impl PartTable {
     pub fn add(&mut self, hash: u64, key: &[u8], agg: u16, v: i128) -> Result<()> {
         // Split the borrow explicitly: the equality closure reads the arena while the table is held
         // mutably, which only type-checks because these are two distinct fields.
-        let Self { arena, table, wide, extra } = self;
+        let Self {
+            arena,
+            table,
+            wide,
+            extra,
+        } = self;
         let klen = key.len() as u32;
         let eq = |e: &Entry| {
             e.hash == hash
@@ -163,7 +168,9 @@ impl PartTable {
                 e.len |= WIDE;
                 wide.insert(e.off, (e.sum >> 127) as i64);
             }
-            let hi = wide.get_mut(&e.off).expect("a wide entry always has a high word");
+            let hi = wide
+                .get_mut(&e.off)
+                .expect("a wide entry always has a high word");
             *hi = wide_add(hi, &mut e.sum, v)?;
             return Ok(());
         }
@@ -172,7 +179,16 @@ impl PartTable {
         // A first sighting via a non-zero aggregate still needs the entry, with a zero in the
         // inline slot: the row exists, it simply has nothing in aggregate zero yet.
         let inline = if agg == 0 { v } else { 0 };
-        table.insert_unique(hash, Entry { hash, off, len: klen, sum: inline }, |e| e.hash);
+        table.insert_unique(
+            hash,
+            Entry {
+                hash,
+                off,
+                len: klen,
+                sum: inline,
+            },
+            |e| e.hash,
+        );
         if agg != 0 {
             extra.insert((off, agg), v);
         }
@@ -187,7 +203,12 @@ impl PartTable {
     /// and costing more there than it ever did in the table. The hash table is dropped here, so a
     /// partition's buckets are freed the moment its rows exist.
     fn into_index(self, drop_zero: bool, sum_arity: usize) -> Result<PartIndex> {
-        let Self { arena, table, wide, extra } = self;
+        let Self {
+            arena,
+            table,
+            wide,
+            extra,
+        } = self;
         let mut idx = Vec::with_capacity(table.len());
         for e in table {
             // **The refusal happens here, and only here.** An entry is refused when its *answer*
@@ -196,7 +217,9 @@ impl PartTable {
             let sum = if e.len & WIDE == 0 {
                 e.sum
             } else {
-                let hi = *wide.get(&e.off).expect("a wide entry always has a high word");
+                let hi = *wide
+                    .get(&e.off)
+                    .expect("a wide entry always has a high word");
                 narrow(hi, e.sum).ok_or_else(|| {
                     BurrmillError::Overflow(format!(
                         "the sum for one party does not fit in i128 (high word {hi})"
@@ -215,7 +238,6 @@ impl PartTable {
         Ok((arena, idx))
     }
 }
-
 
 /// Add `v` into the 192-bit accumulator `(hi, lo)`, where the value is `hi * 2^128 + lo` and `lo`
 /// is the `i128`'s bits read as unsigned.
@@ -301,7 +323,10 @@ impl std::fmt::Debug for Rows {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Rows")
             .field("rows", &self.idx.len())
-            .field("arena_bytes", &self.arenas.iter().map(|a| a.len()).sum::<usize>())
+            .field(
+                "arena_bytes",
+                &self.arenas.iter().map(|a| a.len()).sum::<usize>(),
+            )
             .finish()
     }
 }
@@ -426,7 +451,8 @@ impl Rows {
             for o in &order {
                 self.idx.push(old_idx[*o as usize]);
                 let base = *o as usize * stride;
-                self.extra_sums.extend_from_slice(&old_extra[base..base + stride]);
+                self.extra_sums
+                    .extend_from_slice(&old_extra[base..base + stride]);
             }
             return;
         }
@@ -504,7 +530,11 @@ pub struct Scatter {
 
 impl Default for Scatter {
     fn default() -> Self {
-        Self { arena: Vec::new(), parts: (0..PARTITIONS).map(|_| Vec::new()).collect(), pending: 0 }
+        Self {
+            arena: Vec::new(),
+            parts: (0..PARTITIONS).map(|_| Vec::new()).collect(),
+            pending: 0,
+        }
     }
 }
 
@@ -545,7 +575,11 @@ impl Scatter {
     /// purpose: the query is being abandoned, and tidying state nobody will read is work for its own
     /// sake.
     pub fn flush(&mut self, into: &SharedAgg) -> Result<()> {
-        let Self { arena, parts, pending } = self;
+        let Self {
+            arena,
+            parts,
+            pending,
+        } = self;
         for (p, rows) in parts.iter_mut().enumerate() {
             if rows.is_empty() {
                 continue;
@@ -591,7 +625,9 @@ pub struct SharedAgg {
 impl Default for SharedAgg {
     fn default() -> Self {
         Self {
-            parts: (0..PARTITIONS).map(|_| Mutex::new(PartTable::default())).collect(),
+            parts: (0..PARTITIONS)
+                .map(|_| Mutex::new(PartTable::default()))
+                .collect(),
             bytes: (0..PARTITIONS).map(|_| AtomicUsize::new(0)).collect(),
         }
     }
@@ -605,7 +641,10 @@ impl SharedAgg {
     }
 
     pub fn len(&self) -> usize {
-        self.parts.iter().map(|m| m.lock().map(|t| t.len()).unwrap_or(0)).sum()
+        self.parts
+            .iter()
+            .map(|m| m.lock().map(|t| t.len()).unwrap_or(0))
+            .sum()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -623,8 +662,10 @@ impl SharedAgg {
             .into_iter()
             .map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner()))
             .collect();
-        let per_partition: Vec<PartIndex> =
-            tables.into_par_iter().map(|t| t.into_index(drop_zero, sum_arity)).collect::<Result<Vec<_>>>()?;
+        let per_partition: Vec<PartIndex> = tables
+            .into_par_iter()
+            .map(|t| t.into_index(drop_zero, sum_arity))
+            .collect::<Result<Vec<_>>>()?;
 
         let total_rows: usize = per_partition.iter().map(|(_, idx)| idx.len()).sum();
 
@@ -632,8 +673,11 @@ impl SharedAgg {
         // are the same bytes the fold wrote, and the answer simply takes ownership of them.
         let mut arenas = Vec::with_capacity(per_partition.len());
         let mut idx = Vec::with_capacity(total_rows);
-        let mut extra_sums: Vec<i128> =
-            Vec::with_capacity(if sum_arity > 1 { total_rows * (sum_arity - 1) } else { 0 });
+        let mut extra_sums: Vec<i128> = Vec::with_capacity(if sum_arity > 1 {
+            total_rows * (sum_arity - 1)
+        } else {
+            0
+        });
         for (part, (arena, rows)) in per_partition.into_iter().enumerate() {
             for (off, len, mut all) in rows {
                 let sum = all[0];
@@ -643,11 +687,22 @@ impl SharedAgg {
                 if sum_arity > 1 {
                     extra_sums.extend(all.drain(1..));
                 }
-                idx.push(Row { part: part as u32, off, len, sum });
+                idx.push(Row {
+                    part: part as u32,
+                    off,
+                    len,
+                    sum,
+                });
             }
             arenas.push(arena);
         }
-        Ok(Rows { arenas, idx, key_arity, sum_arity, extra_sums })
+        Ok(Rows {
+            arenas,
+            idx,
+            key_arity,
+            sum_arity,
+            extra_sums,
+        })
     }
 }
 
@@ -687,13 +742,19 @@ mod tests {
         let mut a = Scatter::default();
         let mut b = Scatter::default();
         for i in 0..1000u64 {
-            a.push(format!("0x{i:040x}").as_bytes(), i as i128, &shared).unwrap();
-            b.push(format!("0x{i:040x}").as_bytes(), -(i as i128) * 2, &shared).unwrap();
+            a.push(format!("0x{i:040x}").as_bytes(), i as i128, &shared)
+                .unwrap();
+            b.push(format!("0x{i:040x}").as_bytes(), -(i as i128) * 2, &shared)
+                .unwrap();
         }
         a.flush(&shared).unwrap();
         b.flush(&shared).unwrap();
         let rows = collect(&shared.into_rows(true, 1, 1).unwrap());
-        assert_eq!(rows.len(), 999, "party zero nets to zero and HAVING drops it");
+        assert_eq!(
+            rows.len(),
+            999,
+            "party zero nets to zero and HAVING drops it"
+        );
         for (k, v) in &rows {
             let i = i128::from_str_radix(k.trim_start_matches("0x"), 16).unwrap();
             assert_eq!(*v, -i, "{k} should be i - 2i");
@@ -718,7 +779,10 @@ mod tests {
         // The partial sum left the range and was carried, not refused.
         b.flush(&shared).unwrap();
         let err = shared.into_rows(false, 1, 1).unwrap_err();
-        assert!(matches!(err, crate::BurrmillError::Overflow(_)), "got {err:?}");
+        assert!(
+            matches!(err, crate::BurrmillError::Overflow(_)),
+            "got {err:?}"
+        );
     }
 
     /// The mirror: a running total that leaves `i128` and comes back is answered exactly.
@@ -763,7 +827,8 @@ mod tests {
         let mut one = Scatter::default();
         for _ in 0..(WORKERS as u64 * ROUNDS) {
             for i in 0..KEYS {
-                one.push(format!("0x{i:040x}").as_bytes(), i as i128, &serial).unwrap();
+                one.push(format!("0x{i:040x}").as_bytes(), i as i128, &serial)
+                    .unwrap();
             }
         }
         one.flush(&serial).unwrap();
@@ -776,7 +841,8 @@ mod tests {
                     let mut sc = Scatter::default();
                     for _ in 0..ROUNDS {
                         for i in 0..KEYS {
-                            sc.push(format!("0x{i:040x}").as_bytes(), i as i128, &shared).unwrap();
+                            sc.push(format!("0x{i:040x}").as_bytes(), i as i128, &shared)
+                                .unwrap();
                         }
                     }
                     sc.flush(&shared).unwrap();
@@ -785,8 +851,15 @@ mod tests {
         });
         let got = collect(&shared.into_rows(false, 1, 1).unwrap());
 
-        assert_eq!(got.len(), KEYS as usize, "every key must survive the exchange");
-        assert_eq!(got, expected, "concurrent and serial aggregation must agree exactly");
+        assert_eq!(
+            got.len(),
+            KEYS as usize,
+            "every key must survive the exchange"
+        );
+        assert_eq!(
+            got, expected,
+            "concurrent and serial aggregation must agree exactly"
+        );
     }
 
     /// A key must land in exactly one partition table, whoever wrote it. This is the memory claim
@@ -801,12 +874,17 @@ mod tests {
                 s.spawn(move || {
                     let mut sc = Scatter::default();
                     for i in 0..5_000u64 {
-                        sc.push(format!("0x{i:040x}").as_bytes(), w as i128, sref).unwrap();
+                        sc.push(format!("0x{i:040x}").as_bytes(), w as i128, sref)
+                            .unwrap();
                     }
                     sc.flush(sref).unwrap();
                 });
             }
         });
-        assert_eq!(shared.len(), 5_000, "six workers, one table per key, no duplication");
+        assert_eq!(
+            shared.len(),
+            5_000,
+            "six workers, one table per key, no duplication"
+        );
     }
 }

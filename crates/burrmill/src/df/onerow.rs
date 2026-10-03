@@ -16,8 +16,8 @@ use datafusion_common::{Column, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
-    ColumnarValue, Expr, LogicalPlan, LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility, lit,
+    ColumnarValue, Expr, LogicalPlan, LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility, lit,
 };
 use datafusion_optimizer::analyzer::AnalyzerRule;
 
@@ -26,7 +26,10 @@ pub struct SingleRowSubqueries(Arc<ScalarUDF>);
 
 impl Default for SingleRowSubqueries {
     fn default() -> Self {
-        Self(Arc::new(ScalarUDF::from(Single(Signature::any(1, Volatility::Immutable)))))
+        Self(Arc::new(ScalarUDF::from(Single(Signature::any(
+            1,
+            Volatility::Immutable,
+        )))))
     }
 }
 
@@ -51,14 +54,17 @@ impl AnalyzerRule for SingleRowSubqueries {
                             && q.subquery.schema().fields().len() == 1 =>
                     {
                         let counted = Expr::ScalarSubquery(counted(&q)?);
-                        Ok(Transformed::yes(Expr::ScalarFunction(ScalarFunction::new_udf(
-                            Arc::clone(&self.0),
-                            vec![counted],
-                        ))))
+                        Ok(Transformed::yes(Expr::ScalarFunction(
+                            ScalarFunction::new_udf(Arc::clone(&self.0), vec![counted]),
+                        )))
                     }
                     x => Ok(Transformed::no(x)),
                 })?;
-                Ok(if projection && t.transformed { t.map_data(|e| e.alias_if_changed(name))? } else { t })
+                Ok(if projection && t.transformed {
+                    t.map_data(|e| e.alias_if_changed(name))?
+                } else {
+                    t
+                })
             })?;
             if !t.transformed {
                 return Ok(t);
@@ -73,8 +79,12 @@ impl AnalyzerRule for SingleRowSubqueries {
 fn counted(q: &Subquery) -> Result<Subquery> {
     let schema = q.subquery.schema();
     let value = Expr::Column(Column::from(schema.qualified_field(0)));
-    let count = datafusion_functions_aggregate::count::count_udaf().call(vec![lit(1)]).alias("__burrmill_one_n");
-    let first = datafusion_functions_aggregate::first_last::first_value_udaf().call(vec![value]).alias("__burrmill_one_v");
+    let count = datafusion_functions_aggregate::count::count_udaf()
+        .call(vec![lit(1)])
+        .alias("__burrmill_one_n");
+    let first = datafusion_functions_aggregate::first_last::first_value_udaf()
+        .call(vec![value])
+        .alias("__burrmill_one_v");
     let pair = datafusion_functions::core::named_struct().call(vec![
         lit("n"),
         Expr::Column(Column::new_unqualified("__burrmill_one_n")),
@@ -106,7 +116,11 @@ impl ScalarUDFImpl for Single {
         }
     }
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), self.return_type(&[args.arg_fields[0].data_type().clone()])?, true)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.return_type(&[args.arg_fields[0].data_type().clone()])?,
+            true,
+        )))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
@@ -120,11 +134,16 @@ impl ScalarUDFImpl for Single {
             );
         }
         let v = match pair.nulls() {
-            Some(nulls) if nulls.null_count() > 0 => {
-                arrow::compute::nullif(pair.column(1), &arrow::array::BooleanArray::new(!nulls.inner(), None))?
-            }
+            Some(nulls) if nulls.null_count() > 0 => arrow::compute::nullif(
+                pair.column(1),
+                &arrow::array::BooleanArray::new(!nulls.inner(), None),
+            )?,
             _ => Arc::clone(pair.column(1)),
         };
-        Ok(if scalar { ColumnarValue::Scalar(ScalarValue::try_from_array(&v, 0)?) } else { ColumnarValue::Array(v) })
+        Ok(if scalar {
+            ColumnarValue::Scalar(ScalarValue::try_from_array(&v, 0)?)
+        } else {
+            ColumnarValue::Array(v)
+        })
     }
 }

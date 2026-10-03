@@ -6,18 +6,24 @@ use serde_json::{Value, json};
 fn rows(sql: &str) -> Vec<Value> {
     let engine = Engine::open_empty().unwrap();
     let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}\n{e}"));
-    got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect()
+    got.iter()
+        .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+        .collect()
 }
 
 #[test]
 fn an_empty_scalar_subquery_is_null_even_over_a_non_nullable_column() {
     assert_eq!(
-        rows("WITH s AS (SELECT true AS p WHERE false) SELECT coalesce((SELECT p FROM s), false) AS x"),
+        rows(
+            "WITH s AS (SELECT true AS p WHERE false) SELECT coalesce((SELECT p FROM s), false) AS x"
+        ),
         vec![json!({"x": false})]
     );
     assert_eq!(
-        rows("WITH s AS (SELECT true AS p WHERE false), n AS (SELECT CAST(NULL AS BOOLEAN) AS q) \
-              SELECT (SELECT p FROM s) IS NULL AS x, (SELECT p FROM s), (SELECT q FROM n)"),
+        rows(
+            "WITH s AS (SELECT true AS p WHERE false), n AS (SELECT CAST(NULL AS BOOLEAN) AS q) \
+              SELECT (SELECT p FROM s) IS NULL AS x, (SELECT p FROM s), (SELECT q FROM n)"
+        ),
         vec![json!({"x": true, "p": null, "q": null})]
     );
     let sql = "WITH a(v) AS (VALUES (1)), \
@@ -52,13 +58,24 @@ fn a_correlated_lookup_that_is_not_aggregated_takes_its_one_row() {
     );
     assert_eq!(
         rows(&nested),
-        vec![json!({"id": "0xaaa", "l": "[{\"id\":\"s2\",\"pool\":{\"id\":\"0xaaa\",\"liquidity\":5}}]"})]
+        vec![
+            json!({"id": "0xaaa", "l": "[{\"id\":\"s2\",\"pool\":{\"id\":\"0xaaa\",\"liquidity\":5}}]"})
+        ]
     );
 }
 
 #[test]
 fn a_lookup_finding_two_rows_fails_as_duckdb_does() {
-    let sql = format!("{POOLS} SELECT c.id, (SELECT p.liquidity FROM pool p WHERE p.id = c.pool) AS l FROM swap c");
-    let e = Engine::open_empty().unwrap().sql(&sql).expect_err("0xbbb has two rows").to_string();
-    assert!(e.contains("More than one row returned by a subquery"), "{e}");
+    let sql = format!(
+        "{POOLS} SELECT c.id, (SELECT p.liquidity FROM pool p WHERE p.id = c.pool) AS l FROM swap c"
+    );
+    let e = Engine::open_empty()
+        .unwrap()
+        .sql(&sql)
+        .expect_err("0xbbb has two rows")
+        .to_string();
+    assert!(
+        e.contains("More than one row returned by a subquery"),
+        "{e}"
+    );
 }

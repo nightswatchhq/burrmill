@@ -13,8 +13,8 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    ColumnarValue, Expr, LogicalPlan, LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Expr, LogicalPlan, LogicalPlanBuilder, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_optimizer::analyzer::AnalyzerRule;
 
@@ -23,7 +23,10 @@ pub struct NullableSubqueries(Arc<ScalarUDF>);
 
 impl Default for NullableSubqueries {
     fn default() -> Self {
-        Self(Arc::new(ScalarUDF::from(MaybeNull(Signature::any(1, Volatility::Immutable)))))
+        Self(Arc::new(ScalarUDF::from(MaybeNull(Signature::any(
+            1,
+            Volatility::Immutable,
+        )))))
     }
 }
 
@@ -42,12 +45,18 @@ impl AnalyzerRule for NullableSubqueries {
                 }
                 let name = e.schema_name().to_string();
                 let t = e.transform_up(|x| match x {
-                    Expr::ScalarSubquery(ref q) if !q.subquery.schema().field(0).is_nullable() => Ok(
-                        Transformed::yes(Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&self.0), vec![x]))),
-                    ),
+                    Expr::ScalarSubquery(ref q) if !q.subquery.schema().field(0).is_nullable() => {
+                        Ok(Transformed::yes(Expr::ScalarFunction(
+                            ScalarFunction::new_udf(Arc::clone(&self.0), vec![x]),
+                        )))
+                    }
                     x => Ok(Transformed::no(x)),
                 })?;
-                Ok(if projection && t.transformed { t.map_data(|e| e.alias_if_changed(name))? } else { t })
+                Ok(if projection && t.transformed {
+                    t.map_data(|e| e.alias_if_changed(name))?
+                } else {
+                    t
+                })
             })?;
             if !t.transformed {
                 return Ok(t);
@@ -61,13 +70,22 @@ impl AnalyzerRule for NullableSubqueries {
 /// `p` under the column names it had before, which an aggregate or window over a wrapped subquery
 /// changes, and its parent reads.
 pub(super) fn renamed(p: LogicalPlan, before: &DFSchema) -> Result<LogicalPlan> {
-    if p.schema().iter().map(|(_, f)| f.name()).eq(before.iter().map(|(_, f)| f.name())) {
+    if p.schema()
+        .iter()
+        .map(|(_, f)| f.name())
+        .eq(before.iter().map(|(_, f)| f.name()))
+    {
         return Ok(p);
     }
-    let names = p.schema().columns().into_iter().zip(before.iter()).map(|(c, (q, f))| {
-        Expr::Column(c).alias_qualified(q.cloned(), f.name())
-    });
-    LogicalPlanBuilder::from(p).project(names.collect::<Vec<_>>())?.build()
+    let names = p
+        .schema()
+        .columns()
+        .into_iter()
+        .zip(before.iter())
+        .map(|(c, (q, f))| Expr::Column(c).alias_qualified(q.cloned(), f.name()));
+    LogicalPlanBuilder::from(p)
+        .project(names.collect::<Vec<_>>())?
+        .build()
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -87,7 +105,11 @@ impl ScalarUDFImpl for MaybeNull {
         }
     }
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), args.arg_fields[0].data_type().clone(), true)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            args.arg_fields[0].data_type().clone(),
+            true,
+        )))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         Ok(args.args.into_iter().next().expect("one argument"))

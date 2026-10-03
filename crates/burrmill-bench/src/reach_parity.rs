@@ -59,10 +59,14 @@ enum Verdict {
 /// nuthatch `reject_unknown_table_refs`, its decisions only.
 fn nuthatch(conn: &duckdb::Connection, sql: &str) -> Verdict {
     let literal = format!("'{}'", sql.replace('\'', "''"));
-    let Ok(ast) = conn.query_row(&format!("SELECT json_serialize_sql({literal})"), [], |r| r.get::<_, String>(0)) else {
+    let Ok(ast) = conn.query_row(&format!("SELECT json_serialize_sql({literal})"), [], |r| {
+        r.get::<_, String>(0)
+    }) else {
         return Verdict::Open;
     };
-    let Ok(v) = serde_json::from_str::<Value>(&ast) else { return Verdict::Open };
+    let Ok(v) = serde_json::from_str::<Value>(&ast) else {
+        return Verdict::Open;
+    };
     if v.get("error").and_then(Value::as_bool) == Some(true) {
         return Verdict::Open;
     }
@@ -84,7 +88,10 @@ fn nuthatch(conn: &duckdb::Connection, sql: &str) -> Verdict {
                 }
             }
             "QUALIFIED_SCHEMA" => surveys = true,
-            "BASE_TABLE" if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+            "BASE_TABLE"
+                if name.is_empty()
+                    || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+            {
                 bad = true
             }
             "BASE_TABLE" => {
@@ -93,7 +100,11 @@ fn nuthatch(conn: &duckdb::Connection, sql: &str) -> Verdict {
             _ => {}
         }
     });
-    if bad { Verdict::Refused } else { Verdict::Reach(referenced, surveys) }
+    if bad {
+        Verdict::Refused
+    } else {
+        Verdict::Reach(referenced, surveys)
+    }
 }
 
 fn burrmill(sql: &str) -> Verdict {
@@ -180,8 +191,14 @@ pub fn run() -> anyhow::Result<()> {
             println!("         nuthatch {n:?}\n         burrmill {b:?}");
         }
     }
-    println!("REACH\tstatements={}\tsame={same}\tstricter={stricter}\tdiffering={looser}", CORPUS.len());
-    anyhow::ensure!(looser == 0, "{looser} statements where Burrmill is not at least as strict");
+    println!(
+        "REACH\tstatements={}\tsame={same}\tstricter={stricter}\tdiffering={looser}",
+        CORPUS.len()
+    );
+    anyhow::ensure!(
+        looser == 0,
+        "{looser} statements where Burrmill is not at least as strict"
+    );
     Ok(())
 }
 
@@ -252,7 +269,11 @@ fn walk_base_table_refs(
 /// DuckDB's `BASE_TABLE` and `TABLE_FUNCTION` names, lowercased, as nuthatch's `table_refs_in` reads them.
 fn duck_refs(conn: &duckdb::Connection, sql: &str) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
     let literal = format!("'{}'", sql.replace('\'', "''"));
-    let ast: String = conn.query_row(&format!("SELECT json_serialize_sql({literal})"), [], |r| r.get(0)).ok()?;
+    let ast: String = conn
+        .query_row(&format!("SELECT json_serialize_sql({literal})"), [], |r| {
+            r.get(0)
+        })
+        .ok()?;
     let v = serde_json::from_str::<Value>(&ast).ok()?;
     if v.get("error").and_then(Value::as_bool) == Some(true) {
         return None;
@@ -283,7 +304,11 @@ const SCOPES: &[&str] = &[
 /// over the reach corpus and, given a nest, every authored view body.
 pub fn run_refs(nest: Option<&str>) -> anyhow::Result<()> {
     let conn = duckdb::Connection::open_in_memory()?;
-    let mut statements: Vec<(String, String)> = CORPUS.iter().chain(SCOPES).map(|s| ("corpus".to_string(), s.to_string())).collect();
+    let mut statements: Vec<(String, String)> = CORPUS
+        .iter()
+        .chain(SCOPES)
+        .map(|s| ("corpus".to_string(), s.to_string()))
+        .collect();
     if let Some(root) = nest {
         let n = crate::df_views::load_nest(std::path::Path::new(root))?;
         statements.extend(n.views.iter().map(|v| (v.name.clone(), v.body.clone())));
@@ -297,9 +322,15 @@ pub fn run_refs(nest: Option<&str>) -> anyhow::Result<()> {
             same += 1;
         } else {
             differ += 1;
-            println!("DIFF {from}: {}\n     duckdb   {d:?}\n     burrmill {b:?}", sql.chars().take(120).collect::<String>());
+            println!(
+                "DIFF {from}: {}\n     duckdb   {d:?}\n     burrmill {b:?}",
+                sql.chars().take(120).collect::<String>()
+            );
         }
     }
-    println!("REFS\tstatements={}\tsame={same}\tdiffering={differ}", statements.len());
+    println!(
+        "REFS\tstatements={}\tsame={same}\tdiffering={differ}",
+        statements.len()
+    );
     Ok(())
 }

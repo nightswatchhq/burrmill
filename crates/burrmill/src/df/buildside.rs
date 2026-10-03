@@ -23,12 +23,19 @@ use super::smallinputs::bytes_read;
 pub struct BuildOnSmaller;
 
 impl PhysicalOptimizerRule for BuildOnSmaller {
-    fn optimize(&self, plan: Arc<dyn ExecutionPlan>, _config: &ConfigOptions) -> Result<Arc<dyn ExecutionPlan>> {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|p| {
             let Some(j) = p.downcast_ref::<HashJoinExec>() else {
                 return Ok(Transformed::no(p));
             };
-            if !matches!(j.join_type(), JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full) {
+            if !matches!(
+                j.join_type(),
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full
+            ) {
                 return Ok(Transformed::no(p));
             }
             match (bytes_read(j.left()), bytes_read(j.right())) {

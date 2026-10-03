@@ -42,9 +42,16 @@ fn classify(raw: &str) -> String {
     }
     if raw.contains("No function matches") && raw.contains("VARCHAR") {
         let bool_agg = raw.contains("bool_and(VARCHAR)") || raw.contains("bool_or(VARCHAR)");
-        return if bool_agg { "bool-aggregate".into() } else { "function-on-varchar".into() };
+        return if bool_agg {
+            "bool-aggregate".into()
+        } else {
+            "function-on-varchar".into()
+        };
     }
-    if raw.contains("Cannot mix values of type") && raw.contains("VARCHAR") && raw.contains("BOOLEAN") {
+    if raw.contains("Cannot mix values of type")
+        && raw.contains("VARCHAR")
+        && raw.contains("BOOLEAN")
+    {
         return "mixed-varchar-boolean".into();
     }
     if raw.contains("Out of Memory Error") {
@@ -110,7 +117,9 @@ pub fn run() -> anyhow::Result<()> {
         tmp.path().display()
     ))?;
     let engine = std::thread::scope(|s| {
-        s.spawn(|| burrmill::Engine::open_segments(tmp.path())).join().expect("engine thread")
+        s.spawn(|| burrmill::Engine::open_segments(tmp.path()))
+            .join()
+            .expect("engine thread")
     })?;
     let mut failed = 0;
     for sql in CASES {
@@ -143,7 +152,9 @@ pub fn run() -> anyhow::Result<()> {
     }
     println!("ERRORS\tcases={}\tdiffering={failed}", CASES.len());
     // The engine owns a runtime, and this function runs inside another.
-    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+    std::thread::spawn(move || drop(engine))
+        .join()
+        .expect("drop engine");
     anyhow::ensure!(failed == 0, "{failed} error classes differ");
     Ok(())
 }

@@ -31,8 +31,10 @@ impl AnalyzerRule for MoveConstants {
             for i in p.inputs() {
                 schema.merge(i.schema());
             }
-            let names_matter =
-                matches!(p, LogicalPlan::Projection(_) | LogicalPlan::Aggregate(_) | LogicalPlan::Window(_));
+            let names_matter = matches!(
+                p,
+                LogicalPlan::Projection(_) | LogicalPlan::Aggregate(_) | LogicalPlan::Window(_)
+            );
             let t = p.map_expressions(|e| {
                 let name = e.schema_name().to_string();
                 let t = e.transform_up(|e| {
@@ -50,7 +52,11 @@ impl AnalyzerRule for MoveConstants {
                     Ok(t)
                 }
             })?;
-            if t.transformed { Ok(Transformed::yes(t.data.recompute_schema()?)) } else { Ok(t) }
+            if t.transformed {
+                Ok(Transformed::yes(t.data.recompute_schema()?))
+            } else {
+                Ok(t)
+            }
         })
         .map(|t| t.data)
     }
@@ -74,7 +80,11 @@ fn between(e: &Expr, schema: &DFSchema) -> Result<Option<Expr>> {
     };
     let arithmetic = matches!(b.expr.as_ref(), Expr::BinaryExpr(BinaryExpr { left, op: Operator::Plus | Operator::Minus | Operator::Multiply, right })
         if constant(left).is_some() || constant(right).is_some());
-    if !arithmetic || b.expr.is_volatile() || constant(&b.low).is_none() || constant(&b.high).is_none() {
+    if !arithmetic
+        || b.expr.is_volatile()
+        || constant(&b.low).is_none()
+        || constant(&b.high).is_none()
+    {
         return Ok(None);
     }
     let side = |op, bound: &Expr| -> Result<Expr> {
@@ -90,7 +100,10 @@ fn constant(e: &Expr) -> Option<(Option<i128>, DataType)> {
     let (v, t) = match e {
         Expr::Literal(v, _) => (v.clone(), v.data_type()),
         Expr::Cast(c) => match c.expr.as_ref() {
-            Expr::Literal(v, _) => (v.cast_to(c.field.data_type()).ok()?, c.field.data_type().clone()),
+            Expr::Literal(v, _) => (
+                v.cast_to(c.field.data_type()).ok()?,
+                c.field.data_type().clone(),
+            ),
             _ => return None,
         },
         _ => return None,
@@ -132,7 +145,9 @@ fn fit(v: i128, t: &DataType) -> Option<Expr> {
         DataType::UInt16 => ScalarValue::UInt16(Some(u16::try_from(v).ok()?)),
         DataType::UInt32 => ScalarValue::UInt32(Some(u32::try_from(v).ok()?)),
         DataType::UInt64 => ScalarValue::UInt64(Some(u64::try_from(v).ok()?)),
-        DataType::Decimal128(p, 0) if v.unsigned_abs() < 10u128.pow(*p as u32) => ScalarValue::Decimal128(Some(v), *p, 0),
+        DataType::Decimal128(p, 0) if v.unsigned_abs() < 10u128.pow(*p as u32) => {
+            ScalarValue::Decimal128(Some(v), *p, 0)
+        }
         _ => return None,
     };
     Some(lit(s))
@@ -176,10 +191,17 @@ fn moved(e: &Expr, schema: &DFSchema) -> Result<Option<Expr>> {
         (None, Some(c)) => (c, right.as_ref(), flip(op)),
         (None, None) => return Ok(None),
     };
-    let Expr::BinaryExpr(BinaryExpr { left: a, op: aop, right: b }) = arith else {
+    let Expr::BinaryExpr(BinaryExpr {
+        left: a,
+        op: aop,
+        right: b,
+    }) = arith
+    else {
         return Ok(None);
     };
-    if !matches!(aop, Operator::Plus | Operator::Minus | Operator::Multiply) || !integral(&arith.get_type(schema)?) {
+    if !matches!(aop, Operator::Plus | Operator::Minus | Operator::Multiply)
+        || !integral(&arith.get_type(schema)?)
+    {
         return Ok(None);
     }
     // The constant among the arithmetic's operands, and the other, which must be integral too.
@@ -230,7 +252,11 @@ fn moved(e: &Expr, schema: &DFSchema) -> Result<Option<Expr>> {
         }
     };
     Ok(match fit(value, &outer_type) {
-        Some(c) => Some(Expr::BinaryExpr(BinaryExpr::new(Box::new(x), op, Box::new(c)))),
+        Some(c) => Some(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(x),
+            op,
+            Box::new(c),
+        ))),
         None if op == Operator::Eq => Some(or_null(x, false)?),
         None => None,
     })

@@ -1015,10 +1015,10 @@ impl<'a> Walk<'a> {
         for order in &function.within_group {
             self.order_by(order, next, nest);
         }
-        if let Some(over) = &function.over {
-            if let sq::WindowType::WindowSpec(spec) = over {
-                self.window_spec(spec, next, nest);
-            }
+        if let Some(over) = &function.over
+            && let sq::WindowType::WindowSpec(spec) = over
+        {
+            self.window_spec(spec, next, nest);
         }
     }
 

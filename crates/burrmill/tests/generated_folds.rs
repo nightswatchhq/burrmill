@@ -124,7 +124,9 @@ fn reference(rows: &[Row]) -> Result<Vec<(String, i128)>, BurrmillError> {
     for r in rows {
         // TRY_CAST: unparseable becomes NULL, and SUM ignores NULLs. Skip, never substitute.
         // Trimmed, because DuckDB trims and " 7" is seven.
-        let Ok(d) = r.value.trim().parse::<i128>() else { continue };
+        let Ok(d) = r.value.trim().parse::<i128>() else {
+            continue;
+        };
         // The one negation that does not exist. Refused rather than wrapped, and it is refused here
         // rather than at the sum because `-i128::MIN` is unrepresentable however wide the
         // accumulator is: the fold's expression negates the value itself.
@@ -141,7 +143,9 @@ fn reference(rows: &[Row]) -> Result<Vec<(String, i128)>, BurrmillError> {
             0 if u <= i128::MAX as u128 => u as i128,
             -1 if u >= 1u128 << 127 => u as i128,
             _ => {
-                return Err(BurrmillError::Overflow(format!("reference sum for {k} does not fit")))
+                return Err(BurrmillError::Overflow(format!(
+                    "reference sum for {k} does not fit"
+                )));
             }
         };
         // HAVING SUM(d) <> 0, then canonical byte-wise ascending order, which a BTreeMap over
@@ -165,7 +169,9 @@ fn write_segments(dir: &Path, rows: &[Row], splits: usize) {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(UInt64Array::from((0..chunk.len() as u64).collect::<Vec<_>>())),
+                Arc::new(UInt64Array::from(
+                    (0..chunk.len() as u64).collect::<Vec<_>>(),
+                )),
                 Arc::new(StringArray::from(
                     chunk.iter().map(|r| r.from.as_str()).collect::<Vec<_>>(),
                 )),
@@ -188,10 +194,18 @@ fn write_segments(dir: &Path, rows: &[Row], splits: usize) {
 fn fold(dir: &Path, threads: usize) -> Result<Vec<(String, i128)>, BurrmillError> {
     let db = Burrmill::open_segments("t", dir)?;
     let run = || {
-        db.query(SQL, Limits::default())
-            .map(|a| a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect::<Vec<_>>())
+        db.query(SQL, Limits::default()).map(|a| {
+            a.rows()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect::<Vec<_>>()
+        })
     };
-    rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(run)
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .unwrap()
+        .install(run)
 }
 
 fn gen_rows(rng: &mut Rng, kind: Values) -> Vec<Row> {
@@ -214,8 +228,12 @@ fn check_case(seed: u64, kind: Values) {
 
     // Two different segment layouts of the identical rows, and two thread counts. Any of the four
     // runs disagreeing is a defect; agreeing on a wrong answer is what the reference is for.
-    for (splits, threads) in [(1usize, 1usize), (1, 8), (3 + rng.below(9), 1), (3 + rng.below(9), 8)]
-    {
+    for (splits, threads) in [
+        (1usize, 1usize),
+        (1, 8),
+        (3 + rng.below(9), 1),
+        (3 + rng.below(9), 8),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         write_segments(dir.path(), &rows, splits);
         let got = fold(dir.path(), threads);
@@ -245,11 +263,17 @@ fn check_case(seed: u64, kind: Values) {
 }
 
 fn cases() -> u64 {
-    std::env::var("BURRMILL_CASES").ok().and_then(|s| s.parse().ok()).unwrap_or(60)
+    std::env::var("BURRMILL_CASES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60)
 }
 
 fn run(kind: Values) {
-    if let Some(seed) = std::env::var("BURRMILL_SEED").ok().and_then(|s| s.parse().ok()) {
+    if let Some(seed) = std::env::var("BURRMILL_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
         check_case(seed, kind);
         return;
     }
@@ -295,9 +319,21 @@ fn a_representable_sum_is_returned_even_when_a_partial_sum_overflows() {
     let sink = "0x0000000000000000000000000000000000000000".to_string();
     let k = "0x0000000000000000000000000000000000000001".to_string();
     let rows = vec![
-        Row { from: sink.clone(), to: k.clone(), value: i128::MAX.to_string() },
-        Row { from: sink.clone(), to: k.clone(), value: "1".into() },
-        Row { from: k.clone(), to: sink.clone(), value: "1".into() },
+        Row {
+            from: sink.clone(),
+            to: k.clone(),
+            value: i128::MAX.to_string(),
+        },
+        Row {
+            from: sink.clone(),
+            to: k.clone(),
+            value: "1".into(),
+        },
+        Row {
+            from: k.clone(),
+            to: sink.clone(),
+            value: "1".into(),
+        },
     ];
     let want = vec![(sink.clone(), -i128::MAX), (k.clone(), i128::MAX)];
     assert_eq!(reference(&rows).unwrap(), want);
@@ -314,28 +350,49 @@ fn a_representable_sum_is_returned_even_when_a_partial_sum_overflows() {
 fn the_answer_decides_the_refusal_not_the_partial_sums() {
     let sink = "0x0000000000000000000000000000000000000000".to_string();
     let k = "0x0000000000000000000000000000000000000001".to_string();
-    let row = |v: &str| Row { from: sink.clone(), to: k.clone(), value: v.to_string() };
+    let row = |v: &str| Row {
+        from: sink.clone(),
+        to: k.clone(),
+        value: v.to_string(),
+    };
     let big = (i128::MAX / 2 + 1).to_string();
 
     // MAX + 1 does not fit, whatever order it is reached in.
-    for rows in [vec![row(&i128::MAX.to_string()), row("1")], vec![row("1"), row(&i128::MAX.to_string())]] {
+    for rows in [
+        vec![row(&i128::MAX.to_string()), row("1")],
+        vec![row("1"), row(&i128::MAX.to_string())],
+    ] {
         let dir = tempfile::tempdir().unwrap();
         write_segments(dir.path(), &rows, 2);
-        assert!(matches!(fold(dir.path(), 4), Err(BurrmillError::Overflow(_))), "MAX + 1 must refuse");
+        assert!(
+            matches!(fold(dir.path(), 4), Err(BurrmillError::Overflow(_))),
+            "MAX + 1 must refuse"
+        );
     }
 
     // Two halves that each fit and together do not.
     let rows = vec![row(&big), row(&big)];
     let dir = tempfile::tempdir().unwrap();
     write_segments(dir.path(), &rows, 2);
-    assert!(matches!(fold(dir.path(), 4), Err(BurrmillError::Overflow(_))));
+    assert!(matches!(
+        fold(dir.path(), 4),
+        Err(BurrmillError::Overflow(_))
+    ));
 
     // Far past the range and back again. The intermediate leaves i128 twice; the answer is 5.
     let rows = vec![
         row(&i128::MAX.to_string()),
         row(&i128::MAX.to_string()),
-        Row { from: k.clone(), to: sink.clone(), value: i128::MAX.to_string() },
-        Row { from: k.clone(), to: sink.clone(), value: (i128::MAX - 5).to_string() },
+        Row {
+            from: k.clone(),
+            to: sink.clone(),
+            value: i128::MAX.to_string(),
+        },
+        Row {
+            from: k.clone(),
+            to: sink.clone(),
+            value: (i128::MAX - 5).to_string(),
+        },
     ];
     let dir = tempfile::tempdir().unwrap();
     write_segments(dir.path(), &rows, 4);
@@ -389,14 +446,24 @@ fn a_three_table_fold_gives_the_same_answer_as_the_reference() {
     let plan = burrmill::plan::plan(sql).expect("the n-table fold must plan");
     let burrmill::Plan::SignedFold(f) = &plan;
     assert_eq!(f.branches.len(), 3);
-    assert!(f.branches.iter().all(|b| b.values[0].strict_cast), "written with CAST, not TRY_CAST");
-    assert!(!f.drop_zero, "no HAVING, so a party netting to zero is still a row");
+    assert!(
+        f.branches.iter().all(|b| b.values[0].strict_cast),
+        "written with CAST, not TRY_CAST"
+    );
+    assert!(
+        !f.drop_zero,
+        "no HAVING, so a party netting to zero is still a row"
+    );
 
     let a = db.query(sql, Limits::default()).expect("and must execute");
     let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
     assert_eq!(
         got,
-        vec![("0xaa".into(), 72i128), ("0xbb".into(), 0i128), ("0xcc".into(), 11i128)]
+        vec![
+            ("0xaa".into(), 72i128),
+            ("0xbb".into(), 0i128),
+            ("0xcc".into(), 11i128)
+        ]
     );
 }
 
@@ -404,20 +471,25 @@ fn a_three_table_fold_gives_the_same_answer_as_the_reference() {
 #[test]
 fn having_still_drops_the_zero_row_in_an_n_table_fold() {
     let dir = tempfile::tempdir().unwrap();
-    for (name, rows) in [("credits", vec![("0xaa", 5u64), ("0xbb", 9)]), ("debits", vec![("0xbb", 9)])] {
+    for (name, rows) in [
+        ("credits", vec![("0xaa", 5u64), ("0xbb", 9)]),
+        ("debits", vec![("0xbb", 9)]),
+    ] {
         let sub = dir.path().join(name);
         std::fs::create_dir_all(&sub).unwrap();
         let evs: Vec<Row> = rows
             .iter()
-            .map(|(w, v)| Row { from: "0xsink".into(), to: (*w).into(), value: v.to_string() })
+            .map(|(w, v)| Row {
+                from: "0xsink".into(),
+                to: (*w).into(),
+                value: v.to_string(),
+            })
             .collect();
         write_segments(&sub, &evs, 1);
     }
     let mut catalog = burrmill::Catalog::new();
     for name in ["credits", "debits"] {
-        catalog.register(
-            burrmill::SealedSegments::discover(name, &dir.path().join(name)).unwrap(),
-        );
+        catalog.register(burrmill::SealedSegments::discover(name, &dir.path().join(name)).unwrap());
     }
     let db = burrmill::Burrmill::with_threads(catalog, 2).unwrap();
     let sql = "SELECT who, SUM(v) AS net FROM (
@@ -427,7 +499,11 @@ fn having_still_drops_the_zero_row_in_an_n_table_fold() {
                ) GROUP BY who HAVING SUM(v) <> 0";
     let a = db.query(sql, Limits::default()).unwrap();
     let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
-    assert_eq!(got, vec![("0xaa".into(), 5i128)], "bb nets to zero and is dropped");
+    assert_eq!(
+        got,
+        vec![("0xaa".into(), 5i128)],
+        "bb nets to zero and is dropped"
+    );
 }
 
 /// **`lower()` on the group key, executed** (roadmap 4.1b).
@@ -445,9 +521,21 @@ fn lower_on_the_key_folds_mixed_case_addresses_into_one_party() {
     let a_uc = "0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD".to_string();
     let a_mx = "0xAbCdEfabcdefABCDEFabcdefABCDEFabcdefAbCd".to_string();
     let rows = vec![
-        Row { from: sink.clone(), to: a_lc.clone(), value: "10".into() },
-        Row { from: sink.clone(), to: a_uc.clone(), value: "20".into() },
-        Row { from: a_mx.clone(), to: sink.clone(), value: "5".into() },
+        Row {
+            from: sink.clone(),
+            to: a_lc.clone(),
+            value: "10".into(),
+        },
+        Row {
+            from: sink.clone(),
+            to: a_uc.clone(),
+            value: "20".into(),
+        },
+        Row {
+            from: a_mx.clone(),
+            to: sink.clone(),
+            value: "5".into(),
+        },
     ];
     write_segments(dir.path(), &rows, 2);
 
@@ -460,7 +548,9 @@ fn lower_on_the_key_folds_mixed_case_addresses_into_one_party() {
                  UNION ALL
                  SELECT lower(\"from\") AS addr, -TRY_CAST(\"value\" AS HUGEINT) AS d FROM t
                ) GROUP BY addr HAVING SUM(d) <> 0";
-    let a = db.query(sql, Limits::default()).expect("lower() on the key must plan and run");
+    let a = db
+        .query(sql, Limits::default())
+        .expect("lower() on the key must plan and run");
     let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
     assert_eq!(
         got,
@@ -470,9 +560,15 @@ fn lower_on_the_key_folds_mixed_case_addresses_into_one_party() {
 
     // And without lower(), the same data is three parties. Stated as a test so the difference is a
     // fact rather than a claim.
-    let raw = sql.replace("lower(\"to\")", "\"to\"").replace("lower(\"from\")", "\"from\"");
+    let raw = sql
+        .replace("lower(\"to\")", "\"to\"")
+        .replace("lower(\"from\")", "\"from\"");
     let b = db.query(&raw, Limits::default()).unwrap();
-    assert_eq!(b.rows().len(), 4, "without lower(): sink plus three spellings");
+    assert_eq!(
+        b.rows().len(),
+        4,
+        "without lower(): sink plus three spellings"
+    );
 }
 
 /// A five-arm fold whose later arms are **positional** — no aliases, and a different source column
@@ -518,7 +614,9 @@ fn later_union_arms_are_positional_and_may_name_a_different_column() {
                  UNION ALL
                  SELECT \"serviceProvider\", CAST(tokens AS HUGEINT) FROM horizon_deposited
                ) GROUP BY 1";
-    let a = db.query(sql, Limits::default()).expect("positional arms are ordinary SQL");
+    let a = db
+        .query(sql, Limits::default())
+        .expect("positional arms are ordinary SQL");
     let got: Vec<(String, i128)> = a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
     assert_eq!(got, vec![("0xaa".into(), 97i128)], "100 - 10 + 7");
 }
@@ -551,7 +649,9 @@ fn a_composite_key_with_a_literal_tag_keeps_two_namespaces_apart() {
                     rows.iter().map(|(_, i, _)| *i).collect::<Vec<_>>(),
                 )),
                 std::sync::Arc::new(arrow::array::StringArray::from(
-                    rows.iter().map(|(_, _, v)| v.to_string()).collect::<Vec<_>>(),
+                    rows.iter()
+                        .map(|(_, _, v)| v.to_string())
+                        .collect::<Vec<_>>(),
                 )),
             ],
         )
@@ -576,13 +676,21 @@ fn a_composite_key_with_a_literal_tag_keeps_two_namespaces_apart() {
                ) GROUP BY 1, 2";
     let plan = burrmill::plan::plan(sql).expect("a composite key with a tag must plan");
     let burrmill::Plan::SignedFold(f) = &plan;
-    assert_eq!(f.key_aliases, vec!["curator".to_string(), "position".to_string()]);
+    assert_eq!(
+        f.key_aliases,
+        vec!["curator".to_string(), "position".to_string()]
+    );
 
     let a = db.query(sql, Limits::default()).unwrap();
     let rows = a.rows();
     assert_eq!(rows.key_arity(), 2);
     let mut got: Vec<(Vec<String>, i128)> = (0..rows.len())
-        .map(|i| (rows.key_parts(i).map(|s| s.to_string()).collect(), rows.sum(i)))
+        .map(|i| {
+            (
+                rows.key_parts(i).map(|s| s.to_string()).collect(),
+                rows.sum(i),
+            )
+        })
         .collect();
     got.sort();
     assert_eq!(
@@ -597,7 +705,11 @@ fn a_composite_key_with_a_literal_tag_keeps_two_namespaces_apart() {
     // And without the tag, the two collapse into one - which is the wrong answer the tag prevents.
     let untagged = sql.replace("'v:' || ", "").replace("'n:' || ", "");
     let b = db.query(&untagged, Limits::default()).unwrap();
-    assert_eq!(b.rows().len(), 1, "without the tag, 100 and 5 become one position of 105");
+    assert_eq!(
+        b.rows().len(),
+        1,
+        "without the tag, 100 and 5 become one position of 105"
+    );
     assert_eq!(b.rows().sum(0), 105);
 }
 
@@ -641,7 +753,10 @@ fn two_aggregates_over_a_composite_key_are_summed_independently() {
         burrmill::SealedSegments::discover(name, &sub).unwrap()
     };
     let mut catalog = burrmill::Catalog::new();
-    catalog.register(mk("delegated", &[("0xd1", "0xi1", 100, 7), ("0xd2", "0xi1", 40, 3)]));
+    catalog.register(mk(
+        "delegated",
+        &[("0xd1", "0xi1", 100, 7), ("0xd2", "0xi1", 40, 3)],
+    ));
     catalog.register(mk("undelegated", &[("0xd1", "0xi1", 30, 2)]));
     let db = burrmill::Burrmill::with_threads(catalog, 4).unwrap();
 
@@ -654,7 +769,10 @@ fn two_aggregates_over_a_composite_key_are_summed_independently() {
                ) GROUP BY 1, 2";
     let plan = burrmill::plan::plan(sql).expect("two aggregates must plan");
     let burrmill::Plan::SignedFold(f) = &plan;
-    assert_eq!(f.sum_aliases, vec!["net_tokens".to_string(), "net_shares".to_string()]);
+    assert_eq!(
+        f.sum_aliases,
+        vec!["net_tokens".to_string(), "net_shares".to_string()]
+    );
     assert_eq!(f.branches[0].values.len(), 2);
 
     let a = db.query(sql, Limits::default()).unwrap();
@@ -663,7 +781,11 @@ fn two_aggregates_over_a_composite_key_are_summed_independently() {
     assert_eq!(rows.key_arity(), 2);
     let mut got: Vec<(Vec<String>, i128, i128)> = (0..rows.len())
         .map(|i| {
-            (rows.key_parts(i).map(|s| s.to_string()).collect(), rows.sum_at(i, 0), rows.sum_at(i, 1))
+            (
+                rows.key_parts(i).map(|s| s.to_string()).collect(),
+                rows.sum_at(i, 0),
+                rows.sum_at(i, 1),
+            )
         })
         .collect();
     got.sort();

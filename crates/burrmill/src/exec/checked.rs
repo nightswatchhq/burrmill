@@ -42,7 +42,9 @@ impl CheckedSumI128 {
 
 pub fn checked_add(a: i128, b: i128, context: &str) -> Result<i128> {
     a.checked_add(b).ok_or_else(|| {
-        BurrmillError::Overflow(format!("Overflow in addition of INT128 ({a} + {b}) for {context}"))
+        BurrmillError::Overflow(format!(
+            "Overflow in addition of INT128 ({a} + {b}) for {context}"
+        ))
     })
 }
 
@@ -80,7 +82,11 @@ mod tests {
     #[test]
     fn negating_the_minimum_is_refused_not_wrapped() {
         assert!(checked_neg(i128::MIN, "0xdead").is_err());
-        assert_eq!(i128::MIN.wrapping_neg(), i128::MIN, "wrapping returns the same value");
+        assert_eq!(
+            i128::MIN.wrapping_neg(),
+            i128::MIN,
+            "wrapping returns the same value"
+        );
     }
 
     /// Two partials each inside the range can leave it when merged, so the merge is checked for the
@@ -93,7 +99,8 @@ mod tests {
     #[test]
     fn ordinary_arithmetic_is_still_exact() {
         let mut acc = CheckedSumI128::new();
-        acc.add(1_000_000_000_000_000_000_000_000_000_000i128, "x").unwrap();
+        acc.add(1_000_000_000_000_000_000_000_000_000_000i128, "x")
+            .unwrap();
         acc.add(-1i128, "x").unwrap();
         assert_eq!(acc.value(), 999_999_999_999_999_999_999_999_999_999i128);
     }

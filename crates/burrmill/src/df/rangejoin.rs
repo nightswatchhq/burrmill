@@ -18,7 +18,9 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array, make_comparator};
+use arrow::array::{
+    Array, ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array, make_comparator,
+};
 use arrow::compute::{SortOptions, concat_batches, sort_to_indices, take};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::ConfigOptions;
@@ -27,11 +29,13 @@ use datafusion_common::{DataFusionError, JoinSide, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execute_stream};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, execute_stream,
+};
 use datafusion_session::PhysicalOptimizerRule;
 use futures::StreamExt;
 
@@ -73,11 +77,17 @@ fn side_column(e: &Arc<dyn PhysicalExpr>, j: &NestedLoopJoinExec) -> Option<(Joi
 }
 
 /// `left op right` for one conjunct, turned round if it was written the other way.
-fn normalise(e: &Arc<dyn PhysicalExpr>, j: &NestedLoopJoinExec) -> Option<(usize, Operator, usize)> {
+fn normalise(
+    e: &Arc<dyn PhysicalExpr>,
+    j: &NestedLoopJoinExec,
+) -> Option<(usize, Operator, usize)> {
     let b = e.downcast_ref::<BinaryExpr>()?;
     let (l, r) = (side_column(b.left(), j)?, side_column(b.right(), j)?);
     let op = *b.op();
-    if !matches!(op, Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq) {
+    if !matches!(
+        op,
+        Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq
+    ) {
         return None;
     }
     match (l, r) {
@@ -141,7 +151,8 @@ impl RangeJoinExec {
         let (Some(x), Some(y)) = (normalise(and.left(), j), normalise(and.right(), j)) else {
             return Ok(None);
         };
-        let lower = |(_, op, _): &(usize, Operator, usize)| matches!(op, Operator::Gt | Operator::GtEq);
+        let lower =
+            |(_, op, _): &(usize, Operator, usize)| matches!(op, Operator::Gt | Operator::GtEq);
         let (a, b) = match (lower(&x), lower(&y)) {
             (true, false) => (x, y),
             (false, true) => (y, x),
@@ -163,41 +174,19 @@ impl RangeJoinExec {
             b_strict: b.1 == Operator::Lt,
         };
         let projection = j.projection().as_ref().map(|p| p.to_vec());
-        Ok(Some(Self::new(
-            Arc::clone(j.left()),
-            Arc::clone(j.right()),
+        Ok(Some(Self {
+            left: Arc::clone(j.left()),
+            right: Arc::clone(j.right()),
             bounds,
-            *j.join_type(),
+            join_type: *j.join_type(),
             projection,
-            j.schema(),
-            filter.expression().to_string(),
+            schema: j.schema(),
+            filter_text: filter.expression().to_string(),
+            built: Arc::new(tokio::sync::OnceCell::new()),
             // What the nested loop promised downstream, ordering included: rows still leave in the
             // right side's order.
-            Arc::clone(j.properties()),
-        )))
-    }
-
-    fn new(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
-        bounds: Bounds,
-        join_type: JoinType,
-        projection: Option<Vec<usize>>,
-        schema: SchemaRef,
-        filter_text: String,
-        properties: Arc<PlanProperties>,
-    ) -> Self {
-        Self {
-            left,
-            right,
-            bounds,
-            join_type,
-            projection,
-            schema,
-            filter_text,
-            built: Arc::new(tokio::sync::OnceCell::new()),
-            properties,
-        }
+            properties: Arc::clone(j.properties()),
+        }))
     }
 }
 
@@ -215,7 +204,11 @@ struct Built {
     _reservation: MemoryReservation,
 }
 
-async fn build(left: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, bounds: Bounds) -> Result<Built> {
+async fn build(
+    left: Arc<dyn ExecutionPlan>,
+    ctx: Arc<TaskContext>,
+    bounds: Bounds,
+) -> Result<Built> {
     let reservation = MemoryConsumer::new("RangeJoinExec build").register(ctx.memory_pool());
     let schema = left.schema();
     let mut batches = Vec::new();
@@ -229,7 +222,14 @@ async fn build(left: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, bounds: Boun
     reservation.try_grow(batch.get_array_memory_size())?;
     drop(batches);
     let (a, b) = (batch.column(bounds.la), batch.column(bounds.lb));
-    let sorted = sort_to_indices(a, Some(SortOptions { descending: false, nulls_first: true }), None)?;
+    let sorted = sort_to_indices(
+        a,
+        Some(SortOptions {
+            descending: false,
+            nulls_first: true,
+        }),
+        None,
+    )?;
     let order: UInt32Array = sorted
         .values()
         .iter()
@@ -253,7 +253,14 @@ async fn build(left: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, bounds: Boun
             + order.get_array_memory_size()
             + suffix_min.len() * 4,
     )?;
-    Ok(Built { batch, order, a, b, suffix_min, _reservation: reservation })
+    Ok(Built {
+        batch,
+        order,
+        a,
+        b,
+        suffix_min,
+        _reservation: reservation,
+    })
 }
 
 /// Matches past this many in one call, or candidates examined past `STEPS`, and a probe stops to
@@ -307,7 +314,11 @@ fn probe(
                 let (mut lo, mut hi) = (0, n);
                 while lo < hi {
                     let mid = (lo + hi) / 2;
-                    if a_holds(r, mid) { hi = mid } else { lo = mid + 1 }
+                    if a_holds(r, mid) {
+                        hi = mid
+                    } else {
+                        lo = mid + 1
+                    }
                 }
                 lo
             });
@@ -329,7 +340,10 @@ fn probe(
             left.push(None);
             right_idx.push(r as u32);
         }
-        *cur = Cursor { r: r + 1, ..Cursor::default() };
+        *cur = Cursor {
+            r: r + 1,
+            ..Cursor::default()
+        };
     }
     Ok((UInt32Array::from(left), UInt32Array::from(right_idx), true))
 }
@@ -354,12 +368,20 @@ fn assemble(
     }
     // `count(*)` projects no column, and a batch of none needs its row count said.
     let options = RecordBatchOptions::new().with_row_count(Some(left_idx.len()));
-    Ok(RecordBatch::try_new_with_options(Arc::clone(schema), columns, &options)?)
+    Ok(RecordBatch::try_new_with_options(
+        Arc::clone(schema),
+        columns,
+        &options,
+    )?)
 }
 
 impl DisplayAs for RangeJoinExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "RangeJoinExec: join_type={}, filter={}", self.join_type, self.filter_text)
+        write!(
+            f,
+            "RangeJoinExec: join_type={}, filter={}",
+            self.join_type, self.filter_text
+        )
     }
 }
 
@@ -386,38 +408,59 @@ impl ExecutionPlan for RangeJoinExec {
         let right = children.pop().expect("two children");
         let left = children.pop().expect("two children");
         let right_partitioning = right.properties().output_partitioning().clone();
-        Ok(Arc::new(Self::new(
+        Ok(Arc::new(Self {
             left,
             right,
-            self.bounds,
-            self.join_type,
-            self.projection.clone(),
-            Arc::clone(&self.schema),
-            self.filter_text.clone(),
+            bounds: self.bounds,
+            join_type: self.join_type,
+            projection: self.projection.clone(),
+            schema: Arc::clone(&self.schema),
+            filter_text: self.filter_text.clone(),
+            built: Arc::new(tokio::sync::OnceCell::new()),
             // The right side's partitions are this operator's; a rule below may have changed them.
-            Arc::new(self.properties.as_ref().clone().with_partitioning(right_partitioning)),
-        )))
+            properties: Arc::new(
+                self.properties
+                    .as_ref()
+                    .clone()
+                    .with_partitioning(right_partitioning),
+            ),
+        }))
     }
-    fn execute(&self, partition: usize, ctx: Arc<TaskContext>) -> Result<SendableRecordBatchStream> {
+    fn execute(
+        &self,
+        partition: usize,
+        ctx: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
         let (left, built) = (Arc::clone(&self.left), Arc::clone(&self.built));
         let (bounds, keep) = (self.bounds, self.join_type == JoinType::Right);
         let (projection, schema) = (self.projection.clone(), Arc::clone(&self.schema));
         let chunk = ctx.session_config().batch_size().max(1);
-        let token = ctx.session_config().get_extension::<crate::CancelToken>().unwrap_or_default();
+        let token = ctx
+            .session_config()
+            .get_extension::<crate::CancelToken>()
+            .unwrap_or_default();
         let mut right = Some(self.right.execute(partition, Arc::clone(&ctx))?);
         let stream = futures::stream::once(async move {
-            built.get_or_try_init(|| async move { build(left, ctx, bounds).await.map(Arc::new) }).await.cloned()
+            built
+                .get_or_try_init(|| async move { build(left, ctx, bounds).await.map(Arc::new) })
+                .await
+                .cloned()
         })
         .flat_map(move |b| {
-            let (projection, schema, token) = (projection.clone(), Arc::clone(&schema), Arc::clone(&token));
+            let (projection, schema, token) =
+                (projection.clone(), Arc::clone(&schema), Arc::clone(&token));
             match b {
                 Err(e) => futures::stream::once(async move { Err(e) }).boxed(),
                 Ok(built) => right
                     .take()
                     .expect("built once")
                     .flat_map(move |r| {
-                        let (built, projection, schema, token) =
-                            (Arc::clone(&built), projection.clone(), Arc::clone(&schema), Arc::clone(&token));
+                        let (built, projection, schema, token) = (
+                            Arc::clone(&built),
+                            projection.clone(),
+                            Arc::clone(&schema),
+                            Arc::clone(&token),
+                        );
                         let r = match r {
                             Ok(r) => r,
                             Err(e) => return futures::stream::once(async move { Err(e) }).boxed(),
@@ -425,20 +468,36 @@ impl ExecutionPlan for RangeJoinExec {
                         // One output batch per step, so neither a wide batch's matches nor its time
                         // are held in one piece.
                         futures::stream::unfold(Some(Cursor::default()), move |cur| {
-                            let (built, r, projection, schema, token) =
-                                (Arc::clone(&built), r.clone(), projection.clone(), Arc::clone(&schema), Arc::clone(&token));
+                            let (built, r, projection, schema, token) = (
+                                Arc::clone(&built),
+                                r.clone(),
+                                projection.clone(),
+                                Arc::clone(&schema),
+                                Arc::clone(&token),
+                            );
                             async move {
                                 let mut cur = cur?;
                                 loop {
                                     if token.is_cancelled() {
-                                        return Some((Err(DataFusionError::Execution("cancelled".into())), None));
+                                        return Some((
+                                            Err(DataFusionError::Execution("cancelled".into())),
+                                            None,
+                                        ));
                                     }
-                                    let (li, ri, done) = match probe(&built, &r, bounds, keep, &mut cur, chunk) {
-                                        Ok(p) => p,
-                                        Err(e) => return Some((Err(e), None)),
-                                    };
+                                    let (li, ri, done) =
+                                        match probe(&built, &r, bounds, keep, &mut cur, chunk) {
+                                            Ok(p) => p,
+                                            Err(e) => return Some((Err(e), None)),
+                                        };
                                     if !li.is_empty() {
-                                        let out = assemble(&built, &r, &li, &ri, projection.as_deref(), &schema);
+                                        let out = assemble(
+                                            &built,
+                                            &r,
+                                            &li,
+                                            &ri,
+                                            projection.as_deref(),
+                                            &schema,
+                                        );
                                         return Some((out, (!done).then_some(cur)));
                                     }
                                     if done {
@@ -452,7 +511,9 @@ impl ExecutionPlan for RangeJoinExec {
                     .boxed(),
             }
         });
-        Ok(Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&self.schema), stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.schema),
+            stream,
+        )))
     }
 }
-

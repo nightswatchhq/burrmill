@@ -156,7 +156,9 @@ fn refused(e: &Engine, sql: &str) -> String {
                 .unwrap()
                 .to_string()
         ),
-        Err(BurrmillError::NotAllowed(m) | BurrmillError::Plan(m) | BurrmillError::Substrate(m)) => m,
+        Err(
+            BurrmillError::NotAllowed(m) | BurrmillError::Plan(m) | BurrmillError::Substrate(m),
+        ) => m,
         Err(other) => panic!("{sql}: {other:?}"),
     }
 }
@@ -343,7 +345,10 @@ fn dec_companion_sums_are_exact() {
         total
     );
     assert_eq!(
-        one(&e, "SELECT SUM(TRY_CAST(value AS DECIMAL(38,0))) FROM transfer"),
+        one(
+            &e,
+            "SELECT SUM(TRY_CAST(value AS DECIMAL(38,0))) FROM transfer"
+        ),
         "5"
     );
     let (_t, e) = transfers(&[&[("a", D38MAX), ("a", D38MAX)]]);
@@ -370,10 +375,19 @@ fn sum_of_a_dec_column_skips_rows_the_column_reports_as_null() {
         ),
         FITS
     );
-    assert_eq!(one(&e, "SELECT AVG(value_dec) FROM transfer WHERE party = 'a'"), "-1e38");
-    assert_eq!(one(&e, "SELECT SUM(value_dec) FROM transfer WHERE party = 'b'"), "7");
     assert_eq!(
-        one(&e, "SELECT SUM(TRY_CAST(value AS BIGINT)) FROM transfer WHERE party = 'a'"),
+        one(&e, "SELECT AVG(value_dec) FROM transfer WHERE party = 'a'"),
+        "-1e38"
+    );
+    assert_eq!(
+        one(&e, "SELECT SUM(value_dec) FROM transfer WHERE party = 'b'"),
+        "7"
+    );
+    assert_eq!(
+        one(
+            &e,
+            "SELECT SUM(TRY_CAST(value AS BIGINT)) FROM transfer WHERE party = 'a'"
+        ),
         "NULL"
     );
     assert_eq!(
@@ -388,7 +402,10 @@ fn sum_of_a_dec_column_skips_rows_the_column_reports_as_null() {
     );
 
     let (_t, e) = transfers(&[&[("a", "1e3"), ("a", "4")]]);
-    assert_eq!(one(&e, "SELECT value_dec FROM transfer WHERE value = '1e3'"), "NULL");
+    assert_eq!(
+        one(&e, "SELECT value_dec FROM transfer WHERE value = '1e3'"),
+        "NULL"
+    );
     assert_eq!(one(&e, "SELECT SUM(value_dec) FROM transfer"), "4");
 }
 
@@ -428,12 +445,24 @@ fn dec_companion_through_subqueries_and_joins() {
 fn other_reads_of_dec_companions_in_aggregates_refuse_only_what_did_not_fit() {
     let (_t, e) = transfers(&[&[("a", "5"), ("b", "7")]]);
     assert_eq!(one(&e, "SELECT MAX(value_dec) FROM transfer"), "7");
-    assert_eq!(one(&e, "SELECT MIN(TRY_CAST(value AS DECIMAL(38,0))) FROM transfer"), "5");
+    assert_eq!(
+        one(
+            &e,
+            "SELECT MIN(TRY_CAST(value AS DECIMAL(38,0))) FROM transfer"
+        ),
+        "5"
+    );
     assert_eq!(one(&e, "SELECT count(value_dec) FROM transfer"), "2");
     assert_eq!(one(&e, "SELECT SUM(value_dec * 2) FROM transfer"), "24");
     assert_eq!(
-        rows(&e, "SELECT l.name, MAX(t.value_dec * 3) FROM transfer t JOIN label l ON t.party = l.party GROUP BY l.name ORDER BY l.name"),
-        vec![vec!["alice".to_string(), "15".into()], vec!["bob".to_string(), "21".into()]]
+        rows(
+            &e,
+            "SELECT l.name, MAX(t.value_dec * 3) FROM transfer t JOIN label l ON t.party = l.party GROUP BY l.name ORDER BY l.name"
+        ),
+        vec![
+            vec!["alice".to_string(), "15".into()],
+            vec!["bob".to_string(), "21".into()]
+        ]
     );
     refused(&e, "SELECT SUM(value_dec) OVER () FROM transfer");
 
@@ -466,7 +495,10 @@ fn other_reads_of_dec_companions_in_aggregates_refuse_only_what_did_not_fit() {
         assert!(m.contains("did not fit"), "{sql}: {m}");
     }
     // A party whose own values all fit is still answered when grouped away from the one that did not.
-    assert_eq!(one(&e, "SELECT MAX(value_dec) FROM transfer WHERE party = 'a'"), "5");
+    assert_eq!(
+        one(&e, "SELECT MAX(value_dec) FROM transfer WHERE party = 'a'"),
+        "5"
+    );
 }
 
 // The signed fold nuthatch writes: credits and negated debits of a TRY_CAST, through UNION ALL.
@@ -521,7 +553,10 @@ fn signed_fold_over_try_cast() {
 fn a_recursive_fold_is_tainted_only_by_what_it_casts() {
     let (_t, e) = transfers(&[&[("a", "5"), ("b", "7")]]);
     assert_eq!(
-        one(&e, "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT max(n) FROM t"),
+        one(
+            &e,
+            "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT max(n) FROM t"
+        ),
         "3"
     );
     let (_t, e) = transfers(&[&[("a", "5"), ("b", U256_MAX)]]);
@@ -583,4 +618,3 @@ fn an_unnested_list_is_tainted_only_by_what_went_into_it() {
     );
     assert!(why.contains("TRY_CAST"), "{why}");
 }
-

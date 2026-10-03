@@ -32,7 +32,9 @@ pub fn duckdb(seg: &Path) -> anyhow::Result<(Rows, u128)> {
     let conn = duckdb::Connection::open_in_memory()?;
     conn.execute_batch(&format!("SET threads TO {};", thread_budget()))?;
     let glob = format!("{}/*.parquet", seg.display());
-    conn.execute_batch(&format!("CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"))?;
+    conn.execute_batch(&format!(
+        "CREATE VIEW t AS SELECT * FROM read_parquet('{glob}');"
+    ))?;
     let sql = "SELECT addr, SUM(d)::VARCHAR AS net FROM (\
                  SELECT \"to\" AS addr, TRY_CAST(\"value\" AS HUGEINT) AS d FROM t \
                  UNION ALL \
@@ -63,7 +65,8 @@ pub async fn datafusion(seg: &Path) -> anyhow::Result<(Rows, u128)> {
     let ctx = SessionContext::new_with_config(config);
     // The **directory**, not a file: with many segments, registering one would silently compare all
     // of DuckDB's rows against one of DataFusion's.
-    ctx.register_parquet("t", seg.to_str().unwrap(), ParquetReadOptions::default()).await?;
+    ctx.register_parquet("t", seg.to_str().unwrap(), ParquetReadOptions::default())
+        .await?;
     let sql = "SELECT addr, CAST(SUM(d) AS VARCHAR) AS net FROM (\
                  SELECT \"to\" AS addr, TRY_CAST(\"value\" AS DECIMAL(38,0)) AS d FROM t \
                  UNION ALL \
@@ -111,6 +114,10 @@ pub fn burrmill(seg: &Path) -> anyhow::Result<(Rows, u128, burrmill::FoldMetrics
     let t = Instant::now();
     let answer = db.query(sql, burrmill::Limits::default())?;
     let ms = t.elapsed().as_millis();
-    let rows = answer.rows().iter().map(|(k, v)| (k.to_string(), v)).collect();
+    let rows = answer
+        .rows()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
     Ok((rows, ms, answer.metrics()))
 }

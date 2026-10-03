@@ -59,7 +59,10 @@ pub fn run(segments: &str, views: &str) -> anyhow::Result<()> {
     let (mut ran, mut wins) = (0usize, 0usize);
     for (i, sql) in folds.iter().enumerate() {
         // Only the tables this fold names, so a query over two tables does not pay to open thirty.
-        let named: Vec<&String> = by_table.keys().filter(|t| sql.contains(t.as_str())).collect();
+        let named: Vec<&String> = by_table
+            .keys()
+            .filter(|t| sql.contains(t.as_str()))
+            .collect();
         if named.is_empty() {
             continue;
         }
@@ -74,7 +77,11 @@ pub fn run(segments: &str, views: &str) -> anyhow::Result<()> {
             .filter(|s| s.contains("__") && !by_table.contains_key(*s))
             .collect();
         if !missing.is_empty() {
-            println!("{:<52} not run: this nest has no {}", short(sql, i), missing[0]);
+            println!(
+                "{:<52} not run: this nest has no {}",
+                short(sql, i),
+                missing[0]
+            );
             continue;
         }
 
@@ -124,40 +131,55 @@ pub fn run(segments: &str, views: &str) -> anyhow::Result<()> {
                 out.push(row);
             }
             out.sort();
-            Ok((out, if also_time { t.elapsed().as_millis() } else { 0 }))
+            Ok((
+                out,
+                if also_time {
+                    t.elapsed().as_millis()
+                } else {
+                    0
+                },
+            ))
         };
 
         let mut last_metrics = burrmill::FoldMetrics::default();
-        let burr = |also_time: bool| -> anyhow::Result<(Vec<Vec<String>>, u128, burrmill::FoldMetrics)> {
-            let t = Instant::now();
-            let a = db.query(sql, burrmill::Limits::default())?;
-            let ms = t.elapsed().as_millis();
-            let metrics = a.metrics();
-            let r = a.rows();
-            let mut out = Vec::with_capacity(r.len());
-            for i in 0..r.len() {
-                let mut row: Vec<String> =
-                    r.key_parts(i).map(|s| s.to_string()).collect();
-                for j in 0..r.sum_arity() {
-                    row.push(r.sum_at(i, j).to_string());
+        let burr =
+            |also_time: bool| -> anyhow::Result<(Vec<Vec<String>>, u128, burrmill::FoldMetrics)> {
+                let t = Instant::now();
+                let a = db.query(sql, burrmill::Limits::default())?;
+                let ms = t.elapsed().as_millis();
+                let metrics = a.metrics();
+                let r = a.rows();
+                let mut out = Vec::with_capacity(r.len());
+                for i in 0..r.len() {
+                    let mut row: Vec<String> = r.key_parts(i).map(|s| s.to_string()).collect();
+                    for j in 0..r.sum_arity() {
+                        row.push(r.sum_at(i, j).to_string());
+                    }
+                    out.push(row);
                 }
-                out.push(row);
-            }
-            out.sort();
-            Ok((out, if also_time { ms } else { 0 }, metrics))
-        };
+                out.sort();
+                Ok((out, if also_time { ms } else { 0 }, metrics))
+            };
 
         let (d0, _) = match duck(false) {
             Ok(v) => v,
             Err(e) => {
-                println!("{:<52} DuckDB refused: {}", short(sql, i), first_line(&e.to_string()));
+                println!(
+                    "{:<52} DuckDB refused: {}",
+                    short(sql, i),
+                    first_line(&e.to_string())
+                );
                 continue;
             }
         };
         let (b0, _, _) = match burr(false) {
             Ok(v) => v,
             Err(e) => {
-                println!("{:<52} Burrmill refused: {}", short(sql, i), first_line(&e.to_string()));
+                println!(
+                    "{:<52} Burrmill refused: {}",
+                    short(sql, i),
+                    first_line(&e.to_string())
+                );
                 continue;
             }
         };
@@ -201,7 +223,10 @@ pub fn run(segments: &str, views: &str) -> anyhow::Result<()> {
             last_metrics.morsels
         );
     }
-    println!("\n{wins}/{ran} folds at or under 1.0x DuckDB, {} threads each", budget);
+    println!(
+        "\n{wins}/{ran} folds at or under 1.0x DuckDB, {} threads each",
+        budget
+    );
     Ok(())
 }
 
@@ -221,7 +246,11 @@ fn short(sql: &str, i: usize) -> String {
     names.sort();
     names.dedup();
     let label = names.join("+");
-    let label = if label.len() > 48 { format!("{}…", &label[..47]) } else { label };
+    let label = if label.len() > 48 {
+        format!("{}…", &label[..47])
+    } else {
+        label
+    };
     if label.is_empty() {
         format!("fold #{i}")
     } else {

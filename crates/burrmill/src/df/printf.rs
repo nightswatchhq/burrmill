@@ -355,16 +355,15 @@ fn render(v: &V, ty: char, s: Spec, braces: bool) -> DFResult<String> {
             None => return exec_err!("Invalid Input Error: {n} is not a character"),
         },
         (V::Float(f), 'f' | 'F' | 'e' | 'E' | 'g' | 'G' | '\0') => {
-            let sign =
-                if f.is_sign_negative() && !(*f == 0.0 && !f.is_sign_negative()) && !f.is_nan() {
-                    "-"
-                } else if s.plus {
-                    "+"
-                } else if s.space {
-                    " "
-                } else {
-                    ""
-                };
+            let sign = if f.is_sign_negative() && !f.is_nan() {
+                "-"
+            } else if s.plus {
+                "+"
+            } else if s.space {
+                " "
+            } else {
+                ""
+            };
             let a = f.abs();
             let body = if !a.is_finite() {
                 let t = if a.is_nan() { "nan" } else { "inf" };

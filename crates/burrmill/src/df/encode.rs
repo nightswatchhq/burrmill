@@ -77,7 +77,11 @@ fn encodable(t: &DataType) -> bool {
 /// digits in the type (precision equal to scale), DuckDB writes no integer part: `.5`, `-.05`.
 fn scaled(digits: String, precision: u8, scale: i8) -> String {
     if scale < 0 {
-        return if digits == "0" { digits } else { digits + &"0".repeat(scale.unsigned_abs() as usize) };
+        return if digits == "0" {
+            digits
+        } else {
+            digits + &"0".repeat(scale.unsigned_abs() as usize)
+        };
     }
     let (neg, mag) = match digits.strip_prefix('-') {
         Some(m) => (true, m),

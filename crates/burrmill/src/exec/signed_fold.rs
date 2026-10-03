@@ -10,15 +10,15 @@
 //! once at the end rather than one shared table under contention; and a fast non-cryptographic
 //! hash, because std's SipHash is DoS resistance we are not paying for here.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use arrow::array::{Array, ArrayRef, Decimal128Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use rayon::prelude::*;
 
 use crate::error::{BurrmillError, Result};
@@ -108,7 +108,14 @@ pub struct Seam<'a> {
 
 impl<'a> SignedFoldExec<'a> {
     pub fn new(plan: &'a SignedFold, segments: &'a [&'a SealedSegments], limits: Limits) -> Self {
-        Self { plan, segments, limits, cancel: CancelToken::new(), degree: None, seam: None }
+        Self {
+            plan,
+            segments,
+            limits,
+            cancel: CancelToken::new(),
+            degree: None,
+            seam: None,
+        }
     }
 
     /// Branches grouped by the table they read, so a table is scanned **once** however many arms
@@ -121,7 +128,10 @@ impl<'a> SignedFoldExec<'a> {
     fn scans(&self) -> Vec<(usize, Vec<usize>)> {
         let mut out: Vec<(usize, Vec<usize>)> = Vec::new();
         for (i, b) in self.plan.branches.iter().enumerate() {
-            match out.iter_mut().find(|(rep, _)| self.plan.branches[*rep].table == b.table) {
+            match out
+                .iter_mut()
+                .find(|(rep, _)| self.plan.branches[*rep].table == b.table)
+            {
                 Some((_, arms)) => arms.push(i),
                 None => out.push((i, vec![i])),
             }
@@ -349,10 +359,11 @@ impl<'a> SignedFoldExec<'a> {
         // waste was invisible; a real nest event is twelve to fourteen, two of them 64-character hex
         // hashes, and on `staking_legacy__stake_delegated` this was the difference between 2.2x
         // DuckDB and parity. Measured on the real nest, which is the only place it shows.
-        let builder = match projection_mask(&m.meta, self.plan, arms, self.seam.map(|s| s.block_col)) {
-            Some(mask) => builder.with_projection(mask),
-            None => builder,
-        };
+        let builder =
+            match projection_mask(&m.meta, self.plan, arms, self.seam.map(|s| s.block_col)) {
+                Some(mask) => builder.with_projection(mask),
+                None => builder,
+            };
         let reader = builder.build()?;
 
         let mut rows_read = 0u64;
@@ -388,11 +399,12 @@ impl<'a> SignedFoldExec<'a> {
             // has to be free when it is not used; it was not, twice in this item alone.
             let mut simple1: Vec<(&crate::plan::FoldValue, StringArray, usize)> = Vec::new();
             let mut simple: Vec<(&crate::plan::FoldBranch, StringArray, Vec<usize>)> = Vec::new();
-            let mut composite: Vec<(
-                &crate::plan::FoldBranch,
+            type Composite<'b> = (
+                &'b crate::plan::FoldBranch,
                 Vec<Vec<Option<StringArray>>>,
                 Vec<usize>,
-            )> = Vec::new();
+            );
+            let mut composite: Vec<Composite<'_>> = Vec::new();
             for i in arms {
                 let b = &self.plan.branches[*i];
                 // Where each of this arm's summed columns landed in the decoded set.
@@ -400,7 +412,10 @@ impl<'a> SignedFoldExec<'a> {
                     .values
                     .iter()
                     .map(|fv| {
-                        value_names.iter().position(|n| *n == fv.col).expect("collected above")
+                        value_names
+                            .iter()
+                            .position(|n| *n == fv.col)
+                            .expect("collected above")
                     })
                     .collect();
                 if let (1, [crate::plan::KeyPart::Column { name, key_fn: None }]) =
@@ -442,7 +457,11 @@ impl<'a> SignedFoldExec<'a> {
             for i in 0..batch.num_rows() {
                 if let (Some(blocks), Some(seam)) = (&blocks, self.seam) {
                     // `None` means nothing has been sealed, so nothing in a segment can be cold.
-                    if !seam.snapshot.sealed_through.is_some_and(|w| blocks.value(i) <= w) {
+                    if seam
+                        .snapshot
+                        .sealed_through
+                        .is_none_or(|w| blocks.value(i) > w)
+                    {
                         rows_skipped += 1;
                         continue;
                     }
@@ -465,17 +484,15 @@ impl<'a> SignedFoldExec<'a> {
                             // answer silently, which is the thing this engine does not do. A value
                             // carrying digits is refused either way rather than guessed at
                             // (roadmap 2.1a).
-                            let uses_strictly =
-                                |b: &&crate::plan::FoldBranch, xs: &Vec<usize>| {
-                                    xs.iter()
-                                        .enumerate()
-                                        .any(|(j, x)| *x == vi && b.values[j].strict_cast)
-                                };
-                            let strict = simple1
-                                .iter()
-                                .any(|(fv, _, x)| *x == vi && fv.strict_cast)
-                                || simple.iter().any(|(b, _, xs)| uses_strictly(b, xs))
-                                || composite.iter().any(|(b, _, xs)| uses_strictly(b, xs));
+                            let uses_strictly = |b: &&crate::plan::FoldBranch, xs: &Vec<usize>| {
+                                xs.iter()
+                                    .enumerate()
+                                    .any(|(j, x)| *x == vi && b.values[j].strict_cast)
+                            };
+                            let strict =
+                                simple1.iter().any(|(fv, _, x)| *x == vi && fv.strict_cast)
+                                    || simple.iter().any(|(b, _, xs)| uses_strictly(b, xs))
+                                    || composite.iter().any(|(b, _, xs)| uses_strictly(b, xs));
                             if strict || looks_numeric(text) {
                                 return Err(BurrmillError::NotAllowed(format!(
                                     "the value {text:?} will not cast to a 128-bit integer{}",
@@ -558,7 +575,7 @@ impl<'a> SignedFoldExec<'a> {
                                 (crate::plan::KeyPart::Column { name, .. }, None) => {
                                     return Err(BurrmillError::Substrate(format!(
                                         "the key column `{name}` decoded to nothing"
-                                    )))
+                                    )));
                                 }
                             }
                         }
@@ -776,7 +793,9 @@ fn coalesce(morsels: &[(usize, Morsel)], degree: Option<usize>) -> Vec<&[(usize,
 fn looks_numeric(text: &str) -> bool {
     !text.is_empty()
         && text.bytes().any(|b| b.is_ascii_digit())
-        && text.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'_' | b'e' | b'E'))
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'_' | b'e' | b'E'))
 }
 
 /// The block column as `u64`, whatever width the writer chose.
@@ -785,10 +804,12 @@ fn looks_numeric(text: &str) -> bool {
 /// today and a future one might not, and a seam that silently misreads a block number would produce
 /// a wrong balance rather than an error.
 fn block_column(batch: &RecordBatch, name: &str) -> Result<arrow::array::UInt64Array> {
-    let col = batch
-        .column_by_name(name)
-        .ok_or_else(|| BurrmillError::Seam(format!("the segment has no `{name}` column, so the \
-             hot/cold boundary cannot be applied to it")))?;
+    let col = batch.column_by_name(name).ok_or_else(|| {
+        BurrmillError::Seam(format!(
+            "the segment has no `{name}` column, so the \
+             hot/cold boundary cannot be applied to it"
+        ))
+    })?;
     let cast = arrow::compute::cast(col, &DataType::UInt64)?;
     Ok(cast
         .as_any()
@@ -807,12 +828,8 @@ fn block_column(batch: &RecordBatch, name: &str) -> Result<arrow::array::UInt64A
 fn fold_case(s: &str, kf: crate::plan::KeyFn, out: &mut String) {
     out.clear();
     match (kf, s.is_ascii()) {
-        (crate::plan::KeyFn::Lower, true) => {
-            out.extend(s.chars().map(|c| c.to_ascii_lowercase()))
-        }
-        (crate::plan::KeyFn::Upper, true) => {
-            out.extend(s.chars().map(|c| c.to_ascii_uppercase()))
-        }
+        (crate::plan::KeyFn::Lower, true) => out.extend(s.chars().map(|c| c.to_ascii_lowercase())),
+        (crate::plan::KeyFn::Upper, true) => out.extend(s.chars().map(|c| c.to_ascii_uppercase())),
         (crate::plan::KeyFn::Lower, false) => out.extend(s.chars().flat_map(|c| c.to_lowercase())),
         (crate::plan::KeyFn::Upper, false) => out.extend(s.chars().flat_map(|c| c.to_uppercase())),
     }

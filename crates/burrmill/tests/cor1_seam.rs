@@ -18,8 +18,8 @@
 //! ordinary and is wrong, which is the failure this whole project is arranged against.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use arrow::array::{StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -64,9 +64,15 @@ fn seal_segment(dir: &Path, name: &str, rows: &[Ev]) -> std::path::PathBuf {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(UInt64Array::from(rows.iter().map(|r| r.block).collect::<Vec<_>>())),
-            Arc::new(StringArray::from(rows.iter().map(|r| r.from.as_str()).collect::<Vec<_>>())),
-            Arc::new(StringArray::from(rows.iter().map(|r| r.to.as_str()).collect::<Vec<_>>())),
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|r| r.block).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                rows.iter().map(|r| r.from.as_str()).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                rows.iter().map(|r| r.to.as_str()).collect::<Vec<_>>(),
+            )),
             Arc::new(StringArray::from(
                 rows.iter().map(|r| r.value.to_string()).collect::<Vec<_>>(),
             )),
@@ -103,7 +109,10 @@ fn expected(rows: &[Ev]) -> Vec<(String, i128)> {
 }
 
 fn answer(db: &Burrmill) -> Vec<(String, i128)> {
-    let a = match db.query(SQL, Limits::default()) { Ok(a) => a, Err(e) => panic!("the seam refused a well-formed nest: {e}") };
+    let a = match db.query(SQL, Limits::default()) {
+        Ok(a) => a,
+        Err(e) => panic!("the seam refused a well-formed nest: {e}"),
+    };
     a.rows().iter().map(|(k, v)| (k.to_string(), v)).collect()
 }
 
@@ -129,11 +138,18 @@ fn no_row_is_double_counted_or_dropped_while_the_nest_seals_underneath() {
     }
 
     let stop = Arc::new(AtomicBool::new(false));
+    let folds = Arc::new(AtomicUsize::new(0));
     let max_block = rows.iter().map(|r| r.block).max().unwrap();
 
     std::thread::scope(|scope| {
         let sealer = {
-            let (tip, dir, stop, rows) = (tip.clone(), dir.path().to_path_buf(), stop.clone(), rows.clone());
+            let (tip, dir, stop, rows, folds) = (
+                tip.clone(),
+                dir.path().to_path_buf(),
+                stop.clone(),
+                rows.clone(),
+                folds.clone(),
+            );
             scope.spawn(move || {
                 // Seal in ragged steps, so the boundary lands at every sort of place relative to a
                 // block's rows rather than always tidily between blocks.
@@ -158,17 +174,28 @@ fn no_row_is_double_counted_or_dropped_while_the_nest_seals_underneath() {
                     // segment is durable would leave a window where the range is in neither half.
                     seal_segment(&dir, &format!("{at:06}"), &batch);
                     tip.seal_through(at);
-                    // Slow enough that folds actually overlap seals. Without it the sealer finishes
-                    // in a few milliseconds and the reader spends its whole run on a settled nest,
-                    // which would pass just as happily with the invariant broken.
-                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    // Wait for a fold before the next seal, so folds overlap seals however slow a
+                    // fold is. A fixed 2 ms sleep gave 18 overlaps on a CI runner. Bounded, so a
+                    // reader that panicked cannot hang the sealer.
+                    let seen = folds.load(Ordering::Acquire);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while folds.load(Ordering::Acquire) == seen
+                        && std::time::Instant::now() < deadline
+                    {
+                        std::thread::sleep(std::time::Duration::from_micros(200));
+                    }
                 }
                 stop.store(true, Ordering::Release);
             })
         };
 
         let reader = {
-            let (tip, dir, stop) = (tip.clone(), dir.path().to_path_buf(), stop.clone());
+            let (tip, dir, stop, folds) = (
+                tip.clone(),
+                dir.path().to_path_buf(),
+                stop.clone(),
+                folds.clone(),
+            );
             scope.spawn(move || {
                 let mut runs = 0usize;
                 let mut raced = 0usize;
@@ -191,6 +218,7 @@ fn no_row_is_double_counted_or_dropped_while_the_nest_seals_underneath() {
                          Either a row was counted on both sides of the seam or it fell between them."
                     );
                     runs += 1;
+                    folds.fetch_add(1, Ordering::Release);
                     if still_sealing {
                         raced += 1;
                     }
@@ -215,14 +243,23 @@ fn no_row_is_double_counted_or_dropped_while_the_nest_seals_underneath() {
     });
 
     // And once everything is sealed, the same answer with nothing left in hot.
-    assert_eq!(tip.snapshot_rows_len(), 0, "every row should have been pruned from hot");
+    assert_eq!(
+        tip.snapshot_rows_len(),
+        0,
+        "every row should have been pruned from hot"
+    );
 }
 
 /// A hot row at or below the watermark is in a cold segment too. Refused, not counted twice.
 #[test]
 fn a_hot_row_below_the_watermark_is_refused_not_double_counted() {
     let dir = tempfile::tempdir().unwrap();
-    let rows = vec![Ev { block: 1, from: "0xaa".into(), to: "0xbb".into(), value: 5 }];
+    let rows = vec![Ev {
+        block: 1,
+        from: "0xaa".into(),
+        to: "0xbb".into(),
+        value: 5,
+    }];
     seal_segment(dir.path(), "000001", &rows);
 
     let tip = Arc::new(MemoryTip::new());
@@ -237,7 +274,9 @@ fn a_hot_row_below_the_watermark_is_refused_not_double_counted() {
 
     let mut catalog = Catalog::new();
     catalog.register(SealedSegments::discover("t", dir.path()).unwrap());
-    let db = Burrmill::with_threads(catalog, 2).unwrap().with_hot_tip(tip, "block_number");
+    let db = Burrmill::with_threads(catalog, 2)
+        .unwrap()
+        .with_hot_tip(tip, "block_number");
     let err = db.query(SQL, Limits::default()).unwrap_err();
     assert!(
         matches!(err, burrmill::BurrmillError::Seam(_)),

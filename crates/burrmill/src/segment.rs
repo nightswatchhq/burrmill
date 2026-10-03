@@ -89,7 +89,12 @@ impl SealedSegments {
             .filter(|p| p.extension().is_some_and(|x| x == "parquet"))
             .collect();
         files.sort();
-        Ok(Self { name: name.into(), files, source: Some((dir.to_path_buf(), None)), cache: Default::default() })
+        Ok(Self {
+            name: name.into(),
+            files,
+            source: Some((dir.to_path_buf(), None)),
+            cache: Default::default(),
+        })
     }
 
     /// A set over an explicit list of files, in the order given after sorting.
@@ -102,7 +107,12 @@ impl SealedSegments {
         files.sort();
         // No source: an explicit list is exactly what the caller asked for and refreshing it would
         // be inventing an intent. Such a set is not re-listed for the seam, and `refresh` says so.
-        Self { name: name.into(), files, source: None, cache: Default::default() }
+        Self {
+            name: name.into(),
+            files,
+            source: None,
+            cache: Default::default(),
+        }
     }
 
     /// A set restricted to the segments whose file name starts with `prefix`.
@@ -113,7 +123,10 @@ impl SealedSegments {
     pub fn with_prefix(&self, name: impl Into<String>, prefix: &str) -> Self {
         Self {
             name: name.into(),
-            source: self.source.as_ref().map(|(d, _)| (d.clone(), Some(prefix.to_string()))),
+            source: self
+                .source
+                .as_ref()
+                .map(|(d, _)| (d.clone(), Some(prefix.to_string()))),
             cache: Default::default(),
             files: self
                 .files
@@ -135,7 +148,9 @@ impl SealedSegments {
     /// the watermark promises. A set built from an explicit file list has nothing to refresh from
     /// and comes back unchanged.
     pub fn refresh(&self) -> Result<Self> {
-        let Some((dir, prefix)) = &self.source else { return Ok(self.clone()) };
+        let Some((dir, prefix)) = &self.source else {
+            return Ok(self.clone());
+        };
         let all = Self::discover(self.name.clone(), dir)?;
         Ok(match prefix {
             Some(p) => all.with_prefix(self.name.clone(), p),

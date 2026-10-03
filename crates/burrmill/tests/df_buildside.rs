@@ -28,8 +28,18 @@ fn fixture() -> (tempfile::TempDir, Engine) {
     let segs = tmp.path().join("segments");
     std::fs::create_dir(&segs).unwrap();
     let n = 50_000i64;
-    write(&segs, "big", (0..n).map(|i| (i % 211 != 0).then_some(i % 100)).collect(), (0..n).collect());
-    write(&segs, "small", (0..12).map(|i| Some(95 + i)).collect(), (0..12).collect());
+    write(
+        &segs,
+        "big",
+        (0..n).map(|i| (i % 211 != 0).then_some(i % 100)).collect(),
+        (0..n).collect(),
+    );
+    write(
+        &segs,
+        "small",
+        (0..12).map(|i| Some(95 + i)).collect(),
+        (0..12).collect(),
+    );
     (tmp, Engine::open_segments(&segs).unwrap())
 }
 
@@ -37,7 +47,11 @@ fn one(e: &Engine, sql: &str) -> (String, String) {
     let b = &e.sql(sql).unwrap_or_else(|err| panic!("{sql}\n{err}"))[0];
     let col = |i: usize| {
         let text = arrow::compute::cast(b.column(i), &DataType::Utf8).unwrap();
-        text.as_any().downcast_ref::<StringArray>().unwrap().value(0).to_string()
+        text.as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .value(0)
+            .to_string()
     };
     (col(0), col(1))
 }
@@ -51,8 +65,15 @@ fn build_side(e: &Engine, sql: &str) -> String {
             if kind.value(i) != "physical_plan" {
                 continue;
             }
-            let after = plans.value(i).split("HashJoinExec").nth(1).expect("a hash join");
-            let scan = after.split("segments/").nth(1).expect("a scan under the join");
+            let after = plans
+                .value(i)
+                .split("HashJoinExec")
+                .nth(1)
+                .expect("a hash join");
+            let scan = after
+                .split("segments/")
+                .nth(1)
+                .expect("a scan under the join");
             return scan.split('-').next().unwrap().to_string();
         }
     }
@@ -63,7 +84,9 @@ fn build_side(e: &Engine, sql: &str) -> String {
 fn the_build_side_is_the_smaller_input_and_the_answer_is_the_same() {
     let (_tmp, e) = fixture();
     for join in ["JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN"] {
-        let big_first = format!("SELECT count(*), coalesce(sum(b.v + s.v), 0) FROM big b {join} small s ON b.k = s.k");
+        let big_first = format!(
+            "SELECT count(*), coalesce(sum(b.v + s.v), 0) FROM big b {join} small s ON b.k = s.k"
+        );
         assert_eq!(build_side(&e, &big_first), "small", "{big_first}");
         // The same join written the other way round, which DataFusion already builds on `small`.
         let mirrored = match join {
@@ -71,12 +94,22 @@ fn the_build_side_is_the_smaller_input_and_the_answer_is_the_same() {
             "RIGHT JOIN" => "LEFT JOIN",
             j => j,
         };
-        let small_first =
-            format!("SELECT count(*), coalesce(sum(b.v + s.v), 0) FROM small s {mirrored} big b ON b.k = s.k");
+        let small_first = format!(
+            "SELECT count(*), coalesce(sum(b.v + s.v), 0) FROM small s {mirrored} big b ON b.k = s.k"
+        );
         assert_eq!(build_side(&e, &small_first), "small", "{small_first}");
         assert_eq!(one(&e, &big_first), one(&e, &small_first), "{join}");
     }
     // Brute force for the inner join: keys 95..=99 match one small row each.
-    let matched = (0..50_000i64).filter(|i| i % 211 != 0 && i % 100 >= 95).count() as i64;
-    assert_eq!(one(&e, "SELECT count(*), 0 FROM big b JOIN small s ON b.k = s.k").0, matched.to_string());
+    let matched = (0..50_000i64)
+        .filter(|i| i % 211 != 0 && i % 100 >= 95)
+        .count() as i64;
+    assert_eq!(
+        one(
+            &e,
+            "SELECT count(*), 0 FROM big b JOIN small s ON b.k = s.k"
+        )
+        .0,
+        matched.to_string()
+    );
 }

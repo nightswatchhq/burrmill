@@ -13,7 +13,9 @@ const DATA: &str = "WITH c(id, b) AS (VALUES (1, 10), (1, 10), (1, 30), (2, 10),
 fn rows(sql: &str) -> Vec<Value> {
     let engine = Engine::open_empty().unwrap();
     let got = engine.sql(sql).unwrap_or_else(|e| panic!("{sql}\n{e}"));
-    got.iter().flat_map(|b| burrmill::df::encode::rows(b).unwrap()).collect()
+    got.iter()
+        .flat_map(|b| burrmill::df::encode::rows(b).unwrap())
+        .collect()
 }
 
 #[test]

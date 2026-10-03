@@ -35,14 +35,30 @@ pub(crate) fn duck(nest: &Nest) -> anyhow::Result<duckdb::Connection> {
                 .fields()
                 .iter()
                 .map(|f| {
-                    let ty = if *f.data_type() == arrow::datatypes::DataType::UInt64 { "UBIGINT" } else { "VARCHAR" };
+                    let ty = if *f.data_type() == arrow::datatypes::DataType::UInt64 {
+                        "UBIGINT"
+                    } else {
+                        "VARCHAR"
+                    };
                     format!("\"{}\" {ty}", f.name())
                 })
                 .collect();
-            conn.execute_batch(&format!("CREATE TABLE \"{}__raw\" ({});", t.name, cols.join(", ")))?;
-            conn.execute_batch(&format!("CREATE VIEW \"{}\" AS SELECT *{derived} FROM \"{}__raw\";", t.name, t.name))?;
+            conn.execute_batch(&format!(
+                "CREATE TABLE \"{}__raw\" ({});",
+                t.name,
+                cols.join(", ")
+            ))?;
+            conn.execute_batch(&format!(
+                "CREATE VIEW \"{}\" AS SELECT *{derived} FROM \"{}__raw\";",
+                t.name, t.name
+            ))?;
         } else {
-            let list = t.files.iter().map(|(p, _)| format!("'{}'", p.display())).collect::<Vec<_>>().join(",");
+            let list = t
+                .files
+                .iter()
+                .map(|(p, _)| format!("'{}'", p.display()))
+                .collect::<Vec<_>>()
+                .join(",");
             conn.execute_batch(&format!(
                 "CREATE VIEW \"{}\" AS SELECT *{derived} FROM read_parquet([{list}], union_by_name=true);",
                 t.name
@@ -54,7 +70,10 @@ pub(crate) fn duck(nest: &Nest) -> anyhow::Result<duckdb::Connection> {
 
 fn sorted_rows(v: Value) -> Vec<String> {
     let mut rows: Vec<String> = match v {
-        Value::Array(a) => a.iter().map(|r| serde_json::to_string(r).unwrap()).collect(),
+        Value::Array(a) => a
+            .iter()
+            .map(|r| serde_json::to_string(r).unwrap())
+            .collect(),
         _ => vec![],
     };
     rows.sort();
@@ -74,19 +93,32 @@ pub fn run(root: &str) -> anyhow::Result<()> {
         match conn.execute_batch(&v.text) {
             Ok(()) => duck_ok.push(true),
             Err(e) => {
-                println!("DUCK-FAIL {} ({}): {}", v.name, v.file, first_line(&e.to_string()));
+                println!(
+                    "DUCK-FAIL {} ({}): {}",
+                    v.name,
+                    v.file,
+                    first_line(&e.to_string())
+                );
                 duck_ok.push(false);
             }
         }
     }
 
     let root_owned = root.to_path_buf();
-    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let views: Vec<(String, String)> = nest
+        .views
+        .iter()
+        .map(|v| (v.name.clone(), v.body.clone()))
+        .collect();
     let (engine, reg) = std::thread::spawn(move || -> anyhow::Result<_> {
         let mut e = burrmill::Engine::open_nest(&root_owned)?;
         let reg: Vec<Option<String>> = views
             .iter()
-            .map(|(n, b)| e.register_view(n, b).err().map(|e| first_line(&e.to_string())))
+            .map(|(n, b)| {
+                e.register_view(n, b)
+                    .err()
+                    .map(|e| first_line(&e.to_string()))
+            })
             .collect();
         Ok((e, reg))
     })
@@ -112,7 +144,9 @@ pub fn run(root: &str) -> anyhow::Result<()> {
         let q = sql.clone();
         let t = Instant::now();
         let got = std::thread::spawn(move || -> Result<Vec<String>, String> {
-            let batches = e2.sql(&q).map_err(|e| first_line(&e.to_string().replace('\n', " | ")))?;
+            let batches = e2
+                .sql(&q)
+                .map_err(|e| first_line(&e.to_string().replace('\n', " | ")))?;
             let mut rows = Vec::new();
             for b in &batches {
                 rows.extend(burrmill::df::encode::rows(b).map_err(|e| e.to_string())?);
@@ -126,7 +160,10 @@ pub fn run(root: &str) -> anyhow::Result<()> {
             (Ok(w), Ok(g)) if w == g => {
                 same += 1;
                 // Warm medians when asked: the parity run above is each side's first, cold, query.
-                let (duck_ms, bm_ms) = match std::env::var("TIMING").ok().and_then(|t| t.parse::<usize>().ok()) {
+                let (duck_ms, bm_ms) = match std::env::var("TIMING")
+                    .ok()
+                    .and_then(|t| t.parse::<usize>().ok())
+                {
                     Some(n) if n > 0 => {
                         let median = |mut v: Vec<u128>| {
                             v.sort_unstable();
@@ -188,16 +225,39 @@ pub fn run(root: &str) -> anyhow::Result<()> {
             }
             (Ok(w), Ok(g)) => {
                 diff += 1;
-                let at = w.iter().zip(&g).position(|(a, b)| a != b).unwrap_or(w.len().min(g.len()));
-                println!("DIFF  {:<34} rows duck={} burrmill={}", v.name, w.len(), g.len());
-                println!("      duck     {}", w.get(at).map(|s| s.chars().take(300).collect::<String>()).unwrap_or_default());
-                println!("      burrmill {}", g.get(at).map(|s| s.chars().take(300).collect::<String>()).unwrap_or_default());
+                let at = w
+                    .iter()
+                    .zip(&g)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(w.len().min(g.len()));
+                println!(
+                    "DIFF  {:<34} rows duck={} burrmill={}",
+                    v.name,
+                    w.len(),
+                    g.len()
+                );
+                println!(
+                    "      duck     {}",
+                    w.get(at)
+                        .map(|s| s.chars().take(300).collect::<String>())
+                        .unwrap_or_default()
+                );
+                println!(
+                    "      burrmill {}",
+                    g.get(at)
+                        .map(|s| s.chars().take(300).collect::<String>())
+                        .unwrap_or_default()
+                );
             }
             (Ok(_), Err(e)) => {
                 fail += 1;
                 println!("FAIL  {:<34} {e}", v.name);
             }
-            (Err(e), _) => println!("DUCK-QUERY-FAIL {:<28} {}", v.name, first_line(&e.to_string())),
+            (Err(e), _) => println!(
+                "DUCK-QUERY-FAIL {:<28} {}",
+                v.name,
+                first_line(&e.to_string())
+            ),
         }
     }
 
@@ -206,12 +266,18 @@ pub fn run(root: &str) -> anyhow::Result<()> {
     // `main` is inside a runtime, where dropping the engine panics; an early `?` here would drop it.
     let checked = (|| -> anyhow::Result<()> {
         if let Ok(dir) = std::fs::read_dir(root.join("checks")) {
-            let mut files: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "sql")).collect();
+            let mut files: Vec<_> = dir
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "sql"))
+                .collect();
             files.sort();
             for f in files {
                 let stem = f.file_stem().unwrap().to_string_lossy().to_string();
                 // A check with no expected file expects zero rows, as its header says.
-                let expected: Value = match std::fs::read_to_string(root.join("checks/expected").join(format!("{stem}.json"))) {
+                let expected: Value = match std::fs::read_to_string(
+                    root.join("checks/expected").join(format!("{stem}.json")),
+                ) {
                     Ok(t) => serde_json::from_str(&t)?,
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Array(vec![]),
                     Err(e) => return Err(e.into()),
@@ -222,7 +288,8 @@ pub fn run(root: &str) -> anyhow::Result<()> {
                     .collect::<Vec<_>>()
                     .join("\n");
                 let sql = sql.trim().trim_end_matches(';').to_string();
-                let duck = crate::encode_parity::nuthatch_rows(&conn, &sql).map_err(|e| first_line(&e.to_string()));
+                let duck = crate::encode_parity::nuthatch_rows(&conn, &sql)
+                    .map_err(|e| first_line(&e.to_string()));
                 let e2 = std::sync::Arc::clone(&engine);
                 let q = sql.clone();
                 let bm = std::thread::spawn(move || -> Result<Value, String> {
@@ -240,14 +307,24 @@ pub fn run(root: &str) -> anyhow::Result<()> {
                 checks_ok += bm_ok as usize;
                 println!(
                     "CHECK {stem:<14} burrmill={} duckdb={}",
-                    if bm_ok { "expected".to_string() } else { format!("{bm:?}") },
-                    if duck.as_ref().is_ok_and(|v| *v == expected) { "expected".to_string() } else { format!("{duck:?}") }
+                    if bm_ok {
+                        "expected".to_string()
+                    } else {
+                        format!("{bm:?}")
+                    },
+                    if duck.as_ref().is_ok_and(|v| *v == expected) {
+                        "expected".to_string()
+                    } else {
+                        format!("{duck:?}")
+                    }
                 );
             }
         }
         Ok(())
     })();
-    std::thread::spawn(move || drop(engine)).join().expect("drop engine");
+    std::thread::spawn(move || drop(engine))
+        .join()
+        .expect("drop engine");
     checked?;
     println!(
         "VIEWS\tviews={}\tsame={same}\tdiffering={diff}\tfailing={fail}\tchecks={checks_ok}/{checks}",
@@ -261,7 +338,11 @@ pub fn run(root: &str) -> anyhow::Result<()> {
 pub fn analyze(root: &str, view: &str) -> anyhow::Result<()> {
     let nest = load_nest(Path::new(root))?;
     let root_owned = Path::new(root).to_path_buf();
-    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let views: Vec<(String, String)> = nest
+        .views
+        .iter()
+        .map(|v| (v.name.clone(), v.body.clone()))
+        .collect();
     let view = view.to_string();
     std::thread::spawn(move || -> anyhow::Result<()> {
         let mut e = burrmill::Engine::open_nest(&root_owned)?;
@@ -284,7 +365,10 @@ pub fn analyze(root: &str, view: &str) -> anyhow::Result<()> {
         for b in e.sql(&format!("EXPLAIN ANALYZE {sql}"))? {
             let plan = b.column(1);
             let plan = arrow::compute::cast(plan, &arrow::datatypes::DataType::Utf8)?;
-            let plan = plan.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+            let plan = plan
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap();
             for i in 0..plan.len() {
                 println!("{}", plan.value(i));
             }
@@ -301,7 +385,11 @@ pub fn analyze(root: &str, view: &str) -> anyhow::Result<()> {
 pub fn explain(root: &str, view: &str) -> anyhow::Result<()> {
     let nest = load_nest(Path::new(root))?;
     let root_owned = Path::new(root).to_path_buf();
-    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let views: Vec<(String, String)> = nest
+        .views
+        .iter()
+        .map(|v| (v.name.clone(), v.body.clone()))
+        .collect();
     let view = view.to_string();
     std::thread::spawn(move || -> anyhow::Result<()> {
         let mut e = burrmill::Engine::open_nest(&root_owned)?;
@@ -316,9 +404,15 @@ pub fn explain(root: &str, view: &str) -> anyhow::Result<()> {
         };
         for b in e.sql(&format!("EXPLAIN {sql}"))? {
             let kind = arrow::compute::cast(b.column(0), &arrow::datatypes::DataType::Utf8)?;
-            let kind = kind.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+            let kind = kind
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap();
             let plan = arrow::compute::cast(b.column(1), &arrow::datatypes::DataType::Utf8)?;
-            let plan = plan.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+            let plan = plan
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap();
             for i in 0..plan.len() {
                 println!("== {}\n{}", kind.value(i), plan.value(i));
             }
@@ -339,7 +433,11 @@ pub fn sql_files(root: &str, files: &[String]) -> anyhow::Result<()> {
         let _ = conn.execute_batch(&v.text);
     }
     let root_owned = Path::new(root).to_path_buf();
-    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let views: Vec<(String, String)> = nest
+        .views
+        .iter()
+        .map(|v| (v.name.clone(), v.body.clone()))
+        .collect();
     let engine = std::thread::spawn(move || -> anyhow::Result<_> {
         let mut e = burrmill::Engine::open_nest(&root_owned)?;
         for (n, b) in &views {
@@ -355,29 +453,39 @@ pub fn sql_files(root: &str, files: &[String]) -> anyhow::Result<()> {
         v[v.len() / 2]
     };
     for f in files {
-        let sql = std::fs::read_to_string(f)?.trim().trim_end_matches(';').to_string();
+        let sql = std::fs::read_to_string(f)?
+            .trim()
+            .trim_end_matches(';')
+            .to_string();
         let duck_rows = crate::encode_parity::nuthatch_rows(&conn, &sql).map(sorted_rows);
         let duck_ms = match &duck_rows {
-            Ok(_) => median((0..5).map(|_| {
-                let t = Instant::now();
-                let mut s = conn.prepare(&sql).unwrap();
-                for b in s.query_arrow([]).unwrap() {
-                    std::hint::black_box(b.num_rows());
-                }
-                t.elapsed().as_millis()
-            }).collect()),
+            Ok(_) => median(
+                (0..5)
+                    .map(|_| {
+                        let t = Instant::now();
+                        let mut s = conn.prepare(&sql).unwrap();
+                        for b in s.query_arrow([]).unwrap() {
+                            std::hint::black_box(b.num_rows());
+                        }
+                        t.elapsed().as_millis()
+                    })
+                    .collect(),
+            ),
             Err(_) => 0,
         };
         let e2 = std::sync::Arc::clone(&engine);
         let q = sql.clone();
         let (rows, ms) = std::thread::spawn(move || -> (Result<Vec<String>, String>, Vec<u128>) {
-            let rows = e2.sql(&q).map_err(|e| first_line(&e.to_string())).and_then(|bs| {
-                let mut r = Vec::new();
-                for b in &bs {
-                    r.extend(burrmill::df::encode::rows(b).map_err(|e| e.to_string())?);
-                }
-                Ok(sorted_rows(Value::Array(r)))
-            });
+            let rows = e2
+                .sql(&q)
+                .map_err(|e| first_line(&e.to_string()))
+                .and_then(|bs| {
+                    let mut r = Vec::new();
+                    for b in &bs {
+                        r.extend(burrmill::df::encode::rows(b).map_err(|e| e.to_string())?);
+                    }
+                    Ok(sorted_rows(Value::Array(r)))
+                });
             let ms = (0..5)
                 .map(|_| {
                     let t = Instant::now();
@@ -405,18 +513,28 @@ pub fn sql_files(root: &str, files: &[String]) -> anyhow::Result<()> {
         };
         println!(
             "{f}\n  duckdb   {} ms={duck_ms}\n  burrmill {} ms={}",
-            match &duck_rows { Ok(r) => format!("rows={} digest={}", r.len(), digest(r)), Err(e) => format!("ERROR {}", first_line(&e.to_string())) },
-            match &rows { Ok(r) => format!("rows={} digest={}", r.len(), digest(r)), Err(e) => format!("ERROR {e}") },
+            match &duck_rows {
+                Ok(r) => format!("rows={} digest={}", r.len(), digest(r)),
+                Err(e) => format!("ERROR {}", first_line(&e.to_string())),
+            },
+            match &rows {
+                Ok(r) => format!("rows={} digest={}", r.len(), digest(r)),
+                Err(e) => format!("ERROR {e}"),
+            },
             median(ms)
         );
     }
-    std::thread::spawn(move || drop(engine)).join().expect("drop");
+    std::thread::spawn(move || drop(engine))
+        .join()
+        .expect("drop");
     Ok(())
 }
 
 /// DuckDB set up as nuthatch sets it up and an `Engine` over the same nest, both with every
 /// authored view, and the names of the views both answer identically.
-pub fn both_engines(root: &str) -> anyhow::Result<(duckdb::Connection, burrmill::Engine, Vec<String>)> {
+pub fn both_engines(
+    root: &str,
+) -> anyhow::Result<(duckdb::Connection, burrmill::Engine, Vec<String>)> {
     let nest = load_nest(Path::new(root))?;
     let conn = duck(&nest)?;
     let mut ok = Vec::new();
@@ -426,7 +544,11 @@ pub fn both_engines(root: &str) -> anyhow::Result<(duckdb::Connection, burrmill:
         }
     }
     let root_owned = Path::new(root).to_path_buf();
-    let views: Vec<(String, String)> = nest.views.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let views: Vec<(String, String)> = nest
+        .views
+        .iter()
+        .map(|v| (v.name.clone(), v.body.clone()))
+        .collect();
     let (engine, registered) = std::thread::spawn(move || -> anyhow::Result<_> {
         let mut e = burrmill::Engine::open_nest(&root_owned)?;
         let mut reg = Vec::new();
@@ -442,7 +564,9 @@ pub fn both_engines(root: &str) -> anyhow::Result<(duckdb::Connection, burrmill:
     let mut same = Vec::new();
     for name in ok.into_iter().filter(|n| registered.contains(n)) {
         let sql = format!("SELECT * FROM \"{name}\"");
-        let want = crate::encode_parity::nuthatch_rows(&conn, &sql).map(sorted_rows).ok();
+        let want = crate::encode_parity::nuthatch_rows(&conn, &sql)
+            .map(sorted_rows)
+            .ok();
         let got = std::thread::scope(|s| {
             s.spawn(|| {
                 engine.sql(&sql).ok().map(|bs| {
@@ -479,21 +603,39 @@ pub fn rewrite_parity(root: &str, dir: &str) -> anyhow::Result<()> {
     let portable = duck(&nest)?;
     for v in &rewritten {
         if let Err(e) = portable.execute_batch(&v.text) {
-            println!("REWRITE-DUCK-FAIL {} {}", v.name, first_line(&e.to_string()));
+            println!(
+                "REWRITE-DUCK-FAIL {} {}",
+                v.name,
+                first_line(&e.to_string())
+            );
         }
     }
     let root_owned = Path::new(root).to_path_buf();
-    let bodies: Vec<(String, String)> = rewritten.iter().map(|v| (v.name.clone(), v.body.clone())).collect();
+    let bodies: Vec<(String, String)> = rewritten
+        .iter()
+        .map(|v| (v.name.clone(), v.body.clone()))
+        .collect();
     let (engine, reg) = std::thread::spawn(move || -> anyhow::Result<_> {
         let mut e = burrmill::Engine::open_nest(&root_owned)?;
-        let reg: Vec<Option<String>> =
-            bodies.iter().map(|(n, b)| e.register_view(n, b).err().map(|e| first_line(&e.to_string()))).collect();
+        let reg: Vec<Option<String>> = bodies
+            .iter()
+            .map(|(n, b)| {
+                e.register_view(n, b)
+                    .err()
+                    .map(|e| first_line(&e.to_string()))
+            })
+            .collect();
         Ok((e, reg))
     })
     .join()
     .expect("engine")?;
     let engine = std::sync::Arc::new(engine);
-    let text_of = |name: &str| nest.views.iter().find(|v| v.name == name).map(|v| v.text.clone());
+    let text_of = |name: &str| {
+        nest.views
+            .iter()
+            .find(|v| v.name == name)
+            .map(|v| v.text.clone())
+    };
     let (mut ok, mut bad) = (0, 0);
     for (i, v) in rewritten.iter().enumerate() {
         let sql = format!("SELECT * FROM \"{}\"", v.name);
@@ -535,18 +677,34 @@ pub fn rewrite_parity(root: &str, dir: &str) -> anyhow::Result<()> {
                     "BURRMILL-DIFFERS rows {} vs {}\n      duck     {}\n      burrmill {}",
                     a.len(),
                     b.len(),
-                    a.get(at).map(|s| s.chars().take(240).collect::<String>()).unwrap_or_default(),
-                    b.get(at).map(|s| s.chars().take(240).collect::<String>()).unwrap_or_default()
+                    a.get(at)
+                        .map(|s| s.chars().take(240).collect::<String>())
+                        .unwrap_or_default(),
+                    b.get(at)
+                        .map(|s| s.chars().take(240).collect::<String>())
+                        .unwrap_or_default()
                 )
             }
             (_, Err(e)) => format!("BURRMILL-FAILS {e}"),
             (Err(_), _) => "duckdb-fails".to_string(),
         };
-        let good = !vs_original.contains("DIFFERS") && !vs_original.contains("FAILS") && vs_engine.starts_with("burrmill-same");
-        if good { ok += 1 } else { bad += 1 }
-        println!("{} {:<36} {vs_original:<22} {vs_engine}", if good { "OK  " } else { "TODO" }, v.name);
+        let good = !vs_original.contains("DIFFERS")
+            && !vs_original.contains("FAILS")
+            && vs_engine.starts_with("burrmill-same");
+        if good {
+            ok += 1
+        } else {
+            bad += 1
+        }
+        println!(
+            "{} {:<36} {vs_original:<22} {vs_engine}",
+            if good { "OK  " } else { "TODO" },
+            v.name
+        );
     }
     println!("REWRITE\tviews={}\tok={ok}\ttodo={bad}", rewritten.len());
-    std::thread::spawn(move || drop(engine)).join().expect("drop");
+    std::thread::spawn(move || drop(engine))
+        .join()
+        .expect("drop");
     Ok(())
 }
