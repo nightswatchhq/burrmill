@@ -297,8 +297,14 @@ impl MiniSession {
                     Arc::new(super::rangejoin::RangeJoin)
                         as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
                     Arc::new(super::smallinputs::SmallInputs),
-                    Arc::new(super::cancel::Cancellable(cancel)),
                 ])
+                // Only a bounded pool charges the views; unbounded, the copy buys nothing.
+                .chain(budget.is_some().then(|| {
+                    Arc::new(super::compactviews::CompactSortedViews)
+                        as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+                }))
+                .chain([Arc::new(super::cancel::Cancellable(cancel))
+                    as Arc<dyn PhysicalOptimizerRule + Send + Sync>])
                 .collect(),
             execution_props: ExecutionProps::new(),
             table_options: TableOptions::new(),

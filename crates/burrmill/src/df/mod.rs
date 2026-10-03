@@ -19,6 +19,7 @@ use crate::limits::Limits;
 mod cancel;
 mod catalog;
 mod checked;
+mod compactviews;
 pub use textfn::TextFunction;
 mod constants;
 mod correlate;
@@ -435,6 +436,7 @@ fn scans(p: &Arc<dyn datafusion_physical_plan::ExecutionPlan>) -> Result<u64> {
         | "PlaceholderRowExec"
         | "ScalarSubqueryExec"
         | "CancelExec"
+        | "CompactViewsExec"
         | "RangeJoinExec"
         | "SharedExec" => 0,
         other => {
