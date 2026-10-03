@@ -315,6 +315,10 @@ const CORPUS: &[&str] = &[
     "SELECT \"from\" AS who, sum(value_dec) AS s FROM transfer GROUP BY who ORDER BY CAST(s AS VARCHAR), who",
     // `%` by zero is NULL, a row at a time.
     "SELECT block_number % 0 AS a, log_index % 0 AS b, 7 % 0 AS c, 7.5::DOUBLE % 0 AS d, 7.5 % 0 AS e, value_dec % 0 AS f, block_number % log_index AS g FROM transfer ORDER BY block_number, log_index",
+    // The least signed integer `% -1` overflows, as its `//` does (#41).
+    "SELECT CAST(-9223372036854775808 AS BIGINT) % -1 AS a",
+    "SELECT CAST(-2147483648 AS INTEGER) % -1 AS a",
+    "SELECT CAST(-9223372036854775807 AS BIGINT) % -1 AS a, CAST(-7 AS BIGINT) % -2 AS b, CAST(-2147483647 AS INTEGER) % -1 AS c",
     // An ordered aggregate orders its own input, not that of an unordered list() beside it.
     "SELECT string_agg(x, ',' ORDER BY x DESC) AS s, to_json(array_agg(x)) AS l, to_json(list(x)) AS m FROM (VALUES ('a'), ('c'), ('b'), (NULL)) t(x)",
     "SELECT \"from\", string_agg(value, ',' ORDER BY block_number DESC, log_index DESC) AS s, to_json(list(value)) AS m FROM transfer GROUP BY 1 ORDER BY 1",
