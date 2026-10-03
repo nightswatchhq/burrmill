@@ -21,7 +21,9 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
-use datafusion_execution::memory_pool::{GreedyMemoryPool, PeakRecordingPool, TrackConsumersPool};
+use datafusion_execution::memory_pool::{
+    GreedyMemoryPool, MemoryPool, PeakRecordingPool, TrackConsumersPool,
+};
 use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
@@ -79,11 +81,20 @@ impl std::fmt::Debug for MiniSession {
     }
 }
 
+/// A budget's statement pool: the bound less the eighth the footer cache keeps outside it.
+pub(super) fn budget_pool(memory_bytes: usize) -> Arc<dyn MemoryPool> {
+    Arc::new(TrackConsumersPool::new(
+        GreedyMemoryPool::new(memory_bytes - memory_bytes / 8),
+        NonZeroUsize::new(5).expect("five"),
+    ))
+}
+
 impl MiniSession {
     pub fn new(
         threads: usize,
         fold: FoldTables,
         budget: Option<&super::Budget>,
+        shared: Option<&super::SharedPool>,
         cancel: crate::CancelToken,
     ) -> DFResult<Self> {
         // The token rides in the config too, for an owned operator that loops inside one poll.
@@ -119,12 +130,10 @@ impl MiniSession {
                 .with_cache_manager(
                     CacheManagerConfig::default().with_metadata_cache_limit(b.memory_bytes / 8),
                 )
-                .with_memory_pool(Arc::new(PeakRecordingPool::new(Arc::new(
-                    TrackConsumersPool::new(
-                        GreedyMemoryPool::new(b.memory_bytes - b.memory_bytes / 8),
-                        NonZeroUsize::new(5).expect("five"),
-                    ),
-                ))))
+                // The peak is this engine's own; `reserved` is the shared pool's.
+                .with_memory_pool(Arc::new(PeakRecordingPool::new(
+                    shared.map_or_else(|| budget_pool(b.memory_bytes), |p| Arc::clone(&p.0)),
+                )))
                 .with_disk_manager_builder(match &b.spill {
                     None => DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
                     Some((dir, cap)) => DiskManagerBuilder::default()

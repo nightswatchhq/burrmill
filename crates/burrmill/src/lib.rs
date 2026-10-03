@@ -68,7 +68,7 @@ pub const ENGINE: &str = concat!(
     env!("BURRMILL_SOURCE_HASH")
 );
 #[cfg(feature = "datafusion")]
-pub use df::{Budget, Engine};
+pub use df::{Budget, Engine, SharedPool};
 pub use exec::agg::Rows;
 pub use exec::{CancelToken, FoldMetrics};
 pub use gate::Gate;
