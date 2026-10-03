@@ -281,6 +281,20 @@ impl Engine {
     pub fn memory_reserved(&self) -> usize {
         self.session.runtime_env().memory_pool.reserved()
     }
+
+    /// The most the statements have held against a budgeted engine's pool since the last call, and
+    /// zero without a budget.
+    pub fn take_memory_peak(&self) -> usize {
+        let pool = &self.session.runtime_env().memory_pool;
+        match datafusion_execution::memory_pool::PeakRecordingPool::from_pool(pool.as_ref()) {
+            Some(p) => {
+                let peak = p.peak_reserved();
+                p.reset_peak();
+                peak
+            }
+            None => 0,
+        }
+    }
 }
 
 impl Engine {
