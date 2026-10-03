@@ -14,7 +14,8 @@ use arrow::array::{
 use arrow::compute::kernels::numeric;
 use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, DecimalType, Field, FieldRef, Int64Type, UInt64Type,
+    ArrowNativeTypeOp, ArrowPrimitiveType, DataType, Decimal128Type, Decimal256Type, DecimalType,
+    Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type, UInt64Type, i256,
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::binary::BinaryTypeCoercer;
@@ -675,19 +676,28 @@ impl ScalarUDFImpl for CheckedBinary {
 
 /// Arrow wraps the least signed integer `% -1` to 0; DuckDB refuses it, as it does that `//`.
 fn least_modulo_minus_one(l: &ArrayRef, r: &ArrayRef) -> Result<()> {
-    let bits = l.data_type().primitive_width().unwrap_or(8) * 8;
-    let least = i64::MIN >> (64 - bits);
-    let wide = |a: &ArrayRef| cast_with_options(a, &DataType::Int64, &CastOptions::default());
-    let (l, r) = (wide(l)?, wide(r)?);
-    let (l, r) = (l.as_primitive::<Int64Type>(), r.as_primitive::<Int64Type>());
-    for (x, y) in l.iter().zip(r) {
-        if let (Some(x), Some(-1)) = (x, y)
-            && x == least
-        {
-            return exec_err!("Overflow in division of {x} % -1");
+    fn scan<T: ArrowPrimitiveType>(l: &ArrayRef, r: &ArrayRef, least: T::Native) -> Result<()>
+    where
+        T::Native: std::fmt::Display,
+    {
+        let r = cast_with_options(r, l.data_type(), &CastOptions::default())?;
+        let minus_one = T::Native::ONE.neg_wrapping();
+        for (x, y) in l.as_primitive::<T>().iter().zip(r.as_primitive::<T>()) {
+            if x == Some(least) && y == Some(minus_one) {
+                return exec_err!("Overflow in division of {least} % -1");
+            }
         }
+        Ok(())
     }
-    Ok(())
+    match l.data_type() {
+        DataType::Int8 => scan::<Int8Type>(l, r, i8::MIN),
+        DataType::Int16 => scan::<Int16Type>(l, r, i16::MIN),
+        DataType::Int32 => scan::<Int32Type>(l, r, i32::MIN),
+        DataType::Int64 => scan::<Int64Type>(l, r, i64::MIN),
+        DataType::Decimal128(_, 0) => scan::<Decimal128Type>(l, r, i128::MIN),
+        DataType::Decimal256(_, 0) => scan::<Decimal256Type>(l, r, i256::MIN),
+        _ => Ok(()),
+    }
 }
 
 /// `checked_shl` / `checked_shr`: an integer shift as DuckDB 1.5 does it. Arrow takes the count
@@ -896,6 +906,93 @@ impl ScalarUDFImpl for ExactWide {
             Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(&out, 0)?))
         } else {
             Ok(ColumnarValue::Array(out))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{
+        Decimal256Array, Int8Array, Int16Array, Int32Array, Int64Array, PrimitiveArray,
+    };
+
+    fn pair<T: ArrowPrimitiveType>(a: PrimitiveArray<T>, b: PrimitiveArray<T>) -> [ArrayRef; 2] {
+        [Arc::new(a), Arc::new(b)]
+    }
+
+    // #50: the least value at 128 bits was `i64::MIN >> (64 - 128)`.
+    #[test]
+    fn least_modulo_minus_one_at_every_signed_width() {
+        let d128 = |v: Vec<i128>| {
+            Decimal128Array::from(v)
+                .with_precision_and_scale(38, 0)
+                .unwrap()
+        };
+        let d256 = |v: Vec<i256>| {
+            Decimal256Array::from(v)
+                .with_precision_and_scale(76, 0)
+                .unwrap()
+        };
+        let least = [
+            pair(
+                Int8Array::from(vec![7, i8::MIN]),
+                Int8Array::from(vec![-1, -1]),
+            ),
+            pair(
+                Int16Array::from(vec![7, i16::MIN]),
+                Int16Array::from(vec![-1, -1]),
+            ),
+            pair(
+                Int32Array::from(vec![7, i32::MIN]),
+                Int32Array::from(vec![-1, -1]),
+            ),
+            pair(
+                Int64Array::from(vec![7, i64::MIN]),
+                Int64Array::from(vec![-1, -1]),
+            ),
+            pair(d128(vec![7, i128::MIN]), d128(vec![-1, -1])),
+            pair(
+                d256(vec![i256::from(7), i256::MIN]),
+                d256(vec![i256::MINUS_ONE; 2]),
+            ),
+        ];
+        for [l, r] in &least {
+            let m = least_modulo_minus_one(l, r).unwrap_err().to_string();
+            assert!(
+                m.contains("Overflow in division of -"),
+                "{}: {m}",
+                l.data_type()
+            );
+        }
+        let answers = [
+            pair(
+                Int8Array::from(vec![i8::MIN + 1, i8::MIN]),
+                Int8Array::from(vec![-1, 2]),
+            ),
+            pair(
+                Int16Array::from(vec![i16::MIN + 1, i16::MIN]),
+                Int16Array::from(vec![-1, 2]),
+            ),
+            pair(
+                Int32Array::from(vec![i32::MIN + 1, i32::MIN]),
+                Int32Array::from(vec![-1, 2]),
+            ),
+            pair(
+                Int64Array::from(vec![i64::MIN + 1, i64::MIN]),
+                Int64Array::from(vec![-1, 2]),
+            ),
+            pair(
+                d128(vec![i64::MIN as i128, i128::MIN + 1]),
+                d128(vec![-1, -1]),
+            ),
+            pair(
+                d256(vec![i256::from_i128(i128::MIN), i256::MIN]),
+                d256(vec![i256::MINUS_ONE, i256::from(2)]),
+            ),
+        ];
+        for [l, r] in &answers {
+            assert!(least_modulo_minus_one(l, r).is_ok(), "{}", l.data_type());
         }
     }
 }
