@@ -116,7 +116,7 @@ fn arg_kind(t: &DataType) -> Option<()> {
             | Utf8
             | LargeUtf8
             | Utf8View
-            | Decimal128(_, 0)
+            | Decimal128(..)
     )
     .then_some(())
 }
@@ -143,6 +143,8 @@ fn value(a: &ArrayRef, i: usize) -> DFResult<V> {
         S::UInt32(Some(v)) => V::Int(v.into()),
         S::UInt64(Some(v)) => V::Int(v.into()),
         S::Decimal128(Some(v), _, 0) => V::Int(v),
+        // DuckDB formats a scaled DECIMAL as the DOUBLE it casts to.
+        S::Decimal128(Some(v), p, s) => V::Float(super::doubles::decimal_to_double(v, p, s)),
         S::Float32(Some(v)) => V::Float(v.into()),
         S::Float64(Some(v)) => V::Float(v),
         S::Utf8(Some(s)) | S::LargeUtf8(Some(s)) | S::Utf8View(Some(s)) => V::Str(s),
@@ -157,6 +159,8 @@ struct Spec {
     space: bool,
     zero: bool,
     alt: bool,
+    /// `,`: thousands separators in a decimal integer part.
+    group: bool,
     width: usize,
     precision: Option<usize>,
     fill: Option<char>,
@@ -185,6 +189,7 @@ fn percent(fmt: &str, vals: &[V]) -> DFResult<String> {
                 ' ' => s.space = true,
                 '0' => s.zero = true,
                 '#' => s.alt = true,
+                ',' => s.group = true,
                 _ => break,
             }
             chars.next();
@@ -196,6 +201,12 @@ fn percent(fmt: &str, vals: &[V]) -> DFResult<String> {
         }
         let Some(ty) = chars.next() else {
             return exec_err!("Invalid Input Error: printf format ends inside a specifier");
+        };
+        // DuckDB groups a hex or octal spec's value in decimal.
+        let ty = if s.group && matches!(ty, 'x' | 'X' | 'o') {
+            'd'
+        } else {
+            ty
         };
         let Some(v) = vals.get(next) else {
             return exec_err!("Invalid Input Error: printf needs more arguments than it was given");
@@ -403,6 +414,11 @@ fn render(v: &V, ty: char, s: Spec, braces: bool) -> DFResult<String> {
             );
         }
     };
+    let body = if s.group && matches!(ty, 'd' | 'i' | 'u' | 'f' | 'F') {
+        thousands(&body)
+    } else {
+        body
+    };
     Ok(pad(
         sign,
         &body,
@@ -500,4 +516,20 @@ fn shortest(a: f64) -> String {
     } else {
         format!("{m}e{}{:02}", if e < 0 { '-' } else { '+' }, e.abs())
     }
+}
+
+/// `1234567.5` as `1,234,567.5`: commas every three digits of the integer part.
+fn thousands(body: &str) -> String {
+    let (int, rest) = body
+        .find(|c: char| !c.is_ascii_digit())
+        .map_or((body, ""), |i| body.split_at(i));
+    let mut out = String::with_capacity(body.len() + int.len() / 3);
+    for (i, c) in int.chars().enumerate() {
+        if i > 0 && (int.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out.push_str(rest);
+    out
 }

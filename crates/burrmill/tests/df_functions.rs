@@ -400,3 +400,133 @@ fn text_to_decimal_reads_duckdbs_spellings() {
         assert!(e.contains("Could not convert string"), "{sql}: {e}");
     }
 }
+
+/// #20: statements DuckDB 1.5 answers, answered as it does, each value as DuckDB printed it.
+#[test]
+fn duckdb_answers_that_were_refusals() {
+    let engine = Engine::open_empty().unwrap();
+    for (sql, want) in [
+        (
+            "SELECT to_json(1.5::DOUBLE) a, to_json(0.1::DOUBLE) b, to_json(1e20::DOUBLE) c, to_json(1e-7::DOUBLE) d, \
+             to_json(2.0::DOUBLE) e, to_json(-0.0::DOUBLE) f, to_json(1e21::DOUBLE) g, to_json(1e-6::DOUBLE) h, \
+             to_json(123456789012345678901234.0::DOUBLE) i, to_json('nan'::DOUBLE) j, to_json('-inf'::DOUBLE) k, \
+             to_json(0.1::FLOAT) l",
+            serde_json::json!({"a": "1.5", "b": "0.1", "c": "100000000000000000000.0", "d": "1e-7", "e": "2.0",
+                "f": "-0.0", "g": "1e21", "h": "0.000001", "i": "1.2345678901234569e23", "j": "NaN",
+                "k": "-Infinity", "l": "0.10000000149011612"}),
+        ),
+        (
+            "SELECT to_json(1.50) a, to_json(100.00) b, to_json(-0.05) c, \
+             to_json(CAST(12345678901234567890.123 AS DECIMAL(38,3))) d, to_json(0.0) e, \
+             to_json(struct_pack(x := 1.5::DOUBLE, y := 2.25)) f, to_json([1.5::DOUBLE, NULL]) g, \
+             to_json(CAST(-12.340 AS DECIMAL(10,3))) h",
+            serde_json::json!({"a": "1.5", "b": "100.0", "c": "-0.05", "d": "12345678901234567890.123",
+                "e": "0.0", "f": "{\"x\":1.5,\"y\":2.25}", "g": "[1.5,null]", "h": "-12.34"}),
+        ),
+        (
+            "SELECT printf('%.2f', 1.5) a, printf('%f', 2.25) b, printf('%5.1f', 1.25) c, printf('%g', 1.5) d, \
+             printf('%e', 1.5) e, format('{}', 1.5) f, format('{}', 100.00) g, format('{:.3f}', 2.5) h, \
+             format('{}', CAST(12345678901234567890.123 AS DECIMAL(38,3))) i",
+            serde_json::json!({"a": "1.50", "b": "2.250000", "c": "  1.2", "d": "1.5", "e": "1.500000e+00",
+                "f": "1.5", "g": "100.0", "h": "2.500", "i": "1.2345678901234567e+19"}),
+        ),
+        (
+            "SELECT printf('%,d', 1234567) a, printf('%,d', -1234) b, printf('%,d', 12) c, \
+             printf('%,5d|%-,8d|%,x', 1234, 1234, 255) d, printf('%,f', 1234.5::DOUBLE) e, \
+             printf('%,.0f', 999.5::DOUBLE) f, printf('%,.2f', 1234567.891) g",
+            serde_json::json!({"a": "1,234,567", "b": "-1,234", "c": "12", "d": "1,234|1,234   |255",
+                "e": "1,234.500000", "f": "1,000", "g": "1,234,567.89"}),
+        ),
+        (
+            "SELECT hex(CAST(255 AS HUGEINT)) a, hex(CAST(-1 AS HUGEINT)) b, hex(CAST(0 AS HUGEINT)) c, \
+             hex(CAST(-256 AS HUGEINT)) d",
+            serde_json::json!({"a": "FF", "b": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", "c": "0",
+                "d": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00"}),
+        ),
+        (
+            "SELECT if(1 < 2, 'a', 'b') a, if(NULL, 1, 2) b, if(false, 1, 2.5) c, \
+             'abc' ^@ 'ab' d, 'abc' ^@ 'b' e, NULL ^@ 'a' f, 'ab' || 'c' ^@ 'abc' g",
+            serde_json::json!({"a": "a", "b": 2, "c": "2.5", "d": true, "e": false, "f": null, "g": true}),
+        ),
+        (
+            "SELECT list_reverse_sort([3, NULL, 1, 2])[1] a, list_reverse_sort([3, NULL, 1, 2])[4] b, \
+             list_reverse_sort(['b', 'a', NULL])[2] c, list_reverse_sort(NULL) d",
+            serde_json::json!({"a": 3, "b": null, "c": "a", "d": null}),
+        ),
+        (
+            "SELECT split_part('a,b,c', ',', 0) a, split_part('a,b,c', ',', -1) b, split_part('a,b,c', ',', 5) c, \
+             TIMESTAMP '2024-01-02 03:04' = TIMESTAMP '2024-01-02 03:04:00' AS d, \
+             CAST(TIMESTAMP '2024-01-02T03:04' AS VARCHAR) AS e",
+            serde_json::json!({"a": "", "b": "c", "c": "", "d": true, "e": "2024-01-02 03:04:00"}),
+        ),
+        (
+            "SELECT count(*) AS n, count(*) FILTER (WHERE u < '2.5') AS m FROM \
+             (SELECT CAST(x AS UBIGINT) AS u FROM range(5) t(x)) s WHERE u < '4' AND '1' <= u",
+            serde_json::json!({"n": 3, "m": 2}),
+        ),
+        (
+            "FROM (SELECT 1 AS a) t SELECT a",
+            serde_json::json!({"a": 1}),
+        ),
+        ("FROM (SELECT 1 AS a) t", serde_json::json!({"a": 1})),
+    ] {
+        assert_eq!(one_row(&engine, sql), vec![want], "{sql}");
+    }
+    for (sql, n) in [
+        ("SELECT 1 AS a FROM range(5) LIMIT 1.5", 2),
+        ("SELECT 1 AS a FROM range(5) LIMIT 2.5", 3),
+        ("SELECT 1 AS a FROM range(5) LIMIT 0.4", 0),
+    ] {
+        assert_eq!(one_row(&engine, sql).len(), n, "{sql}");
+    }
+}
+
+/// #20: what DuckDB 1.5 answers and burrmill does not, refused by name.
+#[test]
+fn duckdb_answers_still_refused_say_so_by_name() {
+    let engine = Engine::open_empty().unwrap();
+    for (sql, name) in [
+        (
+            "SELECT approx_count_distinct(x) a FROM range(100) t(x)",
+            "approx_count_distinct",
+        ),
+        (
+            "SELECT list_aggregate([1, 2, 3], 'sum') a",
+            "list_aggregate",
+        ),
+        (
+            "SELECT strptime('2024-01-02 03:04:05', '%Y-%m-%d %H:%M:%S') a",
+            "strptime",
+        ),
+        (
+            "SELECT COLUMNS('a') FROM (SELECT 1 AS a, 2 AS b) t",
+            "COLUMNS",
+        ),
+        ("SELECT 'abc' GLOB 'a*' a", "GLOB"),
+        ("PIVOT (SELECT 1 AS a, 'x' AS k) ON k USING sum(a)", "PIVOT"),
+        ("SELECT * FROM unnest([1, 2]) t(x)", "unnest"),
+        (
+            "SELECT * FROM range(DATE '2024-01-01', DATE '2024-01-03', INTERVAL 1 DAY) t(d)",
+            "range",
+        ),
+        ("SELECT * FROM range(NULL) t(x)", "range"),
+        ("SELECT * FROM (SELECT 3 AS n) s, range(s.n) t(x)", "range"),
+        (
+            "SELECT DISTINCT a FROM (VALUES (1, 2), (2, 1)) t(a, b) ORDER BY b",
+            "SELECT DISTINCT",
+        ),
+        ("WITH x(a, a) AS (SELECT 1, 2) SELECT * FROM x", "x(a, a)"),
+        (
+            "SELECT CAST(struct_pack(a := 1, b := 'x') AS VARCHAR) a",
+            "CAST from Struct",
+        ),
+    ] {
+        let e = engine.sql(sql).expect_err(sql).to_string();
+        let first = e.lines().next().unwrap_or_default();
+        assert!(
+            first.contains(name)
+                && (first.contains("not supported") || first.contains("Unsupported")),
+            "{sql}: {e}"
+        );
+    }
+}

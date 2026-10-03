@@ -441,3 +441,19 @@ mod hex_tests {
         assert_eq!(prefixed("42"), None);
     }
 }
+
+/// A text literal as DuckDB's binder casts it to the number it is compared with; `None` where
+/// DuckDB's cast would refuse.
+pub(crate) fn literal_as(s: &str, to: &DataType) -> Option<ScalarValue> {
+    let int = |v: i128| ScalarValue::Decimal128(Some(v), 38, 0).cast_to(to).ok();
+    match to {
+        t if t.is_integer() => match prefixed(s) {
+            Some(v) => int(i128::try_from(v?).ok()?),
+            None => int(duck_int(s)?),
+        },
+        DataType::Decimal128(p, 0) => {
+            Some(ScalarValue::Decimal128(Some(duck_decimal(s, *p)?), *p, 0))
+        }
+        t => ScalarValue::Utf8(Some(s.to_string())).cast_to(t).ok(),
+    }
+}

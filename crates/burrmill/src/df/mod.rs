@@ -580,7 +580,7 @@ fn refuse_non_query(sql: &str) -> Result<()> {
         .collect::<String>()
         .to_ascii_uppercase();
     match head.as_str() {
-        "SELECT" | "WITH" | "VALUES" | "EXPLAIN" => Ok(()),
+        "SELECT" | "WITH" | "VALUES" | "EXPLAIN" | "FROM" => Ok(()),
         other => Err(BurrmillError::NotAllowed(format!(
             "only SELECT/WITH is admitted, not `{other}`"
         ))),
@@ -666,7 +666,9 @@ fn plan_err(e: datafusion_common::DataFusionError) -> BurrmillError {
 
 fn df_err(e: datafusion_common::DataFusionError) -> BurrmillError {
     let s = errors::restate(e.to_string());
-    if s.contains("not yet implemented") || s.contains("Table Functions are not supported") {
+    if s.contains("not yet implemented")
+        || (s.contains("table function ") && s.contains("is not supported here"))
+    {
         BurrmillError::NotAllowed(s)
     } else if s.contains("no table") {
         BurrmillError::NoSegments(s)

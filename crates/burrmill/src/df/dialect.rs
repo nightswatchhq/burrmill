@@ -64,6 +64,9 @@ pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String
     let Some(mut stmt) = stmts.pop() else {
         return Err(BurrmillError::Parse("empty statement".into()));
     };
+    if let DfStatement::Statement(s) = &mut stmt {
+        let _ = sq::VisitMut::visit(s.as_mut(), &mut FromFirst);
+    }
     let mut names = match &stmt {
         DfStatement::Statement(s) => match s.as_ref() {
             sq::Statement::Query(q) => super::names::default_names(q),
@@ -73,6 +76,23 @@ pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String
     };
     rewrite(&mut stmt, known, &mut names)?;
     Ok((stmt, names))
+}
+
+/// DuckDB's `FROM t SELECT a` and `FROM t`, which DataFusion plans only as `SELECT ... FROM t`.
+struct FromFirst;
+
+impl VisitorMut for FromFirst {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, q: &mut sq::Query) -> ControlFlow<()> {
+        if let sq::SetExpr::Select(s) = q.body.as_mut() {
+            if s.flavor == sq::SelectFlavor::FromFirstNoSelect && s.projection.is_empty() {
+                s.projection = vec![sq::SelectItem::Wildcard(Default::default())];
+            }
+            s.flavor = sq::SelectFlavor::Standard;
+        }
+        ControlFlow::Continue(())
+    }
 }
 
 /// DuckDB's dialect with `IS [NOT] DISTINCT FROM` bound as DuckDB binds it. sqlparser reads its
@@ -127,6 +147,40 @@ impl sqlparser::dialect::Dialect for Duck {
         true
     }
 
+    /// `PIVOT` and `UNPIVOT` are refused by name rather than as a syntax error.
+    fn parse_statement(
+        &self,
+        parser: &mut sqlparser::parser::Parser,
+    ) -> Option<std::result::Result<sq::Statement, sqlparser::parser::ParserError>> {
+        use sqlparser::keywords::Keyword;
+        match &parser.peek_token().token {
+            sqlparser::tokenizer::Token::Word(w)
+                if matches!(w.keyword, Keyword::PIVOT | Keyword::UNPIVOT) =>
+            {
+                Some(Err(sqlparser::parser::ParserError::ParserError(format!(
+                    "{} is not supported here",
+                    w.value.to_ascii_uppercase()
+                ))))
+            }
+            _ => None,
+        }
+    }
+
+    /// `^@` binds as DuckDB binds it; `GLOB` too, so it can be refused by name.
+    fn get_next_precedence(
+        &self,
+        parser: &sqlparser::parser::Parser,
+    ) -> Option<std::result::Result<u8, sqlparser::parser::ParserError>> {
+        use sqlparser::dialect::Precedence;
+        match &parser.peek_token().token {
+            sqlparser::tokenizer::Token::CaretAt => Some(Ok(self.prec_value(Precedence::Like))),
+            sqlparser::tokenizer::Token::Word(w) if w.value.eq_ignore_ascii_case("glob") => {
+                Some(Ok(self.prec_value(Precedence::Like)))
+            }
+            _ => None,
+        }
+    }
+
     fn parse_infix(
         &self,
         parser: &mut sqlparser::parser::Parser,
@@ -135,6 +189,23 @@ impl sqlparser::dialect::Dialect for Duck {
     ) -> Option<std::result::Result<SqlExpr, sqlparser::parser::ParserError>> {
         use sqlparser::dialect::Precedence;
         use sqlparser::keywords::Keyword::{DISTINCT, FROM, IS, NOT};
+        match &parser.peek_token().token {
+            // `a ^@ b` is `starts_with(a, b)`.
+            sqlparser::tokenizer::Token::CaretAt => {
+                parser.next_token();
+                return Some(
+                    parser
+                        .parse_subexpr(self.prec_value(Precedence::Like))
+                        .map(|b| call("starts_with", vec![expr.clone(), b])),
+                );
+            }
+            sqlparser::tokenizer::Token::Word(w) if w.value.eq_ignore_ascii_case("glob") => {
+                return Some(Err(sqlparser::parser::ParserError::ParserError(
+                    "GLOB is not supported here".into(),
+                )));
+            }
+            _ => {}
+        }
         let not = if parser.parse_keywords(&[IS, DISTINCT, FROM]) {
             false
         } else if parser.parse_keywords(&[IS, NOT, DISTINCT, FROM]) {
@@ -753,6 +824,40 @@ fn rename_function(f: &mut sq::Function) {
         f.name = sq::ObjectName::from(vec![sq::Ident::new("burrmill_substr")]);
         return;
     }
+    let lit = |s: &str| {
+        sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(SqlExpr::Value(
+            sq::Value::SingleQuotedString(s.into()).into(),
+        )))
+    };
+    if matches!(lower.as_str(), "list_reverse_sort" | "array_reverse_sort") {
+        if let sq::FunctionArguments::List(l) = &mut f.args
+            && l.args.len() == 1
+        {
+            l.args.extend([lit("DESC"), lit("NULLS LAST")]);
+            f.name = sq::ObjectName::from(vec![sq::Ident::new("array_sort")]);
+        }
+        return;
+    }
+    // DuckDB's `split_part(s, d, 0)` is empty, as a part past the end is; DataFusion refuses 0.
+    if lower == "split_part" {
+        if let sq::FunctionArguments::List(l) = &mut f.args
+            && let [_, _, sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(n))] =
+                l.args.as_mut_slice()
+        {
+            let zero = SqlExpr::Value(sq::Value::Number("0".into(), false).into());
+            *n = SqlExpr::Case {
+                case_token: sq::helpers::attached_token::AttachedToken::empty(),
+                end_token: sq::helpers::attached_token::AttachedToken::empty(),
+                operand: None,
+                conditions: vec![sq::CaseWhen {
+                    condition: binop(n.clone(), BinaryOperator::Eq, zero),
+                    result: SqlExpr::Value(sq::Value::Number(i64::MAX.to_string(), false).into()),
+                }],
+                else_result: Some(Box::new(n.clone())),
+            };
+        }
+        return;
+    }
     let part = match lower.as_str() {
         "year" | "month" | "day" | "hour" | "minute" | "second" | "quarter" | "week" | "epoch"
         | "millisecond" | "microsecond" | "isodow" | "decade" | "century" | "millennium" => {
@@ -1150,6 +1255,61 @@ fn rejoin(v: Vec<SqlExpr>) -> SqlExpr {
         .expect("at least one conjunct")
 }
 
+/// `YYYY-MM-DD HH:MM`, with a space or a `T`.
+fn minutes_only(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 16
+        && matches!(b[10], b' ' | b'T')
+        && b[13] == b':'
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| matches!(i, 4 | 7 | 10 | 13) || c.is_ascii_digit())
+        && b[4] == b'-'
+        && b[7] == b'-'
+}
+
+/// DuckDB functions with no counterpart here, refused by name rather than as unknown.
+fn unsupported_function(f: &sq::Function) -> Option<String> {
+    let [sq::ObjectNamePart::Identifier(name)] = f.name.0.as_slice() else {
+        return None;
+    };
+    matches!(
+        name.value.to_ascii_lowercase().as_str(),
+        "approx_count_distinct" | "list_aggregate" | "array_aggregate" | "strptime" | "columns"
+    )
+    .then(|| format!("{} is not supported here", name.value))
+}
+
+/// DuckDB's `if(c, a, b)`, which is `CASE WHEN c THEN a ELSE b END`.
+fn if_as_case(f: &sq::Function) -> Option<SqlExpr> {
+    let [sq::ObjectNamePart::Identifier(name)] = f.name.0.as_slice() else {
+        return None;
+    };
+    let sq::FunctionArguments::List(l) = &f.args else {
+        return None;
+    };
+    if !name.value.eq_ignore_ascii_case("if") || f.over.is_some() || f.filter.is_some() {
+        return None;
+    }
+    let [c, a, b] = l.args.as_slice() else {
+        return None;
+    };
+    let arg = |x: &sq::FunctionArg| match x {
+        sq::FunctionArg::Unnamed(sq::FunctionArgExpr::Expr(e)) => Some(e.clone()),
+        _ => None,
+    };
+    Some(SqlExpr::Case {
+        case_token: sq::helpers::attached_token::AttachedToken::empty(),
+        end_token: sq::helpers::attached_token::AttachedToken::empty(),
+        operand: None,
+        conditions: vec![sq::CaseWhen {
+            condition: arg(c)?,
+            result: arg(a)?,
+        }],
+        else_result: Some(Box::new(arg(b)?)),
+    })
+}
+
 /// DuckDB's LIKE has no escape character unless `ESCAPE` names one, which may be any one character;
 /// Arrow's always takes `\`. The pattern is respelled for Arrow and the clause dropped.
 fn like_pattern(
@@ -1291,6 +1451,35 @@ impl VisitorMut for Rewriter {
             self.refused = Some(why);
             return ControlFlow::Break(());
         }
+        for cte in q.with.iter().flat_map(|w| &w.cte_tables) {
+            let cols = &cte.alias.columns;
+            let mut seen = std::collections::HashSet::new();
+            if !cols
+                .iter()
+                .all(|c| seen.insert(c.name.value.to_lowercase()))
+            {
+                let list: Vec<&str> = cols.iter().map(|c| c.name.value.as_str()).collect();
+                self.refused = Some(format!(
+                    "a CTE column list that repeats a name, {}({}), is not supported here",
+                    cte.alias.name.value,
+                    list.join(", ")
+                ));
+                return ControlFlow::Break(());
+            }
+        }
+        // DuckDB rounds a fractional `LIMIT` half away from zero.
+        if let Some(sq::LimitClause::LimitOffset {
+            limit: Some(SqlExpr::Value(v)),
+            ..
+        }) = q.limit_clause.as_mut()
+            && let sq::Value::Number(n, _) = &v.value
+            && let Some(rounded) = n
+                .contains(['.', 'e', 'E'])
+                .then(|| n.parse::<f64>().ok())
+                .flatten()
+        {
+            v.value = sq::Value::Number(format!("{}", rounded.round() as u64), false);
+        }
         // DataFusion takes `ORDER BY ALL` only over bare columns; DuckDB orders by every output
         // column left to right, which is `ORDER BY 1, ..., n`.
         let width = output_width(&q.body);
@@ -1327,6 +1516,15 @@ impl VisitorMut for Rewriter {
     fn pre_visit_expr(&mut self, e: &mut SqlExpr) -> ControlFlow<()> {
         if let SqlExpr::Subquery(q) = e {
             top_n_correlated(q);
+        }
+        if let SqlExpr::Function(f) = e {
+            if let Some(why) = unsupported_function(f) {
+                self.refused = Some(why);
+                return ControlFlow::Break(());
+            }
+            if let Some(case) = if_as_case(f) {
+                *e = case;
+            }
         }
         if let SqlExpr::Function(f) = e {
             if let Some(sq::WindowType::WindowSpec(w)) = f.over.as_mut() {
@@ -1461,6 +1659,14 @@ impl VisitorMut for Rewriter {
                     (None, None) => {}
                 }
                 *e = call("burrmill_substr", args);
+            }
+            // DuckDB reads a TIMESTAMP literal without its seconds; Arrow does not.
+            SqlExpr::TypedString(t) if matches!(t.data_type, SqlType::Timestamp(..)) => {
+                if let sq::Value::SingleQuotedString(s) = &mut t.value.value
+                    && minutes_only(s)
+                {
+                    s.push_str(":00");
+                }
             }
             SqlExpr::Like {
                 any: false,
@@ -3045,6 +3251,45 @@ fn compare_inner(
                 op,
                 Operator::Lt | Operator::Gt | Operator::LtEq | Operator::GtEq
             );
+            // A string literal beside a number is cast to its type while binding, as DuckDB's is.
+            let literal = |e: &Expr| match e {
+                Expr::Literal(
+                    ScalarValue::Utf8(Some(s))
+                    | ScalarValue::Utf8View(Some(s))
+                    | ScalarValue::LargeUtf8(Some(s)),
+                    _,
+                ) => Some(s.clone()),
+                _ => None,
+            };
+            let bound = |s: &str, t: &DataType| -> DFResult<Box<Expr>> {
+                match super::fastcast::literal_as(s, t) {
+                    Some(v) => Ok(Box::new(Expr::Literal(v, None))),
+                    None => plan_err!(
+                        "Conversion Error: Could not convert string '{s}' to {}",
+                        super::errors::duck_type(&t.to_string())
+                    ),
+                }
+            };
+            if ordering
+                && numeric(&lt)
+                && let Some(s) = literal(&right)
+            {
+                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                    left,
+                    op,
+                    bound(&s, &lt)?,
+                ))));
+            }
+            if ordering
+                && numeric(&rt)
+                && let Some(s) = literal(&left)
+            {
+                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                    bound(&s, &rt)?,
+                    op,
+                    right,
+                ))));
+            }
             if ordering && (is_text(&lt) && numeric(&rt) || numeric(&lt) && is_text(&rt)) {
                 return plan_err!(
                     "Binder Error: Cannot compare values of type {} and type {} - an explicit cast \

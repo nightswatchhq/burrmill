@@ -575,7 +575,11 @@ fn series(name: &str, args: &[Expr]) -> DFResult<Arc<dyn TableSource>> {
     let n: Vec<i64> = args
         .iter()
         .map(|a| {
-            integer_argument(a).ok_or_else(|| plan_datafusion_err!("{name} takes integer literals"))
+            integer_argument(a).ok_or_else(|| {
+                plan_datafusion_err!(
+                    "{name} over anything but integer literals is not supported here"
+                )
+            })
         })
         .collect::<DFResult<_>>()?;
     let (start, stop, step) = match n.as_slice() {
@@ -625,7 +629,9 @@ impl ContextProvider for MiniSession {
     ) -> DFResult<Arc<dyn TableSource>> {
         match name.to_ascii_lowercase().as_str() {
             n @ ("range" | "generate_series") => series(n, &args),
-            _ => datafusion_common::not_impl_err!("Table Functions are not supported"),
+            other => {
+                datafusion_common::not_impl_err!("table function {other} is not supported here")
+            }
         }
     }
     fn get_table_source(&self, name: TableReference) -> DFResult<Arc<dyn TableSource>> {

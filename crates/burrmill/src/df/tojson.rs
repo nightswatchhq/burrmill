@@ -1,15 +1,14 @@
 //! DuckDB's `to_json(x)`: the value as compact JSON text, keys in struct order. nuthatch's GraphQL
 //! lowering writes `to_json(list(struct_pack(...)))` for a `@derivedFrom` list.
 //!
-//! Types whose DuckDB spelling has not been measured (floats, scaled decimals, time, binary) are
-//! refused rather than guessed.
+//! Types whose DuckDB spelling has not been measured (time, binary) are refused rather than guessed.
 
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, StringBuilder};
 use arrow::datatypes::{
-    DataType, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type,
+    DataType, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::{Result as DFResult, exec_err, plan_err};
 use datafusion_expr::{
@@ -68,20 +67,8 @@ impl ScalarUDFImpl for ToJson {
 fn writable(t: &DataType) -> bool {
     use DataType::*;
     match t {
-        Null
-        | Boolean
-        | Int8
-        | Int16
-        | Int32
-        | Int64
-        | UInt8
-        | UInt16
-        | UInt32
-        | UInt64
-        | Utf8
-        | LargeUtf8
-        | Utf8View
-        | Decimal128(_, 0) => true,
+        Null | Boolean | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Utf8
+        | LargeUtf8 | Utf8View | Float32 | Float64 | Decimal128(..) => true,
         Struct(fields) => fields.iter().all(|f| writable(f.data_type())),
         List(f) | LargeList(f) => writable(f.data_type()),
         _ => false,
@@ -115,6 +102,9 @@ fn write(a: &ArrayRef, i: usize, out: &mut String) -> DFResult<()> {
         DataType::UInt32 => num!(UInt32Type),
         DataType::UInt64 => num!(UInt64Type),
         DataType::Decimal128(_, 0) => num!(Decimal128Type),
+        DataType::Decimal128(_, s) => decimal(a.as_primitive::<Decimal128Type>().value(i), *s, out),
+        DataType::Float32 => double(a.as_primitive::<Float32Type>().value(i).into(), out),
+        DataType::Float64 => double(a.as_primitive::<Float64Type>().value(i), out),
         DataType::Utf8 => string(a.as_string::<i32>().value(i), out),
         DataType::LargeUtf8 => string(a.as_string::<i64>().value(i), out),
         DataType::Utf8View => string(a.as_string_view().value(i), out),
@@ -169,4 +159,41 @@ fn string(s: &str, out: &mut String) {
         }
     }
     out.push('"');
+}
+
+/// As yyjson writes a double: the shortest digits that read back, fixed from 1e-6 up to 1e21 with
+/// at least one fractional digit, scientific outside that with no `+`.
+fn double(v: f64, out: &mut String) {
+    if v.is_nan() {
+        return out.push_str("NaN");
+    }
+    if v.is_infinite() {
+        return out.push_str(if v > 0.0 { "Infinity" } else { "-Infinity" });
+    }
+    let sci = format!("{v:e}");
+    let exp: i32 = sci
+        .split_once('e')
+        .map_or(0, |(_, e)| e.parse().unwrap_or(0));
+    if v != 0.0 && !(-6..21).contains(&exp) {
+        return out.push_str(&sci);
+    }
+    let fixed = format!("{v}");
+    out.push_str(&fixed);
+    if !fixed.contains('.') {
+        out.push_str(".0");
+    }
+}
+
+/// A scaled decimal as DuckDB writes it: its digits, trailing fractional zeros dropped down to one.
+fn decimal(v: i128, scale: i8, out: &mut String) {
+    let scale = scale as usize;
+    let digits = format!("{:0>width$}", v.unsigned_abs(), width = scale + 1);
+    let (int, frac) = digits.split_at(digits.len() - scale);
+    let frac = frac.trim_end_matches('0');
+    if v < 0 {
+        out.push('-');
+    }
+    out.push_str(int);
+    out.push('.');
+    out.push_str(if frac.is_empty() { "0" } else { frac });
 }

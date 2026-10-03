@@ -329,6 +329,41 @@ const CORPUS: &[&str] = &[
     "SELECT CAST('1e3' AS DECIMAL(38,0)) a, CAST('1_000' AS HUGEINT) b, CAST(' 7 ' AS HUGEINT) c, CAST('1.5' AS DECIMAL(38,0)) d",
     "SELECT CAST('1e39' AS DECIMAL(38,0)) a",
     "SELECT TRY_CAST(\"value\" || 'e1' AS HUGEINT) AS a, TRY_CAST(\"value\" || '.5' AS DECIMAL(38,0)) AS b FROM transfer ORDER BY block_number, log_index",
+    // Statements DuckDB answered and burrmill refused (#20).
+    "SELECT to_json(1.5::DOUBLE) a, to_json(0.1::DOUBLE) b, to_json(1e20::DOUBLE) c, to_json(1e-7::DOUBLE) d, to_json(2.0::DOUBLE) e, to_json(-0.0::DOUBLE) f, to_json(1e21::DOUBLE) g, to_json(1e-6::DOUBLE) h, to_json(123456789012345678901234.0::DOUBLE) i, to_json('nan'::DOUBLE) j, to_json('-inf'::DOUBLE) k, to_json(0.1::FLOAT) l, to_json(1/3) m",
+    "SELECT to_json(1.50) a, to_json(100.00) b, to_json(-0.05) c, to_json(CAST(12345678901234567890.123 AS DECIMAL(38,3))) d, to_json(0.0) e, to_json(struct_pack(x := 1.5::DOUBLE, y := 2.25)) f, to_json([1.5::DOUBLE, NULL]) g, to_json(CAST(-12.340 AS DECIMAL(10,3))) h",
+    "SELECT to_json(list(s)) AS j FROM (SELECT struct_pack(k := log_index, r := CAST(value AS DOUBLE) / 1e18) AS s FROM transfer ORDER BY block_number, log_index) t",
+    "SELECT printf('%.2f', 1.5) a, printf('%f', 2.25) b, printf('%5.1f', 1.25) c, printf('%g', 1.5) d, printf('%e', 1.5) e, format('{}', 1.5) f, format('{}', 100.00) g, format('{:.3f}', 2.5) h, format('{}', CAST(12345678901234567890.123 AS DECIMAL(38,3))) i",
+    "SELECT printf('%d', 1.5) a",
+    "SELECT printf('%,d', 1234567) a, printf('%,d', -1234) b, printf('%,d', 12) c, printf('%,5d|%-,8d|%,x', 1234, 1234, 255) d, printf('%,f', 1234.5::DOUBLE) e, printf('%,.0f', 999.5::DOUBLE) f, printf('%,.2f', 1234567.891) g, printf('%,X|%#,x|%,s', 4096, 4096, 'ab') h",
+    "SELECT printf('%,d', CAST(value AS HUGEINT)) a, hex(CAST(value AS HUGEINT)) b FROM transfer ORDER BY block_number, log_index",
+    "SELECT hex(CAST(255 AS HUGEINT)) a, hex(CAST(-1 AS HUGEINT)) b, hex(CAST(0 AS HUGEINT)) c, hex(CAST(-256 AS HUGEINT)) d",
+    "SELECT if(1 < 2, 'a', 'b') a, if(NULL, 1, 2) b, if(false, 1, 2.5) c, 'abc' ^@ 'ab' d, 'abc' ^@ 'b' e, NULL ^@ 'a' f, 'ab' || 'c' ^@ 'abc' g",
+    "SELECT if(log_index > 0, 'big', NULL) AS a, \"from\" ^@ '0xa' AS b FROM transfer ORDER BY block_number, log_index",
+    "SELECT list_reverse_sort([3, NULL, 1, 2])[1] a, list_reverse_sort([3, NULL, 1, 2])[4] b, list_reverse_sort(['b', 'a', NULL])[2] c, list_reverse_sort(NULL) d",
+    "SELECT split_part('a,b,c', ',', 0) a, split_part('a,b,c', ',', -1) b, split_part('a,b,c', ',', 5) c",
+    "SELECT split_part(s, ',', n) AS p FROM (VALUES ('a,b', 0), (NULL, 0), ('a,b', NULL), ('a,b', 2)) t(s, n)",
+    "SELECT TIMESTAMP '2024-01-02 03:04' = TIMESTAMP '2024-01-02 03:04:00' AS a, CAST(TIMESTAMP '2024-01-02T03:04' AS VARCHAR) AS b",
+    "SELECT TIMESTAMP '2024-01-02 03' a",
+    "SELECT count(*) AS n FROM transfer WHERE block_number < '150' AND '2' <= block_number",
+    "SELECT count(*) AS n FROM (SELECT CAST(x AS BIGINT) AS u FROM range(5) t(x)) s WHERE u < '2.5'",
+    "FROM transfer SELECT block_number WHERE log_index = 1",
+    "FROM label",
+    "SELECT block_number FROM transfer ORDER BY 1 LIMIT 1.5",
+    "SELECT block_number FROM transfer ORDER BY 1 LIMIT 0.4",
+    // DuckDB answers these; burrmill refuses each by name (#20).
+    "SELECT approx_count_distinct(block_number) AS n FROM transfer",
+    "SELECT list_aggregate([1, 2, 3], 'sum') AS a",
+    "SELECT strptime('2024-01-02 03:04:05', '%Y-%m-%d %H:%M:%S') AS a",
+    "SELECT COLUMNS('a') FROM (SELECT 1 AS a, 2 AS b) t",
+    "SELECT 'abc' GLOB 'a*' AS a",
+    "PIVOT (SELECT 1 AS a, 'x' AS k) ON k USING sum(a)",
+    "SELECT * FROM unnest([1, 2]) t(x)",
+    "SELECT * FROM range(DATE '2024-01-01', DATE '2024-01-03', INTERVAL 1 DAY) t(d)",
+    "SELECT * FROM (SELECT 3 AS n) s, range(s.n) t(x)",
+    "SELECT DISTINCT a FROM (VALUES (1, 2), (2, 1)) t(a, b) ORDER BY b",
+    "WITH x(a, a) AS (SELECT 1, 2) SELECT * FROM x",
+    "SELECT CAST(struct_pack(a := 1, b := 'x') AS VARCHAR) AS a",
 ];
 
 /// Differences that stand, and why.
@@ -343,6 +378,54 @@ const KNOWN: &[(&str, &str)] = &[
         "a DuckDB 1.5 bug (docs/upstream/duckdb-cast-comparison-null-constant.md): once the zone is \
          consulted, here by year(), text compared with a TIMESTAMPTZ cast to text is compared with \
          NULL. Burrmill compares the text",
+    ),
+    (
+        "SELECT approx_count_distinct(block_number) AS n FROM transfer",
+        "DuckDB's HyperLogLog estimate is its own; refused by name rather than estimated differently",
+    ),
+    (
+        "SELECT list_aggregate([1, 2, 3], 'sum') AS a",
+        "refused by name: no list_aggregate here",
+    ),
+    (
+        "SELECT strptime('2024-01-02 03:04:05', '%Y-%m-%d %H:%M:%S') AS a",
+        "refused by name: DuckDB's format codes are not chrono's",
+    ),
+    (
+        "SELECT COLUMNS('a') FROM (SELECT 1 AS a, 2 AS b) t",
+        "refused by name: no COLUMNS() expansion here",
+    ),
+    (
+        "SELECT 'abc' GLOB 'a*' AS a",
+        "refused by name: no GLOB here",
+    ),
+    (
+        "PIVOT (SELECT 1 AS a, 'x' AS k) ON k USING sum(a)",
+        "refused by name: no PIVOT here",
+    ),
+    (
+        "SELECT * FROM unnest([1, 2]) t(x)",
+        "refused by name: unnest is a table function here only in the select list",
+    ),
+    (
+        "SELECT * FROM range(DATE '2024-01-01', DATE '2024-01-03', INTERVAL 1 DAY) t(d)",
+        "refused by name: range takes integer literals here",
+    ),
+    (
+        "SELECT * FROM (SELECT 3 AS n) s, range(s.n) t(x)",
+        "refused by name: range takes integer literals here",
+    ),
+    (
+        "SELECT DISTINCT a FROM (VALUES (1, 2), (2, 1)) t(a, b) ORDER BY b",
+        "refused by name: DuckDB orders a DISTINCT by an expression it does not select, with no defined row for it",
+    ),
+    (
+        "WITH x(a, a) AS (SELECT 1, 2) SELECT * FROM x",
+        "refused by name: a CTE column list that repeats a name",
+    ),
+    (
+        "SELECT CAST(struct_pack(a := 1, b := 'x') AS VARCHAR) AS a",
+        "refused by name: no STRUCT to VARCHAR cast here",
     ),
 ];
 
