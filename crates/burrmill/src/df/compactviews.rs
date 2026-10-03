@@ -21,8 +21,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, MutableArrayData, make_array};
-use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
@@ -120,7 +120,14 @@ fn compact(batch: RecordBatch, held: bool) -> Result<RecordBatch> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    RecordBatch::try_new(batch.schema(), columns).map_err(DataFusionError::from)
+    rebuilt(&batch, batch.schema(), columns)
+}
+
+/// `columns` as `batch`'s rows. A batch with no columns, a cross join's left side under `count(*)`,
+/// has only its row count to say how many it holds.
+fn rebuilt(batch: &RecordBatch, schema: SchemaRef, columns: Vec<ArrayRef>) -> Result<RecordBatch> {
+    let rows = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    RecordBatch::try_new_with_options(schema, columns, &rows).map_err(DataFusionError::from)
 }
 
 fn has_views(p: &Arc<dyn ExecutionPlan>) -> bool {
@@ -202,7 +209,7 @@ impl ExecutionPlan for CastViewsExec {
                         false => arrow::compute::cast(c, f.data_type()),
                     })
                     .collect::<std::result::Result<Vec<_>, _>>()?;
-                RecordBatch::try_new(Arc::clone(&target), columns).map_err(DataFusionError::from)
+                rebuilt(&batch, Arc::clone(&target), columns)
             })
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, cast)))
