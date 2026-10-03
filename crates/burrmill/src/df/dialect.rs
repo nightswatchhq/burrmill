@@ -2658,7 +2658,7 @@ fn union_floats(p: &LogicalPlan) -> DFResult<Option<LogicalPlan>> {
 /// DuckDB's type for two integer columns meeting in a set operation, where literals do not adapt:
 /// the wider of one signedness, and for mixed signs a signed type twice the unsigned width, which
 /// past 64 bits is HUGEINT.
-fn duck_union(a: &DataType, b: &DataType) -> Option<DataType> {
+pub(super) fn duck_union(a: &DataType, b: &DataType) -> Option<DataType> {
     use DataType::*;
     let bits = |t: &DataType| match t {
         Int8 | UInt8 => Some(8),

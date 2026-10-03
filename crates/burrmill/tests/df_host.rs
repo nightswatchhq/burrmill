@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{StringArray, UInt64Array};
+use arrow::array::{ArrayRef, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use burrmill::Engine;
@@ -1071,4 +1071,78 @@ fn several_statements_are_refused_not_run_in_part() {
         }
     }
     assert_eq!(rows(&engine, "SELECT 1 AS a;"), vec![json!({"a": 1})]);
+}
+
+/// One column at two integer widths, as an offchain snapshot whose feed widened between pulls.
+fn priced(dir: &std::path::Path, n: u64, block: u64, price: ArrayRef) -> (std::path::PathBuf, u64) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("block_number", DataType::UInt64, false),
+        Field::new("price", price.data_type().clone(), true),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(UInt64Array::from(vec![block; price.len()])), price],
+    )
+    .unwrap();
+    let path = dir.join(format!("t-{n:064x}.parquet"));
+    let f = std::fs::File::create(&path).unwrap();
+    let mut w = parquet::arrow::ArrowWriter::try_new(f, schema, None).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    let len = std::fs::metadata(&path).unwrap().len();
+    (path, len)
+}
+
+/// #36: segments carrying one column at two integer widths bind at the narrowest type that holds
+/// both, as DuckDB's `union_by_name` does, and each file's rows are read at it.
+#[test]
+fn integer_widths_that_differ_between_segments_widen() {
+    use arrow::array::{Int32Array, Int64Array, UInt32Array};
+    let declared = vec![
+        ("block_number".to_string(), "u64".to_string()),
+        ("price".to_string(), "string".to_string()),
+    ];
+    let one = |a: ArrayRef, b: ArrayRef| {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = vec![priced(tmp.path(), 1, 1, a), priced(tmp.path(), 2, 2, b)];
+        let mut engine = Engine::open_empty().unwrap();
+        engine
+            .register_facts("t", &declared, files, &[], (None, None))
+            .unwrap_or_else(|e| panic!("{e}"));
+        rows(
+            &engine,
+            "SELECT block_number, price, typeof(price) AS ty FROM t ORDER BY block_number, price",
+        )
+    };
+    assert_eq!(
+        one(
+            Arc::new(Int32Array::from(vec![-7, i32::MAX])),
+            Arc::new(Int64Array::from(vec![i64::MIN]))
+        ),
+        vec![
+            json!({"block_number": 1, "price": -7, "ty": "BIGINT"}),
+            json!({"block_number": 1, "price": i32::MAX, "ty": "BIGINT"}),
+            json!({"block_number": 2, "price": i64::MIN, "ty": "BIGINT"}),
+        ]
+    );
+    assert_eq!(
+        one(
+            Arc::new(UInt32Array::from(vec![u32::MAX])),
+            Arc::new(Int64Array::from(vec![-1]))
+        ),
+        vec![
+            json!({"block_number": 1, "price": u32::MAX, "ty": "BIGINT"}),
+            json!({"block_number": 2, "price": -1, "ty": "BIGINT"}),
+        ]
+    );
+    assert_eq!(
+        one(
+            Arc::new(UInt64Array::from(vec![u64::MAX])),
+            Arc::new(Int64Array::from(vec![i64::MIN]))
+        ),
+        vec![
+            json!({"block_number": 1, "price": u64::MAX.to_string(), "ty": "DECIMAL(38,0)"}),
+            json!({"block_number": 2, "price": i64::MIN.to_string(), "ty": "DECIMAL(38,0)"}),
+        ]
+    );
 }

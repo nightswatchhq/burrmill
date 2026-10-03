@@ -110,10 +110,11 @@ impl Engine {
         } else {
             // Every segment's columns by name, as DuckDB's `union_by_name`: a column the ABI gained
             // is in the later segments only, and the first one's schema would read it as NULL.
-            let schemas = files
+            let schemas: Vec<Schema> = files
                 .iter()
-                .map(|(p, l)| self.bound_segments[&(p.clone(), *l)].as_ref().clone());
-            Arc::new(Schema::try_merge(schemas).map_err(|e| {
+                .map(|(p, l)| self.bound_segments[&(p.clone(), *l)].as_ref().clone())
+                .collect();
+            Arc::new(Schema::try_merge(widen_integers(schemas)).map_err(|e| {
                 crate::BurrmillError::Substrate(format!("the segments of {name} disagree: {e}"))
             })?)
         };
@@ -308,6 +309,41 @@ fn json_batch(rows: &[Value], typed: bool) -> Result<(SchemaRef, RecordBatch)> {
     let batch = RecordBatch::try_new(schema.clone(), arrays)
         .map_err(|e| crate::BurrmillError::Substrate(e.to_string()))?;
     Ok((schema, batch))
+}
+
+/// One column at two integer widths across segments takes the type DuckDB's `union_by_name` gives
+/// it: the wider of one signedness, a signed type holding both otherwise, and HUGEINT for UBIGINT
+/// with BIGINT. The scan casts each file's column up to it.
+fn widen_integers(schemas: Vec<Schema>) -> Vec<Schema> {
+    let mut widest: std::collections::HashMap<&str, DataType> = std::collections::HashMap::new();
+    for f in schemas.iter().flat_map(|s| s.fields()) {
+        if f.data_type().is_integer() {
+            widest
+                .entry(f.name())
+                .and_modify(|t| {
+                    if let Some(u) = super::dialect::duck_union(t, f.data_type()) {
+                        *t = u;
+                    }
+                })
+                .or_insert_with(|| f.data_type().clone());
+        }
+    }
+    schemas
+        .iter()
+        .map(|s| {
+            Schema::new(
+                s.fields()
+                    .iter()
+                    .map(|f| match widest.get(f.name().as_str()) {
+                        Some(t) if f.data_type().is_integer() && t != f.data_type() => {
+                            Arc::new(f.as_ref().clone().with_data_type(t.clone()))
+                        }
+                        _ => Arc::clone(f),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
