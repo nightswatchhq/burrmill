@@ -307,7 +307,7 @@ impl MiniSession {
                 ])
                 // Only a bounded pool charges the views; unbounded, the copy buys nothing.
                 .chain(budget.is_some().then(|| {
-                    Arc::new(super::compactviews::CompactHeldViews)
+                    Arc::new(super::compactviews::CompactViews)
                         as Arc<dyn PhysicalOptimizerRule + Send + Sync>
                 }))
                 .chain([Arc::new(super::cancel::Cancellable(cancel))

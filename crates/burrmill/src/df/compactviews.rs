@@ -1,16 +1,13 @@
-//! Compacts the view columns of every input to a sort-preserving merge, and of the side a join
-//! collects, under a memory budget.
+//! Compacts the view columns of every operator output that can carry more buffer than rows, under
+//! a memory budget, so nothing downstream holds a batch charged for bytes it does not use.
 //!
-//! A string view keeps the buffer its bytes live in, and a sort's merge of spilled runs emits rows
-//! whose views point into every 128 KiB read chunk they came from. DataFusion 55's
-//! `SortPreservingMergeExec` charges each input batch for all of those chunks, so 128 rows of
-//! 42-byte addresses cost 15 MB in the pool and a two-thread `ORDER BY` refused under 64 MiB
-//! where the same sort over `Utf8` spilled and finished. Copying the rows out first charges what
-//! they hold.
-//!
-//! A join's collected side meets it by another route: `RepartitionExec` coalesces through arrow's
-//! `BatchCoalescer`, whose copy buffer doubles per batch to 1 MiB and stays there, so each 128-row
-//! batch of addresses arrives in a 1 MiB buffer and a hash join is charged that much per batch.
+//! A string view keeps the buffer its bytes live in, and the pool charges a batch for every buffer
+//! it references. Two producers make that far larger than the rows at a 128-row batch. Arrow's
+//! `BatchCoalescer`, behind `RepartitionExec`, `FilterExec` and the joins' output, copies into a
+//! buffer that doubles per batch to 1 MiB and stays there, so 5 KB of addresses arrive in 1 MiB;
+//! a hash join's build side and a sort's input held thousands of them and refused at 1.8 GB. A
+//! sort's merge of spilled runs emits views into every 128 KiB read chunk they came from, which cost
+//! a two-thread `ORDER BY` 15 MB per 128 rows. Copying the rows out charges what they hold.
 
 use std::fmt;
 use std::sync::Arc;
@@ -23,15 +20,17 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
-use datafusion_physical_plan::joins::{CrossJoinExec, HashJoinExec, NestedLoopJoinExec};
-use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::async_func::AsyncFuncExec;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::{
+    HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec, SortMergeJoinExec,
+};
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_session::PhysicalOptimizerRule;
 use futures::StreamExt;
-
-use super::rangejoin::RangeJoinExec;
 
 #[derive(Debug)]
 pub(super) struct CompactViewsExec {
@@ -100,60 +99,42 @@ fn has_views(p: &Arc<dyn ExecutionPlan>) -> bool {
         .any(|f| matches!(f.data_type(), DataType::Utf8View | DataType::BinaryView))
 }
 
-/// Whether `p` holds its `i`th input whole before it emits: every input of a merge, the side a
-/// join collects.
-fn holds(p: &Arc<dyn ExecutionPlan>, i: usize) -> bool {
-    p.downcast_ref::<SortPreservingMergeExec>().is_some()
-        || (i == 0
-            && (p.downcast_ref::<HashJoinExec>().is_some()
-                || p.downcast_ref::<NestedLoopJoinExec>().is_some()
-                || p.downcast_ref::<CrossJoinExec>().is_some()
-                || p.downcast_ref::<RangeJoinExec>().is_some()))
+/// Whether `p` builds its output batches in a `BatchCoalescer`, or a batch it emits may point into
+/// a spilled run's read chunks.
+fn bloats(p: &Arc<dyn ExecutionPlan>) -> bool {
+    p.downcast_ref::<RepartitionExec>().is_some()
+        || p.downcast_ref::<FilterExec>().is_some()
+        || p.downcast_ref::<HashJoinExec>().is_some()
+        || p.downcast_ref::<NestedLoopJoinExec>().is_some()
+        || p.downcast_ref::<SortMergeJoinExec>().is_some()
+        || p.downcast_ref::<PiecewiseMergeJoinExec>().is_some()
+        || p.downcast_ref::<AsyncFuncExec>().is_some()
+        || p.downcast_ref::<SortExec>().is_some()
 }
 
-/// Puts [`CompactViewsExec`] under each input a merge or a join holds that has view columns.
+/// Puts [`CompactViewsExec`] over every operator that [`bloats`] and emits view columns.
 #[derive(Debug)]
-pub(super) struct CompactHeldViews;
+pub(super) struct CompactViews;
 
-impl PhysicalOptimizerRule for CompactHeldViews {
+impl PhysicalOptimizerRule for CompactViews {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|p| {
-            let wrap = |i: usize, c: &Arc<dyn ExecutionPlan>| holds(&p, i) && has_views(c);
-            if !p
-                .children()
-                .into_iter()
-                .enumerate()
-                .any(|(i, c)| wrap(i, c))
-            {
+            if !bloats(&p) || !has_views(&p) {
                 return Ok(Transformed::no(p));
             }
-            let children = p
-                .children()
-                .into_iter()
-                .enumerate()
-                .map(|(i, c)| {
-                    if wrap(i, c) {
-                        Arc::new(CompactViewsExec {
-                            inner: Arc::clone(c),
-                        }) as Arc<dyn ExecutionPlan>
-                    } else {
-                        Arc::clone(c)
-                    }
-                })
-                .collect();
-            Ok(Transformed::yes(replace_children_if_necessary(
-                p, children,
-            )?))
+            Ok(Transformed::yes(
+                Arc::new(CompactViewsExec { inner: p }) as Arc<dyn ExecutionPlan>
+            ))
         })
         .map(|t| t.data)
     }
 
     fn name(&self) -> &str {
-        "compact_held_views"
+        "compact_views"
     }
 
     fn schema_check(&self) -> bool {
