@@ -137,6 +137,36 @@ name = "df_functions"
 path = "tests/df_functions.rs"
 required-features = ["datafusion"]
 
+[[test]]
+name = "df_buildside"
+path = "tests/df_buildside.rs"
+required-features = ["datafusion"]
+
+[[test]]
+name = "df_distinctrows"
+path = "tests/df_distinctrows.rs"
+required-features = ["datafusion"]
+
+[[test]]
+name = "df_extreme"
+path = "tests/df_extreme.rs"
+required-features = ["datafusion"]
+
+[[test]]
+name = "df_host"
+path = "tests/df_host.rs"
+required-features = ["datafusion"]
+
+[[test]]
+name = "df_latest"
+path = "tests/df_latest.rs"
+required-features = ["datafusion"]
+
+[[test]]
+name = "df_subqueries"
+path = "tests/df_subqueries.rs"
+required-features = ["datafusion"]
+
 [[example]]
 name = "hosted_fold"
 required-features = ["datafusion"]
