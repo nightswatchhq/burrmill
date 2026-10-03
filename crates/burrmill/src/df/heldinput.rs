@@ -6,11 +6,18 @@
 //! and emits one batch per left row and right batch, which with a one-row right side is one batch
 //! per row, each of whose strings is copied into a fresh 8 KiB block: `indexer.delegators_page` held
 //! 1.8 GB in a window that way under a 1 GB pool.
+//!
+//! A sort that spills merges one run per batch it holds, and each run's merge cursor holds the
+//! whole of a batch no larger than an output batch. At a budget's 128-row batches the cursors were
+//! as large as the input, and the merge took the pool before writing anything (#56).
 
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::compute::BatchCoalescer;
+use arrow::array::Array;
+use arrow::compute::{BatchCoalescer, concat_batches};
+use arrow::datatypes::DataType;
+use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
@@ -18,6 +25,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::joins::CrossJoinExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::windows::WindowAggExec;
 use datafusion_physical_plan::{
@@ -215,7 +223,124 @@ impl ExecutionPlan for CoalesceExec {
     }
 }
 
-/// Puts [`ChargedWindowExec`] over every `WindowAggExec` and [`CoalesceExec`] over every cross join.
+/// Rows and bytes a [`GatherExec`] gathers a sort's input up to.
+const GATHER_ROWS: usize = 8192;
+const GATHER_BYTES: usize = 1 << 20;
+
+/// A sort's input gathered into batches of up to [`GATHER_ROWS`] rows or [`GATHER_BYTES`] bytes, so
+/// its spill merges a few hundred runs rather than one per 128 rows.
+#[derive(Debug)]
+pub(super) struct GatherExec {
+    inner: Arc<dyn ExecutionPlan>,
+}
+
+impl DisplayAs for GatherExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "GatherExec")
+    }
+}
+
+impl ExecutionPlan for GatherExec {
+    fn name(&self) -> &str {
+        "GatherExec"
+    }
+    fn properties(&self) -> &Arc<PlanProperties> {
+        self.inner.properties()
+    }
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.inner]
+    }
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            inner: children.pop().expect("one child"),
+        }))
+    }
+    fn execute(
+        &self,
+        partition: usize,
+        ctx: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let stream = self.inner.execute(partition, ctx)?;
+        let schema = stream.schema();
+        let out = futures::stream::unfold(
+            (stream, Gathered::default(), false),
+            |(mut stream, mut held, done)| async move {
+                if done {
+                    return None;
+                }
+                loop {
+                    let (gathered, done) = match stream.next().await {
+                        Some(Ok(batch)) => match held.push(batch) {
+                            Ok(None) => continue,
+                            gathered => (gathered, false),
+                        },
+                        Some(Err(e)) => (Err(e), true),
+                        None => (held.take(), true),
+                    };
+                    return match gathered {
+                        Ok(Some(batch)) => Some((Ok(batch), (stream, held, done))),
+                        Ok(None) => None,
+                        Err(e) => Some((Err(e), (stream, held, true))),
+                    };
+                }
+            },
+        );
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, out)))
+    }
+}
+
+#[derive(Default)]
+struct Gathered {
+    batches: Vec<RecordBatch>,
+    rows: usize,
+    bytes: usize,
+}
+
+impl Gathered {
+    /// The batches held with `batch`, once they reach the bound.
+    fn push(&mut self, batch: RecordBatch) -> Result<Option<RecordBatch>> {
+        self.rows += batch.num_rows();
+        self.bytes += held_bytes(&batch)?;
+        self.batches.push(batch);
+        match self.rows >= GATHER_ROWS || self.bytes >= GATHER_BYTES {
+            true => self.take(),
+            false => Ok(None),
+        }
+    }
+
+    fn take(&mut self) -> Result<Option<RecordBatch>> {
+        let batches = std::mem::take(&mut self.batches);
+        (self.rows, self.bytes) = (0, 0);
+        match batches.as_slice() {
+            [] => Ok(None),
+            [one] => Ok(Some(one.clone())),
+            [first, ..] => Ok(Some(concat_batches(&first.schema(), &batches)?)),
+        }
+    }
+}
+
+/// What `batch`'s rows hold, or for a view column every buffer it keeps, which overstates it and
+/// only ever passes a batch on sooner.
+fn held_bytes(batch: &RecordBatch) -> Result<usize> {
+    batch.columns().iter().try_fold(0, |n, c| {
+        Ok(n + match c.data_type() {
+            DataType::Utf8View | DataType::BinaryView => c.get_array_memory_size(),
+            _ => c.to_data().get_slice_memory_size()?,
+        })
+    })
+}
+
+/// Puts [`ChargedWindowExec`] over every `WindowAggExec`, [`CoalesceExec`] over every cross join and
+/// [`GatherExec`] under every sort without a fetch.
 #[derive(Debug)]
 pub(super) struct HeldInput;
 
@@ -236,6 +361,14 @@ impl PhysicalOptimizerRule for HeldInput {
                     Arc::new(CoalesceExec { inner: p }) as Arc<dyn ExecutionPlan>
                 ));
             }
+            if let Some(s) = p.downcast_ref::<SortExec>()
+                && s.fetch().is_none()
+            {
+                let input = Arc::new(GatherExec {
+                    inner: Arc::clone(s.input()),
+                }) as Arc<dyn ExecutionPlan>;
+                return replace_children_if_necessary(p, vec![input]).map(Transformed::yes);
+            }
             Ok(Transformed::no(p))
         })
         .map(|t| t.data)
@@ -247,5 +380,74 @@ impl PhysicalOptimizerRule for HeldInput {
 
     fn schema_check(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{ArrayRef, AsArray, Int64Array, StringArray, StringViewArray};
+    use arrow::datatypes::{Field, Int64Type, Schema};
+    use datafusion_datasource::memory::MemorySourceConfig;
+    use datafusion_execution::config::SessionConfig;
+
+    use super::*;
+
+    fn gathered(batches: Vec<RecordBatch>) -> Vec<RecordBatch> {
+        let schema = batches[0].schema();
+        let source = MemorySourceConfig::try_new_exec(&[batches], schema, None).unwrap();
+        let ctx = TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(1 << 20));
+        let out = GatherExec { inner: source }
+            .execute(0, Arc::new(ctx))
+            .unwrap();
+        futures::executor::block_on(datafusion_physical_plan::common::collect(out)).unwrap()
+    }
+
+    #[test]
+    fn a_sorts_input_is_gathered_to_its_row_bound_in_order() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let mut next = 0;
+        let sizes = std::iter::repeat_n(100, 90).chain([10_000, 5]);
+        let batches = sizes
+            .map(|n| {
+                let v = Int64Array::from_iter_values(next..next + n);
+                next += n;
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(v)]).unwrap()
+            })
+            .collect();
+        let out = gathered(batches);
+        let rows: Vec<_> = out.iter().map(|b| b.num_rows()).collect();
+        assert_eq!(rows, [8200, 10_800, 5]);
+        let values: Vec<i64> = out
+            .iter()
+            .flat_map(|b| b.column(0).as_primitive::<Int64Type>().values().to_vec())
+            .collect();
+        assert_eq!(values, (0..next).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_sorts_input_is_gathered_to_its_byte_bound() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let wide = "x".repeat(10_000);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec![wide.as_str(); 60]))],
+        )
+        .unwrap();
+        let out = gathered(vec![batch.clone(), batch.clone(), batch]);
+        let rows: Vec<_> = out.iter().map(|b| b.num_rows()).collect();
+        assert_eq!(rows, [120, 60]);
+
+        // A view slice is counted for the whole buffer it keeps, so it passes on alone.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+        let views = Arc::new(StringViewArray::from(vec![wide.as_str(); 200])) as ArrayRef;
+        let batch = RecordBatch::try_new(schema, vec![views]).unwrap();
+        let out = gathered(vec![batch.slice(0, 10), batch.slice(10, 10)]);
+        let rows: Vec<_> = out.iter().map(|b| b.num_rows()).collect();
+        assert_eq!(rows, [10, 10]);
     }
 }
