@@ -546,3 +546,56 @@ fn cross_join_charges_what_its_left_side_holds() {
         "the cross join peaked at {peak} bytes, its left side at {alone} alone, holding {live}"
     );
 }
+
+/// #55: a cross join whose left side carries no columns, which `count(*)` and a projection of the
+/// right side alone plan to, answers under a budget. Its batches have only a row count.
+#[test]
+fn cross_join_with_no_left_columns() {
+    let e = engine();
+    let cases = [
+        (
+            "SELECT count(*) AS n FROM (SELECT block_number FROM t WHERE block_number < 300) a, \
+             (SELECT block_number FROM t WHERE block_number < 200) b",
+            vec![("n", 60000)],
+        ),
+        (
+            "SELECT count(*) AS n FROM (SELECT block_number FROM t WHERE block_number < 40) a, \
+             (SELECT block_number FROM t WHERE block_number < 30) b, \
+             (SELECT block_number FROM t WHERE block_number < 20) c",
+            vec![("n", 24000)],
+        ),
+        (
+            "SELECT q.n FROM (SELECT block_number FROM t WHERE block_number = 7) p \
+             CROSS JOIN (SELECT count(*) AS n FROM t) q",
+            vec![("n", ROWS)],
+        ),
+        (
+            "SELECT max(b.block_number) AS m FROM (SELECT count(*) AS n FROM t) a, t b \
+             WHERE b.block_number < 3",
+            vec![("m", 2)],
+        ),
+        (
+            "SELECT count(*) OVER () AS n FROM (SELECT block_number FROM t WHERE block_number < 300) a, \
+             (SELECT block_number FROM t WHERE block_number < 200) b LIMIT 1",
+            vec![("n", 60000)],
+        ),
+    ];
+    let mut refused = Vec::new();
+    for (sql, want) in cases {
+        let shown = plan(&e, sql);
+        assert!(
+            shown.contains("CrossJoinExec"),
+            "no cross join, so this does not test it:\n{shown}"
+        );
+        match run(&e, sql) {
+            Ok((rows, _)) => {
+                assert_eq!(rows.len(), 1, "{sql}");
+                for (k, v) in want {
+                    assert_eq!(rows[0][k], v, "{sql}");
+                }
+            }
+            Err(m) => refused.push(format!("{sql}: {m}")),
+        }
+    }
+    assert!(refused.is_empty(), "refused:\n{}", refused.join("\n"));
+}
