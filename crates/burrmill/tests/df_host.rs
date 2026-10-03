@@ -1049,3 +1049,25 @@ fn a_budgeted_hash_join_over_text_is_charged_for_its_rows_not_their_buffers() {
         Err(e) => panic!("the budgeted join over views refused: {e}"),
     }
 }
+
+/// #21: more than one statement is refused by name; none of them runs, the first included.
+#[test]
+fn several_statements_are_refused_not_run_in_part() {
+    let mut engine = Engine::open_empty().unwrap();
+    engine
+        .register_rows("labels", &[json!({"a": "0x1", "l": "alice"})])
+        .unwrap();
+    for sql in [
+        "SELECT 1 AS a; SELECT 2 AS b",
+        "SELECT a FROM labels; DELETE FROM labels",
+        "EXPLAIN SELECT 1; SELECT 2",
+    ] {
+        match engine.sql(sql) {
+            Err(burrmill::BurrmillError::NotAllowed(m)) => {
+                assert!(m.contains("statements where one is allowed"), "{sql}: {m}")
+            }
+            other => panic!("{sql}: expected a refusal of several statements, got {other:?}"),
+        }
+    }
+    assert_eq!(rows(&engine, "SELECT 1 AS a;"), vec![json!({"a": 1})]);
+}

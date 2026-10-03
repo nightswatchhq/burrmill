@@ -54,7 +54,14 @@ pub(crate) fn parse_statements(sql: &str) -> Result<Vec<DfStatement>> {
 /// Parse with DuckDB's dialect and rewrite into what DataFusion plans. The result columns' DuckDB
 /// names come back too, taken from the statement as written, before any rewrite.
 pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String>>)> {
-    let Some(mut stmt) = parse_statements(sql)?.into_iter().next() else {
+    let mut stmts = parse_statements(sql)?;
+    if stmts.len() > 1 {
+        return Err(BurrmillError::NotAllowed(format!(
+            "{} statements where one is allowed",
+            stmts.len()
+        )));
+    }
+    let Some(mut stmt) = stmts.pop() else {
         return Err(BurrmillError::Parse("empty statement".into()));
     };
     let mut names = match &stmt {
