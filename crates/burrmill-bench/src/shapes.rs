@@ -150,7 +150,7 @@ fn walk_query(q: &Query, sh: &mut Shape) {
             }
         }
     }
-    if !q.order_by.is_none() {
+    if q.order_by.is_some() {
         sh.0.insert(Feature::OrderBy);
     }
     if q.limit_clause.is_some() {

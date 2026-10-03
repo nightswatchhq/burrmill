@@ -461,7 +461,7 @@ impl Gen<'_> {
                 self.dec(sc, d.saturating_sub(1)),
                 self.dec(sc, d.saturating_sub(1))
             ),
-            _ => format!("TRY_CAST(e.value AS DECIMAL(20,2))"),
+            _ => "TRY_CAST(e.value AS DECIMAL(20,2))".to_string(),
         }
     }
 
@@ -1179,7 +1179,7 @@ pub fn run() -> anyhow::Result<()> {
     }
     println!("STRICTER reasons:");
     let mut why: Vec<_> = stricter_why.into_iter().collect();
-    why.sort_by(|a, b| b.1.cmp(&a.1));
+    why.sort_by_key(|w| std::cmp::Reverse(w.1));
     for (k, n) in why.iter().take(12) {
         println!("  {n:>5}  {k}");
     }

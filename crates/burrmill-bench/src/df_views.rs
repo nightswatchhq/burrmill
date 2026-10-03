@@ -337,7 +337,7 @@ impl VisitorMut for Rewriter {
 
 enum Translated {
     Ok {
-        stmt: sq::Statement,
+        stmt: Box<sq::Statement>,
         rules: Vec<&'static str>,
     },
     ParseFail(String),
@@ -373,7 +373,7 @@ fn translate(text: &str) -> Translated {
     let mut rw = Rewriter::default();
     let _ = query.visit(&mut rw);
     Translated::Ok {
-        stmt: sq::Statement::Query(query),
+        stmt: Box::new(sq::Statement::Query(query)),
         rules: rw.used.into_iter().collect(),
     }
 }
@@ -1030,7 +1030,7 @@ pub async fn run(nest_dir: &str) -> anyhow::Result<()> {
         duck.execute_batch(&v.text)?;
 
         let (stmt, rules) = match translate(&v.text) {
-            Translated::Ok { stmt, rules } => (stmt, rules),
+            Translated::Ok { stmt, rules } => (*stmt, rules),
             Translated::ParseFail(e) => {
                 note(&mut outcomes, &v.name, "parse fail", "", e);
                 failed.insert(v.name.clone());
