@@ -79,6 +79,23 @@ pub struct Budget {
     pub spill: Option<(std::path::PathBuf, u64)>,
 }
 
+/// A memory pool several engines draw on, so one budget bounds their statements together rather
+/// than each of them (nuthatch #1792). Every engine still keeps its own footer cache outside it.
+#[derive(Debug, Clone)]
+pub struct SharedPool(Arc<dyn datafusion_execution::memory_pool::MemoryPool>);
+
+impl SharedPool {
+    /// The pool a budget of `memory_bytes` gives its statements, as one budgeted engine builds.
+    pub fn new(memory_bytes: usize) -> Self {
+        Self(session::budget_pool(memory_bytes))
+    }
+
+    /// Bytes the statements of every engine on it hold.
+    pub fn reserved(&self) -> usize {
+        self.0.reserved()
+    }
+}
+
 /// Concrete engine: SQL in, RecordBatches out. Generics stay inside this crate.
 pub struct Engine {
     /// Taken only by `Drop`.
@@ -109,7 +126,7 @@ impl Engine {
                 segments.display()
             )));
         }
-        Self::from_tables(tables, Limits::default().max_threads, None)
+        Self::from_tables(tables, Limits::default().max_threads, None, None)
     }
 
     /// Open a nest root (`segments/` plus optional `schema.json` for unsealed and `_dec`).
@@ -125,10 +142,15 @@ impl Engine {
                 root.display()
             )));
         }
-        Self::from_tables(tables, Limits::default().max_threads, None)
+        Self::from_tables(tables, Limits::default().max_threads, None, None)
     }
 
-    fn from_tables(tables: Vec<NestTable>, threads: usize, budget: Option<Budget>) -> Result<Self> {
+    fn from_tables(
+        tables: Vec<NestTable>,
+        threads: usize,
+        budget: Option<Budget>,
+        shared: Option<&SharedPool>,
+    ) -> Result<Self> {
         let threads = budget.as_ref().map_or(threads, |b| b.threads.max(1));
         let mut rt = tokio::runtime::Builder::new_multi_thread();
         if budget.is_some() {
@@ -161,8 +183,8 @@ impl Engine {
             pool: Arc::new(pool),
         };
         let cancel = crate::CancelToken::new();
-        let mut session =
-            MiniSession::new(threads, fold, budget.as_ref(), cancel.clone()).map_err(df_err)?;
+        let mut session = MiniSession::new(threads, fold, budget.as_ref(), shared, cancel.clone())
+            .map_err(df_err)?;
         let groups = threads.max(1);
         for t in &tables {
             let provider: Arc<dyn TableProvider> = if t.files.is_empty() {

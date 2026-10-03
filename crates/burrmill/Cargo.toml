@@ -183,6 +183,11 @@ path = "tests/df_windowbudget.rs"
 required-features = ["datafusion"]
 
 [[test]]
+name = "df_sharedpool"
+path = "tests/df_sharedpool.rs"
+required-features = ["datafusion"]
+
+[[test]]
 name = "generated_planner"
 path = "tests/generated_planner.rs"
 required-features = ["datafusion"]
