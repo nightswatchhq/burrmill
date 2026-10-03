@@ -371,6 +371,8 @@ const CORPUS: &[&str] = &[
     "SELECT DISTINCT a FROM (VALUES (1, 2), (2, 1)) t(a, b) ORDER BY b",
     "WITH x(a, a) AS (SELECT 1, 2) SELECT * FROM x",
     "SELECT CAST(struct_pack(a := 1, b := 'x') AS VARCHAR) AS a",
+    // #47: windows over a table cross joined with the one row a filter leaves of a grouped relation.
+    "SELECT b.\"from\", b.block_number, b.log_index, p.n, COUNT(*) OVER () AS total, COUNT(*) FILTER (WHERE b.log_index > 0) OVER () AS active FROM transfer b CROSS JOIN (SELECT f, n FROM (SELECT \"from\" AS f, count(*) AS n FROM transfer GROUP BY 1) g WHERE f = (SELECT min(\"from\") FROM transfer)) p ORDER BY 2 DESC, 3, 1 LIMIT 25",
 ];
 
 /// Differences that stand, and why.
