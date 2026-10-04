@@ -92,6 +92,17 @@ pub(crate) struct Nest {
 }
 
 pub(crate) fn load_nest(root: &Path) -> anyhow::Result<Nest> {
+    let nest = load_nest_allowing_no_views(root)?;
+    anyhow::ensure!(
+        !nest.views.is_empty(),
+        "no CREATE VIEW statements under {}",
+        root.display()
+    );
+    Ok(nest)
+}
+
+/// A nest whose statements read its sealed tables directly, as the release gate's may.
+pub(crate) fn load_nest_allowing_no_views(root: &Path) -> anyhow::Result<Nest> {
     let mut by_table: BTreeMap<String, Vec<(PathBuf, u64)>> = BTreeMap::new();
     for e in std::fs::read_dir(root.join("segments"))?.flatten() {
         let p = e.path();
@@ -176,12 +187,12 @@ pub(crate) fn load_nest(root: &Path) -> anyhow::Result<Nest> {
         });
     }
 
-    let views = load_views(&root.join("views"))?;
-    anyhow::ensure!(
-        !views.is_empty(),
-        "no CREATE VIEW statements under {}",
-        root.display()
-    );
+    let dir = root.join("views");
+    let views = if dir.is_dir() {
+        load_views(&dir)?
+    } else {
+        Vec::new()
+    };
     let wants_dec = views.iter().any(|v| v.body.contains("_dec"));
     Ok(Nest {
         tables,

@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::df_views::load_nest;
+use crate::df_views::load_nest_allowing_no_views;
 
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or("").chars().take(400).collect()
@@ -19,7 +19,7 @@ fn first_line(s: &str) -> String {
 pub fn run(nest: &str, set: &str, out: &str) -> anyhow::Result<()> {
     let out = Path::new(out);
     std::fs::create_dir_all(out)?;
-    let nest = load_nest(Path::new(nest))?;
+    let nest = load_nest_allowing_no_views(Path::new(nest))?;
     let conn = crate::engine_views::duck(&nest)?;
     let mut view_faults = String::new();
     for v in &nest.views {
@@ -71,4 +71,51 @@ pub fn run(nest: &str, set: &str, out: &str) -> anyhow::Result<()> {
         view_faults.lines().count()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::UInt64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+
+    /// A nest that authors no views is ordinary: its statements read the sealed tables directly.
+    #[test]
+    fn a_nest_with_no_views_is_answered() {
+        let dir = tempfile::tempdir().unwrap();
+        let nest = dir.path().join("nest");
+        std::fs::create_dir_all(nest.join("segments")).unwrap();
+        std::fs::create_dir_all(nest.join("views")).unwrap();
+        std::fs::write(nest.join("schema.json"), r#"{"tables":[]}"#).unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "block_number",
+            DataType::UInt64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(UInt64Array::from(vec![7_u64, 8, 9]))],
+        )
+        .unwrap();
+        let f = std::fs::File::create(nest.join("segments/transfer-0000000001.parquet")).unwrap();
+        let mut w = parquet::arrow::ArrowWriter::try_new(f, schema, None).unwrap();
+        w.write(&batch).unwrap();
+        w.close().unwrap();
+        let set = dir.path().join("set.tsv");
+        std::fs::write(&set, "n\tt\tsrc\tSELECT count(*) AS n FROM transfer\n").unwrap();
+        let out = dir.path().join("out");
+
+        super::run(
+            nest.to_str().unwrap(),
+            set.to_str().unwrap(),
+            out.to_str().unwrap(),
+        )
+        .unwrap();
+
+        let body = std::fs::read_to_string(out.join("n.json")).unwrap();
+        assert!(body.contains(r#""count":1"#), "{body}");
+        assert!(body.contains('3'), "{body}");
+    }
 }
