@@ -227,14 +227,25 @@ fn charges_inside(p: &Arc<dyn ExecutionPlan>) -> bool {
     p.downcast_ref::<SortExec>().is_some()
 }
 
-/// `t` with its views, a list's included, as offsets; `None` if it holds none. An aggregate's list
-/// state is the one nesting #40 found charged for buffers.
+/// `t` with its views, a list's or a struct's included, as offsets; `None` if it holds none. An
+/// aggregate's list state is the nesting #40 found charged for buffers, and an ordered aggregate's
+/// keeps its sort keys as a list of structs (#74).
 fn offsets(t: &DataType) -> Option<DataType> {
     match t {
         DataType::Utf8View => Some(DataType::Utf8),
         DataType::BinaryView => Some(DataType::Binary),
         DataType::List(f) => offsets(f.data_type())
             .map(|t| DataType::List(Arc::new(f.as_ref().clone().with_data_type(t)))),
+        DataType::Struct(fs) if fs.iter().any(|f| offsets(f.data_type()).is_some()) => {
+            Some(DataType::Struct(
+                fs.iter()
+                    .map(|f| match offsets(f.data_type()) {
+                        Some(t) => Arc::new(f.as_ref().clone().with_data_type(t)),
+                        None => Arc::clone(f),
+                    })
+                    .collect(),
+            ))
+        }
         _ => None,
     }
 }
