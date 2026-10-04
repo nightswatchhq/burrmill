@@ -11,7 +11,7 @@
 //! Taken for a collect-left join that never emits an unmatched probe row, a conjunct of its filter
 //! comparing plain columns of one non-float type, and a probe column that reaches a Parquet scan
 //! through columns a projection, filter, union or repartition passes along. DataFusion's own join
-//! filter is off (#52) and bounds only the equality keys, here an expression no statistic covers.
+//! filter bounds only the equality keys, here an expression no statistic covers.
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
