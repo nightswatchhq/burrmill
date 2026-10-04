@@ -754,3 +754,112 @@ fn hugeint_try_cast_past_38_digits_refuses_or_answers_as_duckdb() {
     let m = refused(&e, "SELECT SUM(TRY_CAST(value AS HUGEINT)) FROM transfer");
     assert!(m.contains("does not fit"), "{m}");
 }
+
+/// #63: #44's band from a float. DuckDB's `TRY_CAST(x AS HUGEINT)` answers a DOUBLE or FLOAT that
+/// rounds to under 2^127 in magnitude, 10^38 and past included; here the value refuses by name, and
+/// its NULL test and its sum answer as DuckDB's do. Expected values measured against DuckDB 1.5.
+#[test]
+fn hugeint_try_cast_of_a_float_past_38_digits_refuses_or_answers_as_duckdb() {
+    let two127 = 2f64.powi(127);
+    let below = f64::from_bits(two127.to_bits() - 1);
+    let doubles = col(
+        "v",
+        Arc::new(Float64Array::from(vec![
+            1.5e38,
+            -1.5e38,
+            1e38,
+            2.5,
+            f64::NAN,
+            two127,
+            -two127,
+            below,
+        ])),
+    );
+    let floats = col(
+        "v",
+        Arc::new(arrow::array::Float32Array::from(vec![1.5e38f32, -1.6e38])),
+    );
+    let (_t, e) = engine(&[("d", vec![doubles]), ("f", vec![floats])]);
+    for w in ["1.5e38", "-1.5e38", "1.7014118346046921e38"] {
+        let m = refused(
+            &e,
+            &format!("SELECT TRY_CAST(v AS HUGEINT) FROM d WHERE v = {w}"),
+        );
+        assert!(m.contains("HUGEINT"), "{w}: {m}");
+    }
+    let m = refused(
+        &e,
+        "SELECT TRY_CAST(v AS HUGEINT) + 1 FROM d WHERE v = 1.5e38",
+    );
+    assert!(m.contains("HUGEINT"), "{m}");
+    let m = refused(&e, "SELECT TRY_CAST(v AS HUGEINT) FROM f WHERE v > 0");
+    assert!(m.contains("HUGEINT"), "{m}");
+    assert_eq!(
+        rows(
+            &e,
+            "SELECT TRY_CAST(v AS HUGEINT) FROM d WHERE v = 1e38 OR v = 2.5 OR isnan(v) OR abs(v) >= 1.7014118346046923e38 ORDER BY v"
+        ),
+        vec![
+            vec!["NULL".to_string()],
+            vec!["2".to_string()],
+            vec!["99999999999999997748809823456034029568".to_string()],
+            vec!["NULL".to_string()],
+            vec!["NULL".to_string()],
+        ]
+    );
+    assert_eq!(
+        rows(
+            &e,
+            "SELECT TRY_CAST(v AS HUGEINT) IS NULL, TRY_CAST(v AS HUGEINT) IS NOT NULL FROM d ORDER BY v"
+        )
+        .into_iter()
+        .map(|r| r.join(" "))
+        .collect::<Vec<_>>(),
+        vec![
+            "true false",
+            "false true",
+            "false true",
+            "false true",
+            "false true",
+            "false true",
+            "true false",
+            "true false",
+        ]
+    );
+    assert_eq!(
+        one(
+            &e,
+            "SELECT count(*) FROM f WHERE TRY_CAST(v AS HUGEINT) IS NOT NULL"
+        ),
+        "2"
+    );
+
+    // 1.5e38 and -1.5e38 cancel; NaN and 2^127 are NULL in DuckDB's cast and left out of its sum.
+    let sum = "SELECT SUM(TRY_CAST(v AS HUGEINT)) FROM d WHERE abs(v) <> 1e38 AND abs(v) <> 1.7014118346046921e38";
+    assert_eq!(one(&e, sum), "2");
+    assert_eq!(
+        one(
+            &e,
+            "SELECT SUM(h) FROM (SELECT TRY_CAST(v AS HUGEINT) AS h FROM d \
+             WHERE abs(v) <> 1e38 AND abs(v) <> 1.7014118346046921e38) s"
+        ),
+        "2"
+    );
+    assert_eq!(
+        one(
+            &e,
+            "SELECT SUM(h) FROM (SELECT TRY_CAST(v AS HUGEINT) AS h FROM d UNION ALL \
+             SELECT -TRY_CAST(v AS HUGEINT) FROM d) u"
+        ),
+        "0"
+    );
+    assert_eq!(
+        one(&e, "SELECT SUM(TRY_CAST(v AS HUGEINT)) FROM f"),
+        "-9999998666165212282482104879554756608"
+    );
+    let m = refused(
+        &e,
+        "SELECT SUM(TRY_CAST(v AS HUGEINT)) FROM d WHERE v > 1e38",
+    );
+    assert!(m.contains("does not fit"), "{m}");
+}

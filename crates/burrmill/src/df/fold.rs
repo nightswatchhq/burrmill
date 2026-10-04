@@ -400,7 +400,7 @@ impl FoldSubstitution {
             }
             // The owned fold reads the whole i128, as DuckDB's HUGEINT does.
             let source = match source {
-                Expr::ScalarFunction(f) if f.func.name() == super::fastcast::HUGEINT_TEXT => {
+                Expr::ScalarFunction(f) if f.func.name() == super::fastcast::HUGEINT_SOURCE => {
                     &f.args[0]
                 }
                 s => s,
