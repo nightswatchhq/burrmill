@@ -465,12 +465,26 @@ fn holds_a_file(dir: &std::path::Path) -> bool {
 
 #[test]
 fn aggregate_ordered_by_text() {
+    let body = "SELECT count(*) AS n, max(l[1]) AS f FROM \
+         (SELECT block_number % 100 AS g, array_agg(block_number ORDER BY amount DESC) AS l \
+          FROM s GROUP BY 1)";
     within(
         "aggregate array_agg ORDER BY text (burrmill)",
         "array_agg",
-        "SELECT count(*) AS n, max(l[1]) AS f FROM \
-         (SELECT block_number % 100 AS g, array_agg(block_number ORDER BY amount DESC) AS l \
-          FROM s GROUP BY 1)",
+        body,
+    );
+    // The repartition's overcharge reaches the peak only when its queue backs up, which takes a
+    // contended machine (#74), so the plan is checked for the repartition running over offsets.
+    let shown = plan(
+        &engine(),
+        &format!(
+            "WITH s AS (SELECT block_number, arrow_cast(who, 'Utf8View') AS who, \
+             arrow_cast(amount, 'Utf8View') AS amount FROM t) {body}"
+        ),
+    );
+    assert!(
+        shown.contains("CastViewsExec\\n              RepartitionExec: partitioning=Hash"),
+        "the state's repartition charges the views' buffers:\n{shown}"
     );
 }
 
