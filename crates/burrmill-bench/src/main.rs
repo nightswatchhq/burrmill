@@ -26,7 +26,6 @@ mod engine_views;
 mod error_parity;
 mod fixture;
 mod fuzz;
-mod gate_duck;
 mod generate;
 mod oracles;
 mod reach_parity;
@@ -181,13 +180,6 @@ async fn run() -> anyhow::Result<()> {
                 .nth(2)
                 .ok_or_else(|| anyhow::anyhow!("usage: engine-views <nest>"))?,
         ),
-        Some("gate-duck") => {
-            let a: Vec<String> = std::env::args().skip(2).collect();
-            let [nest, set, out] = a.as_slice() else {
-                anyhow::bail!("usage: gate-duck <nest> <set.tsv> <out-dir>");
-            };
-            gate_duck::run(nest, set, out)
-        }
         Some("duck-keywords") => dialect_parity::duck_keywords(),
         Some("fuzz") => fuzz::run(),
         Some("duck-eval") => dialect_parity::duck_eval(
