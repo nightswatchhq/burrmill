@@ -123,6 +123,11 @@ path = "tests/df_lambda.rs"
 required-features = ["datafusion"]
 
 [[test]]
+name = "df_rangebounds"
+path = "tests/df_rangebounds.rs"
+required-features = ["datafusion"]
+
+[[test]]
 name = "df_rangejoin"
 path = "tests/df_rangejoin.rs"
 required-features = ["datafusion"]
