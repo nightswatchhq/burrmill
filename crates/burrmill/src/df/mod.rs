@@ -39,6 +39,7 @@ pub mod encode;
 mod errors;
 mod extreme;
 mod fastcast;
+mod floatsum;
 mod fold;
 mod host;
 mod lastnonnull;
