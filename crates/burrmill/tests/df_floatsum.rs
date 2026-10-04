@@ -222,6 +222,41 @@ fn double_sums_are_correctly_rounded() {
     }
 }
 
+/// An infinity in one segment and its opposite in another meet only in the final merge.
+#[test]
+fn infinities_survive_the_merge() {
+    let tmp = tempfile::tempdir().unwrap();
+    let parts: [&[f64]; 3] = [
+        &[1.0, f64::INFINITY],
+        &[2.0, 3.0],
+        &[f64::NEG_INFINITY, 4.0],
+    ];
+    let files: Vec<_> = parts
+        .iter()
+        .enumerate()
+        .flat_map(|(i, vs)| {
+            let rows: Vec<_> = vs.iter().map(|&v| (0, 0, v)).collect();
+            let dir = tmp.path().join(format!("p{i}"));
+            std::fs::create_dir(&dir).unwrap();
+            segments(&dir, &rows, 1, i as u64)
+        })
+        .collect();
+    let pos = &files[..2];
+    for threads in [Some(1), Some(3)] {
+        let e = engine(threads, files.clone());
+        for q in ["SELECT sum(v) FROM t", "SELECT g, sum(v) FROM t GROUP BY g"] {
+            let got = answer(&e, q);
+            assert!(is_nan(got[0].last().unwrap()), "{q}: {got:?}");
+        }
+        let e = engine(threads, pos.to_vec());
+        assert_eq!(
+            answer(&e, "SELECT g, sum(v) FROM t GROUP BY g"),
+            vec![vec!["0".to_string(), bits(f64::INFINITY)]]
+        );
+        assert_eq!(one(&e, "SELECT sum(v) FROM t"), bits(f64::INFINITY));
+    }
+}
+
 fn one(e: &Engine, sql: &str) -> String {
     answer(e, sql)[0].join(" ")
 }
