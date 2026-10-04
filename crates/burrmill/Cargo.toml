@@ -158,6 +158,11 @@ path = "tests/df_extreme.rs"
 required-features = ["datafusion"]
 
 [[test]]
+name = "df_floatsum"
+path = "tests/df_floatsum.rs"
+required-features = ["datafusion"]
+
+[[test]]
 name = "df_host"
 path = "tests/df_host.rs"
 required-features = ["datafusion"]

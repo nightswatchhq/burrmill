@@ -205,6 +205,10 @@ impl MiniSession {
         }
         let mut aggregate = HashMap::new();
         for f in datafusion_functions_aggregate::all_default_aggregate_functions() {
+            let f = match f.name() {
+                "sum" | "avg" => super::floatsum::ExactDoubles::udaf(f),
+                _ => f,
+            };
             for a in f.aliases() {
                 aggregate.insert(a.clone(), Arc::clone(&f));
             }
