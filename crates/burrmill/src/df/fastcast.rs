@@ -80,7 +80,8 @@ fn fast(e: Expr, schema: &DFSchema) -> Result<Transformed<Expr>> {
     }
     if let Expr::TryCast(datafusion_expr::TryCast { expr, field }) = &e
         && let Expr::ScalarFunction(f) = expr.as_ref()
-        && f.func.name() == HUGEINT_TEXT
+        && f.func.name() == HUGEINT_SOURCE
+        && is_text(&f.args[0].get_type(schema)?)
         && let DataType::Decimal128(p, 0) = field.data_type()
     {
         let udf = Arc::new(ScalarUDF::from(TextToDecimal {
@@ -486,11 +487,16 @@ pub(crate) fn duck_hugeint(s: &str) -> Option<i128> {
         .to_i128()
 }
 
-fn past_decimal(s: &str) -> datafusion_common::DataFusionError {
+fn past_decimal(shown: &str) -> datafusion_common::DataFusionError {
     exec_datafusion_err!(
-        "TRY_CAST('{s}' AS HUGEINT): DuckDB's HUGEINT holds it and HUGEINT here is DECIMAL(38,0), \
+        "TRY_CAST({shown} AS HUGEINT): DuckDB's HUGEINT holds it and HUGEINT here is DECIMAL(38,0), \
          which does not, so it is refused rather than read as NULL"
     )
+}
+
+/// A whole float as DuckDB's HUGEINT cast reads it: NULL from 2^127 in magnitude, -2^127 included.
+pub(crate) fn float_hugeint(v: f64) -> Option<i128> {
+    (v.abs() < 2f64.powi(127)).then_some(v as i128)
 }
 
 pub(crate) fn each_text(a: &ArrayRef, mut f: impl FnMut(Option<&str>) -> Result<()>) -> Result<()> {
@@ -511,18 +517,19 @@ pub(crate) fn each_text(a: &ArrayRef, mut f: impl FnMut(Option<&str>) -> Result<
     }
 }
 
-pub(crate) const HUGEINT_TEXT: &str = "burrmill_hugeint_text";
+pub(crate) const HUGEINT_SOURCE: &str = "burrmill_hugeint_source";
 
-/// The text under a `TRY_CAST(x AS HUGEINT)`, so the rules after `DuckSemantics` can still tell it
-/// from `AS DECIMAL(38,0)`. Passes `x` through, refusing what HUGEINT holds past 38 digits; with
-/// `fits`, whether `x` reads as a HUGEINT at all, which is that cast's `IS NOT NULL`.
+/// The text, or the rounded DOUBLE, under a `TRY_CAST(x AS HUGEINT)`, so the rules after
+/// `DuckSemantics` can still tell it from `AS DECIMAL(38,0)`. Passes `x` through, refusing what
+/// HUGEINT holds past 38 digits; with `fits`, whether `x` reads as a HUGEINT at all, which is that
+/// cast's `IS NOT NULL`.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(crate) struct HugeintText {
+pub(crate) struct HugeintSource {
     sig: Signature,
     fits: bool,
 }
 
-impl HugeintText {
+impl HugeintSource {
     pub(crate) fn udf(fits: bool) -> Arc<ScalarUDF> {
         Arc::new(ScalarUDF::from(Self {
             sig: Signature::any(1, Volatility::Immutable),
@@ -531,20 +538,20 @@ impl HugeintText {
     }
 }
 
-impl ScalarUDFImpl for HugeintText {
+impl ScalarUDFImpl for HugeintSource {
     fn name(&self) -> &str {
         if self.fits {
             "burrmill_fits_hugeint"
         } else {
-            HUGEINT_TEXT
+            HUGEINT_SOURCE
         }
     }
     fn signature(&self) -> &Signature {
         &self.sig
     }
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        if !is_text(&args[0]) {
-            return plan_err!("{} takes text, not {}", self.name(), args[0]);
+        if !is_text(&args[0]) && args[0] != DataType::Float64 {
+            return plan_err!("{} takes text or a DOUBLE, not {}", self.name(), args[0]);
         }
         Ok(if self.fits {
             DataType::Boolean
@@ -555,7 +562,19 @@ impl ScalarUDFImpl for HugeintText {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let scalar = matches!(args.args[0], ColumnarValue::Scalar(_));
         let a = ColumnarValue::values_to_arrays(&args.args)?.remove(0);
-        let out: ArrayRef = if self.fits {
+        let out: ArrayRef = if let Some(d) = a.as_primitive_opt::<arrow::datatypes::Float64Type>() {
+            if self.fits {
+                let fits = d.iter().map(|v| Some(v.and_then(float_hugeint).is_some()));
+                Arc::new(fits.collect::<arrow::array::BooleanArray>())
+            } else {
+                for v in d.iter().flatten() {
+                    if float_hugeint(v).is_some_and(|i| i.unsigned_abs() >= 10u128.pow(38)) {
+                        return Err(past_decimal(&format!("{v:e}")));
+                    }
+                }
+                a
+            }
+        } else if self.fits {
             let mut b = arrow::array::BooleanBuilder::with_capacity(a.len());
             each_text(&a, |s| {
                 b.append_value(s.is_some_and(|s| duck_hugeint(s).is_some()));
@@ -566,7 +585,7 @@ impl ScalarUDFImpl for HugeintText {
             each_text(&a, |s| match s {
                 Some(s) if plain(s, 38).is_none() && duck_decimal(s, 38).is_none() => {
                     match duck_hugeint(s) {
-                        Some(_) => Err(past_decimal(s)),
+                        Some(_) => Err(past_decimal(&format!("'{s}'"))),
                         None => Ok(()),
                     }
                 }

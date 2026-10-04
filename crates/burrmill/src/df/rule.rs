@@ -619,7 +619,7 @@ impl CheckedArithmetic {
             return None;
         }
         if let Expr::ScalarFunction(f) = source
-            && f.func.name() == super::fastcast::HUGEINT_TEXT
+            && f.func.name() == super::fastcast::HUGEINT_SOURCE
         {
             let w = if neg {
                 &self.wide_neg_hugeint

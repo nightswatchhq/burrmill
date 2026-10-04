@@ -818,7 +818,8 @@ pub struct ExactWide {
     neg: bool,
     /// The `TRY_CAST` read was to a 64-bit integer, which takes `0x`/`0b` text.
     hex: bool,
-    /// The `TRY_CAST` was written as HUGEINT: text past i128 is NULL, as DuckDB reads it.
+    /// The `TRY_CAST` was written as HUGEINT: text past i128, or a rounded float from 2^127, is
+    /// NULL, as DuckDB reads it.
     hugeint: bool,
 }
 
@@ -869,6 +870,7 @@ impl ScalarUDFImpl for ExactWide {
                 | Utf8View
                 | FixedSizeBinary(WIDE_BYTES)),
             ] => t.clone(),
+            [Float64] if self.hugeint => Float64,
             t => return plan_err!("{} has no exact form for {t:?}", self.name()),
         }])
     }
@@ -884,8 +886,8 @@ impl ScalarUDFImpl for ExactWide {
         if self.hugeint {
             let mut b = FixedSizeBinaryBuilder::with_capacity(a.len(), WIDE_BYTES);
             let mut buf = [0u8; WIDE_BYTES as usize];
-            super::fastcast::each_text(&a, |s| {
-                match s.and_then(super::fastcast::duck_hugeint) {
+            let mut push = |v: Option<i128>| -> Result<()> {
+                match v {
                     Some(v) => {
                         let w = Wide::<5>::from_i128(v);
                         let w = if self.neg {
@@ -899,7 +901,15 @@ impl ScalarUDFImpl for ExactWide {
                     None => b.append_null(),
                 }
                 Ok(())
-            })?;
+            };
+            match a.as_primitive_opt::<arrow::datatypes::Float64Type>() {
+                Some(d) => d
+                    .iter()
+                    .try_for_each(|v| push(v.and_then(super::fastcast::float_hugeint)))?,
+                None => super::fastcast::each_text(&a, |s| {
+                    push(s.and_then(super::fastcast::duck_hugeint))
+                })?,
+            }
             let out: ArrayRef = Arc::new(b.finish());
             return Ok(if all_scalar {
                 ColumnarValue::Scalar(ScalarValue::try_from_array(&out, 0)?)

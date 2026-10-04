@@ -3563,13 +3563,17 @@ fn hugeint_rounding(
         Expr::Cast(Cast { expr, field }) if expr.get_type(schema)?.is_floating() => {
             Expr::Cast(Cast::new(rounded(expr), field.data_type().clone()))
         }
-        Expr::TryCast(TryCast { expr, field }) if expr.get_type(schema)?.is_floating() => {
-            Expr::TryCast(TryCast::new(rounded(expr), field.data_type().clone()))
-        }
-        Expr::TryCast(TryCast { expr, field }) if is_text(&expr.get_type(schema)?) => {
+        Expr::TryCast(TryCast { expr, field }) => {
+            let source = if expr.get_type(schema)?.is_floating() {
+                *rounded(expr)
+            } else if is_text(&expr.get_type(schema)?) {
+                expr.as_ref().clone()
+            } else {
+                return Ok(Transformed::yes(arg.clone()));
+            };
             let marked = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
-                super::fastcast::HugeintText::udf(false),
-                vec![expr.as_ref().clone()],
+                super::fastcast::HugeintSource::udf(false),
+                vec![source],
             ));
             Expr::TryCast(TryCast::new(Box::new(marked), field.data_type().clone()))
         }
@@ -3577,7 +3581,7 @@ fn hugeint_rounding(
     }))
 }
 
-/// `TRY_CAST(x AS HUGEINT) IS [NOT] NULL` over text, answered for DuckDB's whole HUGEINT rather than
+/// `TRY_CAST(x AS HUGEINT) IS [NOT] NULL` over text or a float, answered for DuckDB's whole HUGEINT rather than
 /// refused where the value itself could not be held.
 fn hugeint_null_test(e: Expr) -> DFResult<Transformed<Expr>> {
     let (inner, null) = match &e {
@@ -3591,11 +3595,11 @@ fn hugeint_null_test(e: Expr) -> DFResult<Transformed<Expr>> {
     let Expr::ScalarFunction(f) = expr.as_ref() else {
         return Ok(Transformed::no(e));
     };
-    if f.func.name() != super::fastcast::HUGEINT_TEXT {
+    if f.func.name() != super::fastcast::HUGEINT_SOURCE {
         return Ok(Transformed::no(e));
     }
     let fits = Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
-        super::fastcast::HugeintText::udf(true),
+        super::fastcast::HugeintSource::udf(true),
         f.args.clone(),
     ));
     Ok(Transformed::yes(if null { !fits } else { fits }))
