@@ -689,3 +689,22 @@ fn a_join_partitioned_by_a_window_key_meets_every_row() {
     let (rows, _) = run(&e, sql).unwrap();
     assert_eq!(rows, vec![serde_json::json!({"n": ROWS, "matched": ROWS})]);
 }
+
+/// #64: a partitioned join's dynamic filter reaches the probe scan and routes each row by its key
+/// hashed as the scan reads it, a view. Under a budget the repartition below the join runs over
+/// offsets, and while it hashed a bare key as offsets (before #66) rows went to another partition's
+/// filter and were dropped. Plain DataFusion keeps one type on both sides and answers.
+#[test]
+fn a_partitioned_join_filter_at_the_scan_drops_no_row() {
+    let e = engine();
+    let sql = "SELECT count(*) AS n FROM t a JOIN t b ON a.who = b.who";
+    let shown = plan(&e, sql);
+    assert!(
+        shown.contains("HashJoinExec: mode=Partitioned")
+            && shown.contains("CastViewsExec")
+            && shown.contains("DynamicFilter"),
+        "no partitioned join over offsets with a filter at its scan, so this does not test it:\n{shown}"
+    );
+    let (rows, _) = run(&e, sql).unwrap();
+    assert_eq!(rows, vec![serde_json::json!({"n": ROWS})]);
+}

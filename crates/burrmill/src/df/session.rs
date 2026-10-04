@@ -105,12 +105,6 @@ impl MiniSession {
         config.options_mut().sql_parser.enable_ident_normalization = false;
         // DuckDB types `1.5` as DECIMAL(2,1), and nuthatch prints a DECIMAL as a string.
         config.options_mut().sql_parser.parse_float_as_decimal = true;
-        // No join filter reaches the scans (#52). A partitioned join's filter routes by the probe key
-        // hashed as the scan reads it, views, where a budgeted repartition hashed offsets: rows went.
-        config
-            .options_mut()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown = false;
         // Each sorting partition reserves this up front to merge its spilled runs; DataFusion's
         // 10 MB each is more than a small budget holds, and a sort that cannot reserve it refuses.
         if let Some(b) = budget {
