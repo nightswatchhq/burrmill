@@ -10,8 +10,8 @@
 //!
 //! Taken for a collect-left join that never emits an unmatched probe row, a conjunct of its filter
 //! comparing plain columns of one non-float type, and a probe column that reaches a Parquet scan
-//! through columns a projection, filter or repartition passes along. DataFusion's own join filter
-//! is off (#52) and bounds only the equality keys, which here are an expression no statistic covers.
+//! through columns a projection, filter, union or repartition passes along. DataFusion's own join
+//! filter is off (#52) and bounds only the equality keys, here an expression no statistic covers.
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -34,6 +34,7 @@ use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, replace_children_if_necessary,
 };
@@ -103,38 +104,27 @@ fn conditions(j: &HashJoinExec) -> Vec<Condition> {
         .collect()
 }
 
-/// The probe side with its scan filtered, the filter, and the column it is written over.
-type Attached = (
-    Arc<dyn ExecutionPlan>,
-    Arc<DynamicFilterPhysicalExpr>,
-    Arc<dyn PhysicalExpr>,
-);
-
-/// `plan` with a filter on its column `col` placed in the Parquet scan that produces it, the filter,
-/// and the column as the scan outputs it, which the filter's expressions are written over.
+/// `plan` with `filter`, written over its column `col`, in each Parquet scan that column comes from.
+/// A union arm that is not such a scan, the unsealed tip, is read whole.
 fn attach(
     plan: &Arc<dyn ExecutionPlan>,
     col: usize,
+    filter: &Arc<dyn PhysicalExpr>,
     config: &ConfigOptions,
-) -> Result<Option<Attached>> {
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     if let Some(d) = plan.downcast_ref::<DataSourceExec>() {
         if d.data_source().downcast_ref::<FileScanConfig>().is_none() {
             return Ok(None);
         }
-        let column: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new(plan.schema().field(col).name(), col));
-        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
-            vec![Arc::clone(&column)],
-            lit(true),
-        ));
         let pushed = d
             .data_source()
-            .try_pushdown_filters(vec![Arc::clone(&filter) as _], config)?;
-        return Ok(pushed.updated_node.map(|source| {
-            let scan: Arc<dyn ExecutionPlan> = Arc::new(d.clone().with_data_source(source));
-            (scan, filter, column)
-        }));
+            .try_pushdown_filters(vec![Arc::clone(filter)], config)?;
+        return Ok(pushed
+            .updated_node
+            .map(|source| Arc::new(d.clone().with_data_source(source)) as Arc<dyn ExecutionPlan>));
     }
+    let children: Vec<Arc<dyn ExecutionPlan>> =
+        plan.children().into_iter().map(Arc::clone).collect();
     let below = if let Some(p) = plan.downcast_ref::<ProjectionExec>() {
         match p.expr()[col].expr.downcast_ref::<Column>() {
             Some(c) => c.index(),
@@ -144,21 +134,30 @@ fn attach(
         f.projection().as_ref().map_or(col, |p| p[col])
     } else if plan.is::<RepartitionExec>()
         || plan.is::<CoalescePartitionsExec>()
+        || plan.is::<UnionExec>()
         || plan.is::<super::cancel::CancelExec>()
     {
         col
     } else {
         return Ok(None);
     };
-    let child = Arc::clone(plan.children()[0]);
-    let Some((child, filter, column)) = attach(&child, below, config)? else {
+    let mut attached = false;
+    let mut out = Vec::with_capacity(children.len());
+    for child in children {
+        let column = Arc::new(Column::new(child.schema().field(below).name(), below));
+        let remapped = Arc::clone(filter).with_new_children(vec![column])?;
+        match attach(&child, below, &remapped, config)? {
+            Some(c) => {
+                attached = true;
+                out.push(c);
+            }
+            None => out.push(child),
+        }
+    }
+    if !attached {
         return Ok(None);
-    };
-    Ok(Some((
-        replace_children_if_necessary(Arc::clone(plan), vec![child])?,
-        filter,
-        column,
-    )))
+    }
+    replace_children_if_necessary(Arc::clone(plan), out).map(Some)
 }
 
 impl PhysicalOptimizerRule for RangeBounds {
@@ -189,7 +188,13 @@ impl PhysicalOptimizerRule for RangeBounds {
             cols.sort_unstable();
             cols.dedup();
             for col in cols {
-                let Some((with, filter, column)) = attach(&probe, col, config)? else {
+                let column: Arc<dyn PhysicalExpr> =
+                    Arc::new(Column::new(probe.schema().field(col).name(), col));
+                let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+                    vec![Arc::clone(&column)],
+                    lit(true),
+                ));
+                let Some(with) = attach(&probe, col, &(Arc::clone(&filter) as _), config)? else {
                     continue;
                 };
                 probe = with;

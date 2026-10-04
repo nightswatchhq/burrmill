@@ -49,7 +49,9 @@ fn engine(dir: &std::path::Path, budget: bool) -> Engine {
         false => Engine::open_empty(),
     }
     .unwrap();
-    e.register_facts("rows", &[], files, &[], (None, None))
+    // An unsealed row as nuthatch holds one, so the scan is one arm of a union with the tip.
+    let tip = serde_json::json!({ "start_epoch": ((FIRST + 40) * 86400).to_string(), "v": 7 });
+    e.register_facts("rows", &[], files, &[tip], (None, None))
         .unwrap();
     e.register_view(
         "bounds",
@@ -104,7 +106,7 @@ fn one_day_reads_one_days_row_groups() {
         let e = engine(tmp.path(), budget);
         for view in ["dated", "dated_flipped"] {
             let sql = format!(
-                "SELECT count(*) AS n, sum(v) AS s FROM {view} WHERE day = DATE '1970-01-01' + {}",
+                "SELECT count(*) AS n, sum(CAST(v AS BIGINT)) AS s FROM {view} WHERE day = DATE '1970-01-01' + {}",
                 FIRST + 7
             );
             assert_eq!(
@@ -138,7 +140,10 @@ fn a_join_keeping_unmatched_probe_rows_reads_them_all() {
         );
         assert_eq!(
             answer(&e, &sql),
-            [format!(r#"{{"n":{},"matched":{PER_DAY}}}"#, DAYS * PER_DAY)],
+            [format!(
+                r#"{{"n":{},"matched":{PER_DAY}}}"#,
+                DAYS * PER_DAY + 1
+            )],
             "{budget}"
         );
     }
@@ -162,7 +167,7 @@ fn a_run_of_days_reads_from_the_first_bound_to_the_last() {
     for budget in [false, true] {
         let e = engine(tmp.path(), budget);
         let sql = format!(
-            "SELECT count(*) AS n, sum(v) AS s FROM dated \
+            "SELECT count(*) AS n, sum(CAST(v AS BIGINT)) AS s FROM dated \
              WHERE day BETWEEN DATE '1970-01-01' + {} AND DATE '1970-01-01' + {}",
             FIRST + 7,
             FIRST + 9
