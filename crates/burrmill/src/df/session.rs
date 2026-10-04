@@ -326,6 +326,7 @@ impl MiniSession {
                     Arc::new(super::topkfilter::TopKFilters)
                         as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
                     Arc::new(super::rangejoin::RangeJoin),
+                    Arc::new(super::rangebounds::RangeBounds),
                     Arc::new(super::smallinputs::SmallInputs),
                     Arc::new(super::heldinput::HeldInput),
                 ])
