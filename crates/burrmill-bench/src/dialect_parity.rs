@@ -313,6 +313,19 @@ const CORPUS: &[&str] = &[
     "SELECT value_dec // 1000000000000000000 AS a FROM transfer ORDER BY block_number, log_index",
     "SELECT sum(value_dec) // 3 AS a, 1::DECIMAL(38,0) // 3 AS b, CAST(7 AS HUGEINT) // 2 AS c, CAST(7 AS DECIMAL(10,0)) // 2 AS d, CAST(7 AS BIGNUM) // 2 AS e, sum(block_number) // 2 AS f FROM transfer",
     "SELECT value_dec // 3 AS a, value_dec // 0 AS b FROM wide",
+    // A HUGEINT beside an integer in COALESCE, CASE, greatest, least or NULLIF is still HUGEINT (#69).
+    "SELECT COALESCE(CAST(7 AS HUGEINT), 0) // CAST(2 AS HUGEINT) AS a, COALESCE(CAST(7 AS HUGEINT), 0) // 2 AS b, IFNULL(CAST(7 AS HUGEINT), 0) // 2 AS c",
+    "SELECT CASE WHEN true THEN CAST(7 AS HUGEINT) ELSE 0 END // 2 AS a, CASE WHEN true THEN CAST(7 AS HUGEINT) ELSE -CAST(7 AS HUGEINT) END // 2 AS b",
+    "SELECT CAST(7 AS HUGEINT) // CAST(2 AS HUGEINT) AS a, CAST(7 AS DECIMAL(10,0)) // 2 AS b, CAST(CAST(7 AS HUGEINT) AS DECIMAL(38,0)) // 2 AS c",
+    "SELECT sum(CAST(value AS HUGEINT)) // 3 AS a, COALESCE(sum(CAST(value AS HUGEINT)), 0) // 3 AS b FROM transfer",
+    "SELECT greatest(CAST(7 AS HUGEINT), 0) // 2 AS a, least(CAST(7 AS HUGEINT), 9) // 2 AS b, NULLIF(CAST(7 AS HUGEINT), 0) // 2 AS c",
+    "SELECT COALESCE(value_dec, 0) // 2 AS a, COALESCE(CAST(7 AS HUGEINT), CAST(0 AS DECIMAL(38,0))) // 2 AS b, CASE WHEN true THEN CAST(7 AS HUGEINT) ELSE CAST(0 AS DECIMAL(10,0)) END // 2 AS c FROM transfer ORDER BY block_number, log_index",
+    "SELECT COALESCE(CAST(value AS HUGEINT), block_number) // 2 AS a, CAST(7 AS HUGEINT) * (1000000 - COALESCE(CAST(3 AS HUGEINT), 0)) // 1000000 AS b FROM transfer ORDER BY block_number, log_index",
+    "SELECT d // 2 AS a, x // 4 AS b FROM (SELECT COALESCE(CAST(value AS HUGEINT), 0) AS d, CASE WHEN log_index > 0 THEN CAST(value AS HUGEINT) ELSE 0 END AS x FROM transfer) t ORDER BY 1, 2",
+    "SELECT COALESCE(CAST(7 AS UBIGINT), CAST(7 AS HUGEINT)) // 2 AS a, COALESCE(CAST(7 AS INTEGER), CAST(7 AS DECIMAL(10,0))) // 2 AS b",
+    // IFNULL is COALESCE: it keeps a HUGEINT, a DECIMAL and an integer exact, and its own name.
+    "SELECT IFNULL(CAST(value AS HUGEINT), 0) AS a, IFNULL(value_dec, 0) AS c, IFNULL(block_number, 0) AS d, IFNULL(NULL, 'x') AS e FROM transfer ORDER BY block_number, log_index",
+    "SELECT IFNULL(block_number, 0), ifnull(\"from\", 'z') FROM transfer ORDER BY block_number, log_index",
     // An ORDER BY expression over an output alias with no source column of that name reads the alias.
     "SELECT \"from\" AS who, sum(value_dec) AS s FROM transfer GROUP BY who ORDER BY -s",
     "SELECT \"from\" AS who, sum(value_dec) AS s FROM transfer GROUP BY who ORDER BY s::DOUBLE DESC, who",

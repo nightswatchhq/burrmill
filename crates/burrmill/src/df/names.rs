@@ -190,7 +190,7 @@ fn print(e: &Expr) -> Option<String> {
                     Some(DuplicateTreatment::Distinct) => "DISTINCT ",
                     _ => "",
                 };
-                let name = if name == "coalesce" {
+                let name = if matches!(name.as_str(), "coalesce" | "ifnull") {
                     "COALESCE".to_string()
                 } else {
                     name

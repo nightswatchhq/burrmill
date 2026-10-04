@@ -879,6 +879,11 @@ fn rename_function(f: &mut sq::Function) {
             f.name = sq::ObjectName::from(vec![sq::Ident::new(format!("{lower}_value"))]);
             return;
         }
+        // DataFusion's `ifnull` is `nvl`, which has no DECIMAL and made every number DOUBLE.
+        "ifnull" => {
+            f.name = sq::ObjectName::from(vec![sq::Ident::new("coalesce")]);
+            return;
+        }
         _ => return,
     };
     let sq::FunctionArguments::List(l) = &mut f.args else {
@@ -2912,11 +2917,23 @@ fn integer_union(exprs: &[&Expr], schema: &DFSchema) -> DFResult<Option<DataType
 }
 
 fn cast_to(e: Expr, t: &DataType, schema: &DFSchema) -> DFResult<Expr> {
-    Ok(if e.get_type(schema)? == *t {
-        e
-    } else {
-        Expr::Cast(Cast::new(Box::new(e), t.clone()))
-    })
+    let from = e.get_type(schema)?;
+    if from == *t {
+        return Ok(e);
+    }
+    let cast = Expr::Cast(Cast::new(Box::new(e), t.clone()));
+    // An integer widened to meet a HUGEINT is a HUGEINT in DuckDB; unmarked, `//` would read
+    // this cast as a written DECIMAL and divide in DOUBLE (#69).
+    Ok(
+        if from.is_integer() && matches!(t, DataType::Decimal128(_, 0)) {
+            Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+                HugeintMark::udf(),
+                vec![cast],
+            ))
+        } else {
+            cast
+        },
+    )
 }
 
 fn as_double(e: Expr, schema: &DFSchema) -> DFResult<Expr> {

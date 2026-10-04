@@ -574,6 +574,47 @@ fn intdiv_over_a_decimal_is_double_division_and_over_a_hugeint_is_exact() {
 }
 
 #[test]
+fn intdiv_over_a_hugeint_beside_an_integer_stays_exact() {
+    // DuckDB 1.5's answers (#69): a HUGEINT meeting an integer in COALESCE, CASE, greatest, least
+    // or NULLIF is HUGEINT, and `//` over it is integer division, not DOUBLE.
+    assert_eq!(
+        value(
+            "SELECT COALESCE(CAST(7 AS HUGEINT), 0) // CAST(2 AS HUGEINT) AS a, \
+             IFNULL(CAST(7 AS HUGEINT), 0) // 2 AS b, \
+             CASE WHEN true THEN CAST(7 AS HUGEINT) ELSE 0 END // 2 AS c, \
+             greatest(CAST(7 AS HUGEINT), 0) // 2 AS d, least(CAST(7 AS HUGEINT), 9) // 2 AS e, \
+             NULLIF(CAST(7 AS HUGEINT), 0) // 2 AS f, \
+             COALESCE(CAST(7 AS UBIGINT), CAST(7 AS HUGEINT)) // 2 AS g, \
+             CAST(7 AS HUGEINT) * (1000000 - COALESCE(CAST(3 AS HUGEINT), 0)) // 1000000 AS h"
+        ),
+        r#"[{"a":"3","b":"3","c":"3","d":"3","e":"3","f":"3","g":"3","h":"6"}]"#
+    );
+    // A DuckDB DECIMAL among them still divides in DOUBLE.
+    assert_eq!(
+        value(
+            "SELECT COALESCE(CAST(7 AS HUGEINT), CAST(0 AS DECIMAL(38,0))) // 2 AS a, \
+             CASE WHEN true THEN CAST(7 AS HUGEINT) ELSE CAST(0 AS DECIMAL(10,0)) END // 2 AS b, \
+             COALESCE(CAST(7 AS INTEGER), CAST(7 AS DECIMAL(10,0))) // 2 AS c, \
+             CAST(CAST(7 AS HUGEINT) AS DECIMAL(38,0)) // 2 AS d"
+        ),
+        r#"[{"a":3.5,"b":3.5,"c":3.5,"d":3.5}]"#
+    );
+    // Through a subquery's column, as the allocations nest's `delegator_shares` is read.
+    let (_tmp, engine) = nest_with_dec(&["10", "4", "1"]);
+    assert_eq!(
+        value_of(
+            engine,
+            "SELECT d // 2 AS a, x // 4 AS b, COALESCE(value_dec, 0) // 2 AS c, \
+             (SELECT COALESCE(sum(CAST(value AS HUGEINT)), 0) FROM token__transfer) // 4 AS s \
+             FROM (SELECT *, COALESCE(CAST(value AS HUGEINT), 0) AS d, \
+             CASE WHEN value <> '4' THEN CAST(value AS HUGEINT) ELSE 0 END AS x \
+             FROM token__transfer) ORDER BY 1"
+        ),
+        r#"[{"a":"0","b":"0","c":0.5,"s":"3"},{"a":"2","b":"0","c":2.0,"s":"3"},{"a":"5","b":"2","c":5.0,"s":"3"}]"#
+    );
+}
+
+#[test]
 fn order_by_an_expression_over_an_output_alias_reads_the_alias() {
     // DuckDB 1.5's answers. Where the name is a source column too, the source is read (`v`).
     let rows = r#"[{"k":"b","s":"5"},{"k":"c","s":"3"},{"k":"a","s":"1"}]"#;
