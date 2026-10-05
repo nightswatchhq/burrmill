@@ -13,7 +13,7 @@ publish = false
 [dependencies]
 # `datafusion` for `df-fold`, the 6.3 memory gate on the hosted path.
 burrmill = { path = "../burrmill", features = ["datafusion"] }
-arrow.workspace = true
+arrow = { workspace = true, features = ["ipc"] }
 parquet.workspace = true
 datafusion = "55"
 duckdb = { version = "=1.10504.0", features = ["bundled"] }
