@@ -565,6 +565,9 @@ impl Groups {
                 e.sums[usize::from(hit1)] += v;
             } else if let Some(r) = &mut e.rare {
                 r.dense[b] += v;
+            } else if e.ids[0] == NONE {
+                // Under 2^85 units, so the first value in a slot needs no range check.
+                (e.ids[0], e.sums[0]) = (b as u8, v);
             } else {
                 e.bucket_slow(b as u8, v)?;
                 self.rare += usize::from(e.rare.is_some());
@@ -616,29 +619,39 @@ impl Groups {
     /// in `Rare` its whole `encode`d state, which then stands in for the other four. Fixed-width
     /// columns, because a view grouping as many keys as rows pays for its state once a row.
     fn encode(groups: &[Exact]) -> Vec<ArrayRef> {
-        let sums = |j: usize| {
-            Decimal128Array::from_iter_values(groups.iter().map(|e| e.sums[j]))
-                .with_data_type(DataType::Decimal128(38, 0))
-        };
-        let mut rare = BinaryBuilder::new();
+        let len = groups.len();
+        let (mut count, mut ids) = (Vec::with_capacity(len), Vec::with_capacity(len));
+        let (mut s0, mut s1) = (Vec::with_capacity(len), Vec::with_capacity(len));
+        let mut rare = None::<BinaryBuilder>;
         let mut buf = Vec::new();
-        for e in groups {
+        for (i, e) in groups.iter().enumerate() {
+            count.push(e.n);
+            ids.push(u16::from_le_bytes(e.ids));
+            s0.push(e.sums[0]);
+            s1.push(e.sums[1]);
             if e.rare.is_some() {
+                let r = rare.get_or_insert_with(|| {
+                    let mut r = BinaryBuilder::with_capacity(len, 0);
+                    r.append_nulls(i);
+                    r
+                });
                 buf.clear();
                 e.encode(&mut buf);
-                rare.append_value(&buf);
-            } else {
-                rare.append_null();
+                r.append_value(&buf);
+            } else if let Some(r) = &mut rare {
+                r.append_null();
             }
         }
+        let sums = |s| Decimal128Array::from(s).with_data_type(DataType::Decimal128(38, 0));
         vec![
-            Arc::new(UInt64Array::from_iter_values(groups.iter().map(|e| e.n))),
-            Arc::new(UInt16Array::from_iter_values(
-                groups.iter().map(|e| u16::from_le_bytes(e.ids)),
-            )),
-            Arc::new(sums(0)),
-            Arc::new(sums(1)),
-            Arc::new(rare.finish()),
+            Arc::new(UInt64Array::from(count)),
+            Arc::new(UInt16Array::from(ids)),
+            Arc::new(sums(s0)),
+            Arc::new(sums(s1)),
+            rare.map_or_else(
+                || arrow::array::new_null_array(&DataType::Binary, len),
+                |mut r| Arc::new(r.finish()),
+            ),
         ]
     }
 
@@ -661,10 +674,24 @@ impl Groups {
                 continue;
             }
             let e = &mut self.groups[g];
+            let [b0, b1] = ids.value(i).to_le_bytes();
+            let (v0, v1) = (s0.value(i), s1.value(i));
+            // Most groups meet one state, so the first is taken as it is.
+            if e.n == 0
+                && e.ids == [NONE; 2]
+                && e.rare.is_none()
+                && [b0, b1]
+                    .iter()
+                    .all(|&b| b == NONE || (b as usize) < BUCKETS)
+                && b0 != b1
+                && v0.unsigned_abs().max(v1.unsigned_abs()) <= LIMIT
+            {
+                (e.n, e.ids, e.sums) = (count.value(i), [b0, b1], [v0, v1]);
+                continue;
+            }
             let was = e.rare.is_some();
             e.n += count.value(i);
-            let [b0, b1] = ids.value(i).to_le_bytes();
-            for (b, s) in [(b0, s0.value(i)), (b1, s1.value(i))] {
+            for (b, s) in [(b0, v0), (b1, v1)] {
                 if b != NONE && s != 0 {
                     if b as usize >= BUCKETS {
                         return internal_err!("exact sum state names bucket {b}");
