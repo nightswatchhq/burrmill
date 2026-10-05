@@ -295,3 +295,52 @@ fn double_sum_edges() {
     assert_eq!(over("avg", &["'1'", "'2'", "NULL"]), bits(1.5));
     assert_eq!(over("avg", &["NULL"]), "NULL");
 }
+
+/// Keyed as finely as its rows, a partial aggregate stops grouping after its first 100,000 rows and
+/// passes each row on as its own state; the sums still land on the exact ones.
+#[test]
+fn fine_keys_sum_exactly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = 1895;
+    let data: Vec<(i64, i64, f64)> = (0..400_000)
+        .map(|k| {
+            let r = splitmix(&mut s);
+            let v = match r % 97 {
+                0 => -0.0,
+                1 => f64::from_bits(r >> 12),
+                _ => {
+                    let mant = (r >> 11) as f64 / (1u64 << 53) as f64;
+                    let sign = if r & (1 << 10) == 0 { 1.0 } else { -1.0 };
+                    sign * mant * 2f64.powi((r % 41) as i32 - 20)
+                }
+            };
+            (k, k / 2, v)
+        })
+        .collect();
+    let segs = segments(tmp.path(), &data, 3, 5);
+    for threads in [Some(2), Some(3)] {
+        let e = engine(threads, segs.clone());
+        for (key, per) in [("k", 1), ("g", 2)] {
+            let got = answer(
+                &e,
+                &format!("SELECT {key}, sum(v), avg(v) FROM t GROUP BY {key} ORDER BY {key}"),
+            );
+            let want: Vec<Vec<String>> = data
+                .chunks(per)
+                .map(|c| {
+                    // An exact zero is +0, as `double_sum_edges` has it.
+                    let s = fsum(c.iter().map(|r| r.2)) + 0.0;
+                    let k = if per == 1 { c[0].0 } else { c[0].1 };
+                    vec![k.to_string(), bits(s), bits(s / c.len() as f64)]
+                })
+                .collect();
+            let bad = got.iter().zip(&want).position(|(a, b)| a != b);
+            assert!(
+                got.len() == want.len() && bad.is_none(),
+                "GROUP BY {key}, threads {threads:?}: {} rows, first wrong {:?}",
+                got.len(),
+                bad.map(|i| (&got[i], &want[i]))
+            );
+        }
+    }
+}

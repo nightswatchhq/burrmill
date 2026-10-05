@@ -15,8 +15,13 @@ use std::sync::Arc;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::utils::{conjunction, split_conjunction};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::HashJoinExec;
 use datafusion_session::PhysicalOptimizerRule;
@@ -54,21 +59,69 @@ impl PhysicalOptimizerRule for ComputedKeyFilters {
         if ids.is_empty() {
             return Ok(plan);
         }
-        plan.transform_up(|p| {
-            let Some(j) = p.downcast_ref::<HashJoinExec>() else {
-                return Ok(Transformed::no(p));
-            };
-            let held = p
-                .dynamic_expressions_produced()
-                .iter()
-                .any(|f| f.expression_id().is_some_and(|id| ids.contains(&id)));
-            if !held {
-                return Ok(Transformed::no(p));
-            }
-            // Without its filter the join never fills the scans' copies, which stay `true`.
-            Ok(Transformed::yes(j.builder().reset_state().build_exec()?))
-        })
-        .map(|t| t.data)
+        let mut dropped = HashSet::new();
+        let plan = plan
+            .transform_up(|p| {
+                let Some(j) = p.downcast_ref::<HashJoinExec>() else {
+                    return Ok(Transformed::no(p));
+                };
+                let produced: Vec<u64> = p
+                    .dynamic_expressions_produced()
+                    .iter()
+                    .filter_map(|f| f.expression_id())
+                    .collect();
+                if !produced.iter().any(|id| ids.contains(id)) {
+                    return Ok(Transformed::no(p));
+                }
+                dropped.extend(produced);
+                // Without its filter the join never fills the scans' copies, which stay `true`.
+                Ok(Transformed::yes(j.builder().reset_state().build_exec()?))
+            })?
+            .data;
+        // Off the scans too: a predicate left holding only those still builds a row filter, and the
+        // reader decodes the filter's columns apart from the rest for every row.
+        let plan = plan
+            .transform_up(|p| {
+                let Some(scan) = p.downcast_ref::<DataSourceExec>() else {
+                    return Ok(Transformed::no(p));
+                };
+                let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>() else {
+                    return Ok(Transformed::no(p));
+                };
+                let Some(source) = config.file_source().downcast_ref::<ParquetSource>() else {
+                    return Ok(Transformed::no(p));
+                };
+                let Some(predicate) = source.filter() else {
+                    return Ok(Transformed::no(p));
+                };
+                let all = split_conjunction(&predicate);
+                let kept: Vec<_> = all
+                    .iter()
+                    .filter(|c| {
+                        !(c.is::<DynamicFilterPhysicalExpr>()
+                            && c.expression_id().is_some_and(|id| dropped.contains(&id)))
+                    })
+                    .map(|c| Arc::clone(c))
+                    .collect();
+                if kept.len() == all.len() {
+                    return Ok(Transformed::no(p));
+                }
+                // `true` alone would still be evaluated row by row; nothing is left to push down.
+                let source = match kept.is_empty() {
+                    true => source
+                        .with_predicate(conjunction(kept))
+                        .with_pushdown_filters(false),
+                    false => source.with_predicate(conjunction(kept)),
+                };
+                let config = FileScanConfigBuilder::from(config.clone())
+                    .with_source(Arc::new(source))
+                    .build();
+                Ok(Transformed::yes(
+                    DataSourceExec::from_data_source(config) as _
+                ))
+            })?
+            .data;
+        Ok(plan)
     }
 
     fn name(&self) -> &str {

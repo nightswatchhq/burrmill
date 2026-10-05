@@ -81,7 +81,10 @@ fn a_computed_key_leaves_the_scan_unfiltered() {
     let sql = "SELECT count(*) AS n FROM rows r JOIN keys k ON k.n = CAST(r.n_text AS BIGINT)";
     assert_eq!(answer(&e, sql), [format!(r#"{{"n":{}}}"#, ROWS / 10)]);
     let line = rows_scan(&e, sql);
-    assert!(line.contains("DynamicFilter [ empty ]"), "{line}");
+    assert!(
+        !line.contains("DynamicFilter") && line.contains("pushdown_rows_matched=0,"),
+        "{line}"
+    );
 }
 
 #[test]
