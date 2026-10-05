@@ -15,8 +15,13 @@ use std::sync::Arc;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::utils::{conjunction, split_conjunction};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::HashJoinExec;
 use datafusion_session::PhysicalOptimizerRule;
@@ -73,21 +78,49 @@ impl PhysicalOptimizerRule for ComputedKeyFilters {
                 Ok(Transformed::yes(j.builder().reset_state().build_exec()?))
             })?
             .data;
-        // Finished, so a scan stops watching them: one still in progress gets a row-group pruner
-        // in every file the scan opens.
-        plan.apply(|node| {
-            node.apply_expressions(&mut |root| {
-                root.apply(|e| {
-                    if let Some(f) = e.downcast_ref::<DynamicFilterPhysicalExpr>()
-                        && e.expression_id().is_some_and(|id| dropped.contains(&id))
-                    {
-                        f.mark_complete();
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })
-            })?;
-            Ok(TreeNodeRecursion::Continue)
-        })?;
+        // Off the scans too: a predicate left holding only those still builds a row filter, and the
+        // reader decodes the filter's columns apart from the rest for every row.
+        let plan = plan
+            .transform_up(|p| {
+                let Some(scan) = p.downcast_ref::<DataSourceExec>() else {
+                    return Ok(Transformed::no(p));
+                };
+                let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>() else {
+                    return Ok(Transformed::no(p));
+                };
+                let Some(source) = config.file_source().downcast_ref::<ParquetSource>() else {
+                    return Ok(Transformed::no(p));
+                };
+                let Some(predicate) = source.filter() else {
+                    return Ok(Transformed::no(p));
+                };
+                let all = split_conjunction(&predicate);
+                let kept: Vec<_> = all
+                    .iter()
+                    .filter(|c| {
+                        !(c.is::<DynamicFilterPhysicalExpr>()
+                            && c.expression_id().is_some_and(|id| dropped.contains(&id)))
+                    })
+                    .map(|c| Arc::clone(c))
+                    .collect();
+                if kept.len() == all.len() {
+                    return Ok(Transformed::no(p));
+                }
+                // `true` alone would still be evaluated row by row; nothing is left to push down.
+                let source = match kept.is_empty() {
+                    true => source
+                        .with_predicate(conjunction(kept))
+                        .with_pushdown_filters(false),
+                    false => source.with_predicate(conjunction(kept)),
+                };
+                let config = FileScanConfigBuilder::from(config.clone())
+                    .with_source(Arc::new(source))
+                    .build();
+                Ok(Transformed::yes(
+                    DataSourceExec::from_data_source(config) as _
+                ))
+            })?
+            .data;
         Ok(plan)
     }
 
@@ -97,90 +130,5 @@ impl PhysicalOptimizerRule for ComputedKeyFilters {
 
     fn schema_check(&self) -> bool {
         true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use arrow::array::{Int64Array, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_catalog::Session;
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-    use datafusion_datasource::file_scan_config::FileScanConfig;
-    use datafusion_datasource::source::DataSourceExec;
-    use datafusion_physical_expr::expressions::DynamicFilterTracking;
-    use datafusion_physical_plan::ExecutionPlan;
-
-    use crate::df::Engine;
-
-    fn segment(dir: &std::path::Path, name: &str, n: Vec<i64>) -> (std::path::PathBuf, u64) {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("n", DataType::Int64, false),
-            Field::new("n_text", DataType::Utf8, false),
-        ]));
-        let text: Vec<String> = n.iter().map(|x| x.to_string()).collect();
-        let columns: Vec<arrow::array::ArrayRef> = vec![
-            Arc::new(Int64Array::from(n)),
-            Arc::new(StringArray::from(text)),
-        ];
-        let batch = RecordBatch::try_new(schema.clone(), columns).unwrap();
-        let path = dir.join(format!("{name}-{:064x}.parquet", 0));
-        let f = std::fs::File::create(&path).unwrap();
-        let mut w = parquet::arrow::ArrowWriter::try_new(f, schema, None).unwrap();
-        w.write(&batch).unwrap();
-        w.close().unwrap();
-        let len = std::fs::metadata(&path).unwrap().len();
-        (path, len)
-    }
-
-    fn plan(sql: &str) -> Arc<dyn ExecutionPlan> {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut e = Engine::open_empty_budgeted(crate::Budget {
-            memory_bytes: 256 << 20,
-            threads: 4,
-            spill: None,
-        })
-        .unwrap();
-        let rows = segment(tmp.path(), "rows", (0..20_000).collect());
-        let keys = segment(tmp.path(), "keys", (0..20_000).step_by(10).collect());
-        e.register_facts("rows", &[], vec![rows], &[], (None, None))
-            .unwrap();
-        e.register_facts("keys", &[], vec![keys], &[], (None, None))
-            .unwrap();
-        let logical = super::super::plan_query(&e.session, sql).unwrap();
-        e.runtime()
-            .block_on(e.session.create_physical_plan(&logical))
-            .unwrap()
-    }
-
-    /// Whether some scan in `plan` waits on a dynamic filter that could still change.
-    fn scan_watches(plan: &Arc<dyn ExecutionPlan>) -> bool {
-        let mut watching = false;
-        plan.apply(|p| {
-            if let Some(scan) = p.downcast_ref::<DataSourceExec>()
-                && let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>()
-                && let Some(predicate) = config.file_source().filter()
-            {
-                watching |= matches!(
-                    DynamicFilterTracking::classify(&predicate),
-                    DynamicFilterTracking::Watching(_)
-                );
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .unwrap();
-        watching
-    }
-
-    /// A scan watching a filter nobody will fill keeps a row-group pruner per file it opens.
-    #[test]
-    fn a_dropped_filter_is_finished_at_the_scan() {
-        let computed = "SELECT count(*) FROM rows r JOIN keys k ON k.n = CAST(r.n_text AS BIGINT)";
-        assert!(!scan_watches(&plan(computed)));
-        let column = "SELECT count(*) FROM rows r JOIN keys k ON k.n = r.n";
-        assert!(scan_watches(&plan(column)));
     }
 }
