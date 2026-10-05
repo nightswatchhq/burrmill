@@ -9,10 +9,13 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryBuilder, BooleanArray, Float64Array, Float64Builder,
+    Array, ArrayRef, AsArray, BinaryBuilder, BooleanArray, Decimal128Array, Float64Array,
+    Float64Builder, UInt16Array, UInt64Array,
 };
 use arrow::buffer::BooleanBuffer;
-use arrow::datatypes::{DataType, Field, FieldRef, Float64Type};
+use arrow::datatypes::{
+    DataType, Decimal128Type, Field, FieldRef, Float64Type, UInt16Type, UInt64Type,
+};
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
@@ -407,11 +410,14 @@ impl AggregateUDFImpl for ExactDoubles {
         if !doubles(args.input_fields, args.is_distinct) {
             return self.inner.state_fields(args);
         }
-        Ok(vec![Arc::new(Field::new(
-            format_state_name(args.name, "exact"),
-            DataType::Binary,
-            true,
-        ))])
+        let field = |part, t| Arc::new(Field::new(format_state_name(args.name, part), t, true));
+        Ok(vec![
+            field("exact_count", DataType::UInt64),
+            field("exact_ids", DataType::UInt16),
+            field("exact_s0", DataType::Decimal128(38, 0)),
+            field("exact_s1", DataType::Decimal128(38, 0)),
+            field("exact_rare", DataType::Binary),
+        ])
     }
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if !doubles(args.expr_fields, args.is_distinct) {
@@ -606,15 +612,69 @@ impl Groups {
         }
     }
 
-    fn encode(groups: &[Exact]) -> ArrayRef {
-        let mut b = BinaryBuilder::with_capacity(groups.len(), groups.len() * 49);
-        let mut buf = Vec::with_capacity(64);
+    /// Each group's state as five columns: its count, its inline bucket ids and sums, and for a group
+    /// in `Rare` its whole `encode`d state, which then stands in for the other four. Fixed-width
+    /// columns, because a view grouping as many keys as rows pays for its state once a row.
+    fn encode(groups: &[Exact]) -> Vec<ArrayRef> {
+        let sums = |j: usize| {
+            Decimal128Array::from_iter_values(groups.iter().map(|e| e.sums[j]))
+                .with_data_type(DataType::Decimal128(38, 0))
+        };
+        let mut rare = BinaryBuilder::new();
+        let mut buf = Vec::new();
         for e in groups {
-            buf.clear();
-            e.encode(&mut buf);
-            b.append_value(&buf);
+            if e.rare.is_some() {
+                buf.clear();
+                e.encode(&mut buf);
+                rare.append_value(&buf);
+            } else {
+                rare.append_null();
+            }
         }
-        Arc::new(b.finish())
+        vec![
+            Arc::new(UInt64Array::from_iter_values(groups.iter().map(|e| e.n))),
+            Arc::new(UInt16Array::from_iter_values(
+                groups.iter().map(|e| u16::from_le_bytes(e.ids)),
+            )),
+            Arc::new(sums(0)),
+            Arc::new(sums(1)),
+            Arc::new(rare.finish()),
+        ]
+    }
+
+    /// Adds `encode`d state row `i` to group `g` of each row.
+    fn merge_states(&mut self, states: &[ArrayRef], group: impl Fn(usize) -> usize) -> Result<()> {
+        let [count, ids, s0, s1, rare] = states else {
+            return internal_err!("exact sum state of {} columns", states.len());
+        };
+        let count = count.as_primitive::<UInt64Type>();
+        let ids = ids.as_primitive::<UInt16Type>();
+        let (s0, s1) = (
+            s0.as_primitive::<Decimal128Type>(),
+            s1.as_primitive::<Decimal128Type>(),
+        );
+        let rare = rare.as_binary::<i32>();
+        for i in (0..count.len()).filter(|&i| count.is_valid(i)) {
+            let g = group(i);
+            if rare.is_valid(i) {
+                self.merge_one(g, rare.value(i))?;
+                continue;
+            }
+            let e = &mut self.groups[g];
+            let was = e.rare.is_some();
+            e.n += count.value(i);
+            let [b0, b1] = ids.value(i).to_le_bytes();
+            for (b, s) in [(b0, s0.value(i)), (b1, s1.value(i))] {
+                if b != NONE && s != 0 {
+                    if b as usize >= BUCKETS {
+                        return internal_err!("exact sum state names bucket {b}");
+                    }
+                    e.bucket(b, s)?;
+                }
+            }
+            self.rare += usize::from(!was && e.rare.is_some());
+        }
+        Ok(())
     }
 }
 
@@ -646,13 +706,7 @@ impl GroupsAccumulator for Groups {
         total_num_groups: usize,
     ) -> Result<()> {
         self.groups.resize_with(total_num_groups, Exact::default);
-        let states = values[0].as_binary::<i32>();
-        for (i, &g) in group_indices.iter().enumerate() {
-            if states.is_valid(i) {
-                self.merge_one(g, states.value(i))?;
-            }
-        }
-        Ok(())
+        self.merge_states(values, |i| group_indices[i])
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
@@ -662,7 +716,7 @@ impl GroupsAccumulator for Groups {
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let taken = self.take(emit_to);
-        Ok(vec![Self::encode(&taken)])
+        Ok(Self::encode(&taken))
     }
 
     fn convert_to_state(
@@ -676,7 +730,7 @@ impl GroupsAccumulator for Groups {
             rows[i].n = 1;
             Ok(())
         })?;
-        Ok(vec![Self::encode(&rows)])
+        Ok(Self::encode(&rows))
     }
 
     fn size(&self) -> usize {
@@ -718,14 +772,7 @@ impl Accumulator for Single {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let g = self.group();
-        let states = states[0].as_binary::<i32>();
-        for i in 0..states.len() {
-            if states.is_valid(i) {
-                g.merge_one(0, states.value(i))?;
-            }
-        }
-        Ok(())
+        self.group().merge_states(states, |_| 0)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -735,9 +782,10 @@ impl Accumulator for Single {
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let g = self.group();
-        let mut buf = Vec::new();
-        g.groups[0].encode(&mut buf);
-        Ok(vec![ScalarValue::Binary(Some(buf))])
+        Groups::encode(&g.groups[..1])
+            .iter()
+            .map(|a| ScalarValue::try_from_array(a, 0))
+            .collect()
     }
 
     fn size(&self) -> usize {
@@ -913,6 +961,24 @@ mod tests {
                 got.rare,
                 got.groups.iter().filter(|e| e.rare.is_some()).count()
             );
+            // Through the state and back, merged twice into groups in the opposite order.
+            let state = got.state(EmitTo::All).unwrap();
+            let mut back = Groups::new(false);
+            let flipped: Vec<usize> = (0..groups).rev().collect();
+            back.merge_batch(&state, &flipped, groups).unwrap();
+            back.merge_batch(&state, &flipped, groups).unwrap();
+            for (g, w) in want.iter().enumerate() {
+                let mut twice = w.clone();
+                let mut buf = Vec::new();
+                w.encode(&mut buf);
+                twice.merge_encoded(&buf).unwrap();
+                let e = &back.groups[groups - 1 - g];
+                assert_eq!(
+                    (e.n, e.value().to_bits()),
+                    (twice.n, twice.value().to_bits()),
+                    "case {case} group {g} through the state"
+                );
+            }
 
             let cut = len / 3;
             let mut one = Single(Groups::new(false));
