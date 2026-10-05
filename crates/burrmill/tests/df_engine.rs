@@ -699,3 +699,29 @@ fn a_string_agg_over_input_already_sorted_the_other_way_plans() {
         r#"[{"k":1,"s":"c,a"},{"k":2,"s":"b"}]"#
     );
 }
+
+#[test]
+fn a_missing_column_reads_as_duckdb_with_or_without_a_near_match() {
+    let (_tmp, engine) = nest_with_transfer();
+    let first = |sql: &str| {
+        let m = engine.sql(sql).unwrap_err().to_string();
+        let start = m.find("Binder Error").unwrap_or_else(|| panic!("{m}"));
+        m[start..].lines().next().unwrap().to_string()
+    };
+    assert_eq!(
+        first("SELECT zzzz FROM token__transfer"),
+        r#"Binder Error: Referenced column "zzzz" not found in FROM clause!"#
+    );
+    assert_eq!(
+        first("SELECT valu FROM token__transfer"),
+        r#"Binder Error: Referenced column "valu" not found in FROM clause!"#
+    );
+    assert_eq!(
+        first(r#"SELECT "Parquet error: x" FROM token__transfer"#),
+        r#"Binder Error: Referenced column "Parquet error: x" not found in FROM clause!"#
+    );
+    assert_eq!(
+        first("SELECT t.zzzz FROM token__transfer t"),
+        r#"Binder Error: Table "t" does not have a column named "zzzz""#
+    );
+}
