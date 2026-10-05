@@ -464,19 +464,29 @@ impl AggregateUDFImpl for ExactDoubles {
     }
 }
 
-/// A group's count and its one value, or, once it has met a second, where its `Exact` is. Most
-/// groups of a view keyed as finely as its rows never do, and stay this size.
+/// A group's count and its one value, or where its two are, or, once it has met a third, where its
+/// `Exact` is. Most groups of a view keyed as finely as its rows never get that far.
 #[derive(Clone, Copy, Default)]
 struct Slot {
-    /// 0 or 1, or `EXACT`.
+    /// 0, 1 or 2, or `EXACT`.
     n: u64,
-    /// The one value's bits, or an index into `Groups::exact`.
+    /// The one value's bits, or an index into `Groups::pairs` or `Groups::exact`.
     v: u64,
 }
 
 const EXACT: u64 = u64::MAX;
 
-/// What the buckets answer for one value: itself, but +0 for -0 and one NaN for any.
+/// The values slot `s` holds itself, and how many.
+fn held(s: Slot, pairs: &[[f64; 2]]) -> ([f64; 2], usize) {
+    match s.n {
+        1 => ([f64::from_bits(s.v), 0.0], 1),
+        2 => (pairs[s.v as usize], 2),
+        _ => ([0.0; 2], 0),
+    }
+}
+
+/// What the buckets answer for one value: itself, but +0 for -0 and one NaN for any. A double
+/// addition rounds the exact sum of two once, so their answer is `one(a + b)`.
 fn one(x: f64) -> f64 {
     if x.is_nan() { f64::NAN } else { x + 0.0 }
 }
@@ -484,7 +494,8 @@ fn one(x: f64) -> f64 {
 struct Groups {
     avg: bool,
     slots: Vec<Slot>,
-    /// The groups that have met a second value, which count their own values.
+    pairs: Vec<[f64; 2]>,
+    /// The groups that have met a third value, which count their own values.
     exact: Vec<Exact>,
     /// Of `exact`, those holding a boxed `Rare`, for `size`.
     rare: usize,
@@ -499,6 +510,7 @@ impl Groups {
         Self {
             avg,
             slots: Vec::new(),
+            pairs: Vec::new(),
             exact: Vec::new(),
             rare: 0,
             lanes: None,
@@ -506,16 +518,17 @@ impl Groups {
         }
     }
 
-    /// Group `g`'s `Exact`, moving its one value there first if it has one.
+    /// Group `g`'s `Exact`, moving the values it holds there first.
     fn exact_mut(&mut self, g: usize) -> &mut Exact {
         let s = &mut self.slots[g];
         if s.n != EXACT {
             let mut e = Exact::default();
-            if s.n == 1 {
-                // One value cannot be out of range.
-                e.add(f64::from_bits(s.v), false).expect("one value");
-                e.n = 1;
+            let (xs, k) = held(*s, &self.pairs);
+            for &x in &xs[..k] {
+                // Two values cannot be out of range.
+                e.add(x, false).expect("two values");
             }
+            e.n = s.n;
             self.rare += usize::from(e.rare.is_some());
             *s = Slot {
                 n: EXACT,
@@ -526,14 +539,29 @@ impl Groups {
         &mut self.exact[s.v as usize]
     }
 
-    /// Adds one more value `x` to group `g`, with every range check.
-    fn add_one(&mut self, g: usize, x: f64) -> Result<()> {
+    /// Holds `x` in group `g`'s slot if that holds fewer than two values, and says whether it did.
+    fn hold(&mut self, g: usize, x: f64) -> bool {
         let s = &mut self.slots[g];
-        if s.n == 0 {
-            *s = Slot {
+        *s = match s.n {
+            0 => Slot {
                 n: 1,
                 v: x.to_bits(),
-            };
+            },
+            1 => {
+                self.pairs.push([f64::from_bits(s.v), x]);
+                Slot {
+                    n: 2,
+                    v: self.pairs.len() as u64 - 1,
+                }
+            }
+            _ => return false,
+        };
+        true
+    }
+
+    /// Adds one more value `x` to group `g`, with every range check.
+    fn add_one(&mut self, g: usize, x: f64) -> Result<()> {
+        if self.hold(g, x) {
             return Ok(());
         }
         let e = self.exact_mut(g);
@@ -581,12 +609,7 @@ impl Groups {
         let mut added = 0;
         for (g, x) in rows {
             added += 1;
-            let s = &mut self.slots[g];
-            if s.n == 0 {
-                *s = Slot {
-                    n: 1,
-                    v: x.to_bits(),
-                };
+            if self.hold(g, x) {
                 continue;
             }
             let e = self.exact_mut(g);
@@ -626,38 +649,56 @@ impl Groups {
         Ok(())
     }
 
-    /// The slots `emit_to` asks for, and the `Exact`s they point into, renumbered to match.
-    fn take(&mut self, emit_to: EmitTo) -> (Vec<Slot>, Vec<Exact>) {
+    /// The slots `emit_to` asks for, and the pairs and `Exact`s they point into, renumbered to match.
+    fn take(&mut self, emit_to: EmitTo) -> (Vec<Slot>, Vec<[f64; 2]>, Vec<Exact>) {
         if let EmitTo::All = emit_to {
             self.rare = 0;
             return (
                 std::mem::take(&mut self.slots),
+                std::mem::take(&mut self.pairs),
                 std::mem::take(&mut self.exact),
             );
         }
         let mut taken = emit_to.take_needed(&mut self.slots);
+        let old_pairs = std::mem::take(&mut self.pairs);
         let mut old: Vec<Option<Exact>> = std::mem::take(&mut self.exact)
             .into_iter()
             .map(Some)
             .collect();
-        let mut out = Vec::new();
-        for (slots, to) in [(&mut taken, &mut out), (&mut self.slots, &mut self.exact)] {
-            for s in slots.iter_mut().filter(|s| s.n == EXACT) {
-                to.push(old[s.v as usize].take().expect("one slot per exact"));
-                s.v = to.len() as u64 - 1;
+        let (mut pairs, mut exact) = (Vec::new(), Vec::new());
+        for (slots, p, x) in [
+            (&mut taken, &mut pairs, &mut exact),
+            (&mut self.slots, &mut self.pairs, &mut self.exact),
+        ] {
+            for s in slots.iter_mut() {
+                s.v = match s.n {
+                    2 => {
+                        p.push(old_pairs[s.v as usize]);
+                        p.len() as u64 - 1
+                    }
+                    EXACT => {
+                        x.push(old[s.v as usize].take().expect("one slot per exact"));
+                        x.len() as u64 - 1
+                    }
+                    _ => continue,
+                };
             }
         }
         self.rare = self.exact.iter().filter(|e| e.rare.is_some()).count();
-        (taken, out)
+        (taken, pairs, exact)
     }
 
-    fn finish(&self, slots: &[Slot], exact: &[Exact]) -> ArrayRef {
+    fn finish(&self, slots: &[Slot], pairs: &[[f64; 2]], exact: &[Exact]) -> ArrayRef {
         let mut b = Float64Builder::with_capacity(slots.len());
-        for s in slots {
+        for &s in slots {
             b.append_option(match s.n {
                 0 => None,
                 EXACT => self.answer(&exact[s.v as usize]),
-                _ => Some(one(f64::from_bits(s.v))),
+                n => {
+                    let ([x, y], _) = held(s, pairs);
+                    let sum = one(x + y);
+                    Some(if self.avg { sum / n as f64 } else { sum })
+                }
             });
         }
         Arc::new(b.finish())
@@ -673,18 +714,28 @@ impl Groups {
 
     /// Each group's state as two columns: a group holding one value has it as a double, any other
     /// its whole `encode`d `Exact` as bytes.
-    fn encode(slots: &[Slot], exact: &[Exact]) -> Vec<ArrayRef> {
+    fn encode(slots: &[Slot], pairs: &[[f64; 2]], exact: &[Exact]) -> Vec<ArrayRef> {
         let len = slots.len();
         let mut single = Float64Builder::with_capacity(len);
         let mut bytes = None::<BinaryBuilder>;
         let mut buf = Vec::new();
-        for (i, s) in slots.iter().enumerate() {
+        for (i, &s) in slots.iter().enumerate() {
             match s.n {
                 0 => single.append_null(),
-                EXACT => {
+                1 => single.append_value(f64::from_bits(s.v)),
+                n => {
                     single.append_null();
                     buf.clear();
-                    exact[s.v as usize].encode(&mut buf);
+                    if n == EXACT {
+                        exact[s.v as usize].encode(&mut buf);
+                    } else {
+                        let mut e = Exact::default();
+                        for x in pairs[s.v as usize] {
+                            e.add(x, false).expect("two values");
+                        }
+                        e.n = 2;
+                        e.encode(&mut buf);
+                    }
                     bytes
                         .get_or_insert_with(|| {
                             let mut r = BinaryBuilder::with_capacity(len, 0);
@@ -694,7 +745,6 @@ impl Groups {
                         .append_value(&buf);
                     continue;
                 }
-                _ => single.append_value(f64::from_bits(s.v)),
             }
             if let Some(r) = &mut bytes {
                 r.append_null();
@@ -763,13 +813,13 @@ impl GroupsAccumulator for Groups {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let (slots, exact) = self.take(emit_to);
-        Ok(self.finish(&slots, &exact))
+        let (slots, pairs, exact) = self.take(emit_to);
+        Ok(self.finish(&slots, &pairs, &exact))
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let (slots, exact) = self.take(emit_to);
-        Ok(Self::encode(&slots, &exact))
+        let (slots, pairs, exact) = self.take(emit_to);
+        Ok(Self::encode(&slots, &pairs, &exact))
     }
 
     fn convert_to_state(
@@ -788,6 +838,7 @@ impl GroupsAccumulator for Groups {
 
     fn size(&self) -> usize {
         self.slots.capacity() * size_of::<Slot>()
+            + self.pairs.capacity() * size_of::<[f64; 2]>()
             + self.exact.capacity() * size_of::<Exact>()
             + self.rare * size_of::<Rare>()
             + self.lanes.as_ref().map_or(0, |_| size_of::<Lanes>())
@@ -837,7 +888,7 @@ impl Accumulator for Single {
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let g = self.group();
-        Groups::encode(&g.slots, &g.exact)
+        Groups::encode(&g.slots, &g.pairs, &g.exact)
             .iter()
             .map(|a| ScalarValue::try_from_array(a, 0))
             .collect()
@@ -1024,6 +1075,17 @@ mod tests {
                     got.exact.iter().filter(|e| e.rare.is_some()).count()
                 );
                 assert_eq!(answers(&mut got), expect(&want), "case {case} avg {avg}");
+
+                // Emitted a few groups at a time, as an ordered aggregate does.
+                let mut got = updated();
+                let mut parts = Vec::new();
+                while got.slots.len() > 2 {
+                    let a = got.evaluate(EmitTo::First(2)).unwrap();
+                    let a = a.as_primitive::<Float64Type>();
+                    parts.extend(a.iter().map(|x| x.map(f64::to_bits)));
+                }
+                parts.extend(answers(&mut got));
+                assert_eq!(parts, expect(&want), "case {case} avg {avg} in parts");
 
                 // Through the state and back, merged twice into groups in the opposite order.
                 let state = updated().state(EmitTo::All).unwrap();
