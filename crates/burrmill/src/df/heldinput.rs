@@ -84,11 +84,21 @@ impl ExecutionPlan for ChargedWindowExec {
             reservation: Arc::clone(&reservation),
         });
         let window = replace_children_if_necessary(Arc::clone(&self.window), vec![input])?;
+        let size = ctx.session_config().batch_size().max(1);
         let stream = window.execute(partition, ctx)?;
         let schema = stream.schema();
-        let held = stream.map(move |item| {
+        // The window emits its whole input as one batch; sliced, what sits above it works a batch
+        // at a time, as it does above any other operator (nuthatch #1899).
+        let held = stream.flat_map(move |item| {
             let _ = &reservation;
-            item
+            let slices: Vec<Result<RecordBatch>> = match item {
+                Ok(b) => (0..b.num_rows())
+                    .step_by(size)
+                    .map(|at| Ok(b.slice(at, size.min(b.num_rows() - at))))
+                    .collect(),
+                Err(e) => vec![Err(e)],
+            };
+            futures::stream::iter(slices)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, held)))
     }
