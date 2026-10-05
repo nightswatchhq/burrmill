@@ -528,7 +528,7 @@ fn at_this_level(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
             std::ops::ControlFlow::Continue(())
         }
     }
-    let _ = sq::VisitMut::visit(e, &mut Level { depth: 0, f });
+    let _ = crate::walk::walk_mut(e, &mut Level { depth: 0, f });
 }
 
 /// `x` can move into the subquery's `WHERE` without changing what it names: every column in it
@@ -536,7 +536,7 @@ fn at_this_level(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
 /// outer `id` would otherwise compare the inner `id` with itself.
 fn movable(x: &Expr, sub: &Select) -> bool {
     let mut bound = std::collections::HashSet::new();
-    let _ = sq::visit_relations(&sub.from, |r| {
+    let _ = crate::walk::relations(&sub.from, |r| {
         if let Some(sq::ObjectNamePart::Identifier(i)) = r.0.last() {
             bound.insert(i.value.to_lowercase());
         }
@@ -552,7 +552,7 @@ fn movable(x: &Expr, sub: &Select) -> bool {
         }
     }
     let mut ok = true;
-    let _ = sq::visit_expressions(x, |e| {
+    let _ = crate::walk::exprs(x, |e| {
         match e {
             Expr::Identifier(_)
             | Expr::Subquery(_)
@@ -741,7 +741,7 @@ fn plain(q: &Query) -> Option<&Select> {
         return None;
     }
     let mut aggregate = false;
-    let _ = sq::visit_expressions(&s.projection, |x| {
+    let _ = crate::walk::exprs(&s.projection, |x| {
         if let Expr::Function(f) = x
             && f.over.is_none()
             && AGGREGATES.contains(&f.name.to_string().to_ascii_lowercase().as_str())
@@ -988,7 +988,7 @@ pub fn distinct_aggregate_names(q: &mut Query) {
             }
             let full = f.to_string();
             let mut stripped = Expr::Function(f.clone());
-            let _ = sq::visit_expressions_mut(&mut stripped, |c| {
+            let _ = crate::walk::exprs_mut(&mut stripped, |c| {
                 if let Expr::Cast { expr, .. } = c {
                     *c = std::mem::replace(expr.as_mut(), Expr::Value(sq::Value::Null.into()));
                 }

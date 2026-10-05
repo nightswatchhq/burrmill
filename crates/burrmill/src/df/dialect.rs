@@ -65,7 +65,7 @@ pub fn parse(sql: &str, known: &Known) -> Result<(DfStatement, Vec<Option<String
         return Err(BurrmillError::Parse("empty statement".into()));
     };
     if let DfStatement::Statement(s) = &mut stmt {
-        let _ = sq::VisitMut::visit(s.as_mut(), &mut FromFirst);
+        let _ = crate::walk::walk_mut(s.as_mut(), &mut FromFirst);
     }
     let mut names = match &stmt {
         DfStatement::Statement(s) => match s.as_ref() {
@@ -425,7 +425,7 @@ fn dedupe_output_names(q: &mut sq::Query, names: &mut [Option<String>], known: &
                 }
                 e => {
                     let mut named = Default::default();
-                    let _ = sq::Visit::visit(e, &mut Named(&mut named));
+                    let _ = crate::walk::walk(e, &mut Named(&mut named));
                     ordered.extend(
                         named
                             .into_iter()
@@ -674,23 +674,23 @@ fn rewrite(stmt: &mut DfStatement, known: &Known, names: &mut [Option<String>]) 
     // spine before a visitor can refuse it.
     super::depth::check_statement(s)?;
     let mut known = known.clone();
-    let _ = sq::Visit::visit(s.as_ref(), &mut Aliases(&mut known));
-    let _ = sq::VisitMut::visit(s.as_mut(), &mut CaseFix(&known));
+    let _ = crate::walk::walk(s.as_ref(), &mut Aliases(&mut known));
+    let _ = crate::walk::walk_mut(s.as_mut(), &mut CaseFix(&known));
     if let sq::Statement::Query(q) = s.as_mut() {
         dedupe_output_names(q, names, &known);
         // A CTE whose column list names its output may repeat an expression, as DuckDB allows.
-        let _ = sq::VisitMut::visit(q.as_mut(), &mut DedupeInner(&known));
+        let _ = crate::walk::walk_mut(q.as_mut(), &mut DedupeInner(&known));
         super::subqueries::name(q, &known);
     }
     let mut ctes = std::collections::HashSet::new();
-    let _ = sq::Visit::visit(s.as_ref(), &mut CteNames(&mut ctes));
+    let _ = crate::walk::walk(s.as_ref(), &mut CteNames(&mut ctes));
     let mut rw = Rewriter {
         refused: None,
         lambda: vec![],
         known,
         ctes,
     };
-    let _ = sq::VisitMut::visit(s.as_mut(), &mut rw);
+    let _ = crate::walk::walk_mut(s.as_mut(), &mut rw);
     match rw.refused {
         Some(why) => Err(BurrmillError::NotAllowed(why)),
         None => Ok(()),
@@ -991,11 +991,11 @@ fn names_only(q: &sq::Query, outer: &str) -> bool {
         }
     }
     let mut tables = Tables(vec![outer.to_string()]);
-    if sq::Visit::visit(q, &mut tables).is_break() || q.with.is_some() {
+    if crate::walk::walk(q, &mut tables).is_break() || q.with.is_some() {
         return false;
     }
     let mut known = true;
-    let _ = sq::visit_expressions(q, |x| {
+    let _ = crate::walk::exprs(q, |x| {
         known &= match x {
             SqlExpr::Identifier(_) => false,
             SqlExpr::CompoundIdentifier(p) => p.len() == 2 && tables.0.contains(&p[0].value),
@@ -1107,7 +1107,7 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
     // subquery naming only `c` and its own tables, a to-one lookup, counts as the inner relation's.
     let inner_only = |e: &SqlExpr| -> Option<bool> {
         let mut e = e.clone();
-        let _ = sq::visit_expressions_mut(&mut e, |x| {
+        let _ = crate::walk::exprs_mut(&mut e, |x| {
             if let SqlExpr::Subquery(s) = x
                 && names_only(s, &c)
             {
@@ -1117,7 +1117,7 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
         });
         let mut inside = true;
         let mut unknown = false;
-        let _ = sq::visit_expressions(&e, |x| {
+        let _ = crate::walk::exprs(&e, |x| {
             match x {
                 SqlExpr::Identifier(_) => unknown = true,
                 SqlExpr::CompoundIdentifier(p) if p.len() == 2 => inside &= p[0].value == c,
@@ -1200,7 +1200,7 @@ fn try_top_n_correlated(q: &mut sq::Query) -> Option<()> {
         binop(col(RANK), BinaryOperator::LtEq, num(m + n)),
     ]));
     // An aggregate that sees its input's order takes it from the rank now.
-    let _ = sq::visit_expressions_mut(&mut outer.projection, |x| {
+    let _ = crate::walk::exprs_mut(&mut outer.projection, |x| {
         if let SqlExpr::Function(f) = x
             && f.over.is_none()
             && let [sq::ObjectNamePart::Identifier(id)] = f.name.0.as_slice()
