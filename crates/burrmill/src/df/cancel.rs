@@ -19,6 +19,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::PhysicalExpr;
@@ -114,10 +115,19 @@ impl ExecutionPlan for CancelExec {
         partition: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // Charged whether or not it fits, so the operators that can spill make room for it.
+        let bytes = super::catalog::bookkeeping(&self.inner, partition);
+        let held = (bytes > 0).then(|| {
+            let r = MemoryConsumer::new(format!("SegmentScan[{partition}]"))
+                .register(ctx.memory_pool());
+            r.grow(bytes);
+            r
+        });
         let stream = self.inner.execute(partition, ctx)?;
         let schema = stream.schema();
         let token = self.token.clone();
         let checked = stream.map(move |item| {
+            let _held = &held;
             if token.is_cancelled() {
                 return Err(DataFusionError::Execution("cancelled".into()));
             }
