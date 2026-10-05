@@ -199,6 +199,11 @@ path = "tests/df_windowbudget.rs"
 required-features = ["datafusion"]
 
 [[test]]
+name = "df_windowslices"
+path = "tests/df_windowslices.rs"
+required-features = ["datafusion"]
+
+[[test]]
 name = "df_scanpool"
 path = "tests/df_scanpool.rs"
 required-features = ["datafusion"]
