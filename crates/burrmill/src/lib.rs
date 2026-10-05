@@ -56,6 +56,7 @@ mod listcomp;
 pub mod plan;
 pub mod seam;
 pub mod segment;
+mod walk;
 
 pub use error::{BurrmillError, Result};
 

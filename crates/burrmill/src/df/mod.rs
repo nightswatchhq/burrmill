@@ -669,29 +669,31 @@ fn refuse_sql_statement(stmt: &SqlStatement) -> Result<()> {
 /// An integer literal past u64 parses as Float64 before any plan rule can see it, and a float
 /// cannot hold it exactly.
 fn refuse_wide_literals(stmt: &DfStatement) -> Result<()> {
-    use sqlparser::ast::{Expr as SqlExpr, Value, visit_expressions};
+    use sqlparser::ast::{Expr as SqlExpr, Value};
     use std::ops::ControlFlow;
     let s = match stmt {
         DfStatement::Statement(s) => s,
         DfStatement::Explain(e) => return refuse_wide_literals(&e.statement),
         _ => return Ok(()),
     };
-    let found = visit_expressions(s.as_ref(), |e| {
+    let mut found = None;
+    let _ = crate::walk::exprs(s.as_ref(), |e| {
         if let SqlExpr::Value(v) = e
             && let Value::Number(n, _) = &v.value
             && n.bytes().all(|b| b.is_ascii_digit())
             && n.parse::<u64>().is_err()
         {
-            return ControlFlow::Break(n.clone());
+            found = Some(n.clone());
+            return ControlFlow::Break(());
         }
         ControlFlow::Continue(())
     });
     match found {
-        ControlFlow::Break(n) => Err(BurrmillError::NotAllowed(format!(
+        Some(n) => Err(BurrmillError::NotAllowed(format!(
             "integer literal {n} is wider than 64 bits and would be read as a float; \
              write CAST('{n}' AS DECIMAL(38,0))"
         ))),
-        ControlFlow::Continue(()) => Ok(()),
+        None => Ok(()),
     }
 }
 

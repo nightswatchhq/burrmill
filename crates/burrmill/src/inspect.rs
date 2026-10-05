@@ -18,8 +18,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::ControlFlow;
 
 use sqlparser::ast::{
-    Expr, Ident, ObjectName, ObjectNamePart, Query, Statement, TableFactor, Visit, VisitMut,
-    Visitor, VisitorMut,
+    Expr, Ident, ObjectName, ObjectNamePart, Query, Statement, TableFactor, Visitor, VisitorMut,
 };
 use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
@@ -144,7 +143,7 @@ pub fn reach(sql: &str) -> Result<Reach> {
         reach: Reach::default(),
         bad: None,
     };
-    let _ = stmt.visit(&mut w);
+    let _ = crate::walk::walk(stmt, &mut w);
     match w.bad {
         Some(why) => Err(refused(why)),
         None => Ok(w.reach),
@@ -198,7 +197,7 @@ pub fn refs(sql: &str) -> Option<Refs> {
         return None;
     };
     let mut c = Collect(Refs::default());
-    let _ = stmt.visit(&mut c);
+    let _ = crate::walk::walk(stmt, &mut c);
     Some(c.0)
 }
 
@@ -217,7 +216,7 @@ pub fn base_tables(sql: &str) -> Option<BTreeSet<String>> {
         cte: HashMap::new(),
         out: BTreeSet::new(),
     };
-    let _ = stmt.visit(&mut w);
+    let _ = crate::walk::walk(stmt, &mut w);
     Some(w.out)
 }
 
@@ -287,8 +286,8 @@ pub fn canonical(sql: &str) -> Option<String> {
         return None;
     };
     let mut found = Aliases(Vec::new());
-    let _ = Visit::visit(&*stmt, &mut found);
-    let _ = stmt.visit(&mut Rename(found.0));
+    let _ = crate::walk::walk(&*stmt, &mut found);
+    let _ = crate::walk::walk_mut(stmt, &mut Rename(found.0));
     Some(stmt.to_string())
 }
 
