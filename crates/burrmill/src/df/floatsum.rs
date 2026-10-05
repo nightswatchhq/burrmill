@@ -133,34 +133,16 @@ impl Exact {
         self.bucket((e >> 5) as u8, v)
     }
 
-    fn entries(&self) -> Vec<(u8, i128)> {
-        match &self.rare {
-            Some(r) => (0..BUCKETS)
+    fn entries(&self) -> impl Iterator<Item = (u8, i128)> + '_ {
+        let dense = self.rare.iter().flat_map(|r| {
+            (0..BUCKETS)
                 .filter(|&b| r.dense[b] != 0)
                 .map(|b| (b as u8, r.dense[b]))
-                .collect(),
-            None => (0..2)
-                .filter(|&j| self.ids[j] != NONE)
-                .map(|j| (self.ids[j], self.sums[j]))
-                .collect(),
-        }
-    }
-
-    fn merge(&mut self, o: &Exact) -> Result<()> {
-        self.n += o.n;
-        if let Some(r) = &o.rare {
-            let (nan, pos, neg) = (r.nan, r.pos_inf, r.neg_inf);
-            if nan + pos + neg > 0 {
-                let s = self.promote();
-                s.nan += nan;
-                s.pos_inf += pos;
-                s.neg_inf += neg;
-            }
-        }
-        for (b, v) in o.entries() {
-            self.bucket(b, v)?;
-        }
-        Ok(())
+        });
+        let inline = (0..2)
+            .filter(|&j| self.rare.is_none() && self.ids[j] != NONE)
+            .map(|j| (self.ids[j], self.sums[j]));
+        dense.chain(inline)
     }
 
     fn encode(&self, out: &mut Vec<u8>) {
@@ -177,17 +159,19 @@ impl Exact {
         }
     }
 
-    fn decode(mut buf: &[u8]) -> Result<Self> {
-        let mut e = Exact::default();
+    /// Adds another group's `encode`d state, without building it first.
+    fn merge_encoded(&mut self, mut buf: &[u8]) -> Result<()> {
         if buf.len() < 32 || !(buf.len() - 32).is_multiple_of(17) {
             return internal_err!("exact sum state of {} bytes", buf.len());
         }
         let word = |b: &[u8]| u64::from_le_bytes(b.try_into().expect("8 bytes"));
-        e.n = word(&buf[0..8]);
+        self.n += word(&buf[0..8]);
         let (nan, pos, neg) = (word(&buf[8..16]), word(&buf[16..24]), word(&buf[24..32]));
         if nan + pos + neg > 0 {
-            let r = e.promote();
-            (r.nan, r.pos_inf, r.neg_inf) = (nan, pos, neg);
+            let r = self.promote();
+            r.nan += nan;
+            r.pos_inf += pos;
+            r.neg_inf += neg;
         }
         buf = &buf[32..];
         while let [b, rest @ ..] = buf {
@@ -195,14 +179,47 @@ impl Exact {
                 return internal_err!("exact sum state names bucket {b}");
             }
             let v = i128::from_le_bytes(rest[..16].try_into().expect("16 bytes"));
-            e.bucket(*b, v)?;
+            self.bucket(*b, v)?;
             buf = &rest[16..];
         }
-        Ok(e)
+        Ok(())
     }
 
     /// The exact sum, rounded once to nearest, ties to even.
     fn value(&self) -> f64 {
+        self.inline_value().unwrap_or_else(|| self.limb_value())
+    }
+
+    /// `value` for a group in one bucket or two adjacent ones: their total fits an `i128`, which
+    /// `as f64` rounds to nearest even, and the power of two that scales it adds no second rounding.
+    fn inline_value(&self) -> Option<f64> {
+        if self.rare.is_some() {
+            return None;
+        }
+        let (lo, total) = match (self.ids, self.sums) {
+            ([NONE, NONE], _) => return Some(0.0),
+            ([b, NONE], [s, _]) | ([NONE, b], [_, s]) => (b, s),
+            ([b0, b1], [s0, s1]) => {
+                let ((lo, low), (hi, high)) = if b0 < b1 {
+                    ((b0, s0), (b1, s1))
+                } else {
+                    ((b1, s1), (b0, s0))
+                };
+                if hi - lo != 1 {
+                    return None;
+                }
+                (lo, high.checked_mul(1 << 32)?.checked_add(low)?)
+            }
+        };
+        // Bucket 0 counts half the least subnormal. From bucket 1 a subnormal total is under 2^21
+        // units, so already exact, and a total past the largest double overflows here as it should.
+        if lo == 0 {
+            return None;
+        }
+        Some(total as f64 * pow2(32 * i32::from(lo) - 1075))
+    }
+
+    fn limb_value(&self) -> f64 {
         if let Some(r) = &self.rare {
             if r.nan > 0 || (r.pos_inf > 0 && r.neg_inf > 0) {
                 return f64::NAN;
@@ -230,7 +247,7 @@ impl Exact {
             c.iter_mut().for_each(|x| *x = -*x);
             carry(&mut c);
         }
-        let limbs: Vec<u64> = c.iter().map(|&x| x as u64).collect();
+        let limbs = c.map(|x| x as u64);
         let Some(h) = limbs.iter().rposition(|&l| l != 0) else {
             return 0.0;
         };
@@ -402,10 +419,9 @@ impl Groups {
     }
 
     fn merge_one(&mut self, g: usize, state: &[u8]) -> Result<()> {
-        let o = Exact::decode(state)?;
         let e = &mut self.groups[g];
         let was = e.rare.is_some();
-        e.merge(&o)?;
+        e.merge_encoded(state)?;
         self.rare += usize::from(!was && e.rare.is_some());
         Ok(())
     }
@@ -419,13 +435,17 @@ impl Groups {
     fn finish(&self, groups: &[Exact]) -> ArrayRef {
         let mut b = Float64Builder::with_capacity(groups.len());
         for e in groups {
-            match e.n {
-                0 => b.append_null(),
-                n if self.avg => b.append_value(e.value() / n as f64),
-                _ => b.append_value(e.value()),
-            }
+            b.append_option(self.answer(e));
         }
         Arc::new(b.finish())
+    }
+
+    fn answer(&self, e: &Exact) -> Option<f64> {
+        match e.n {
+            0 => None,
+            n if self.avg => Some(e.value() / n as f64),
+            _ => Some(e.value()),
+        }
     }
 
     fn encode(groups: &[Exact]) -> ArrayRef {
@@ -545,7 +565,7 @@ impl Accumulator for Single {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let g = self.group();
-        ScalarValue::try_from_array(&g.finish(&g.groups), 0)
+        Ok(ScalarValue::Float64(g.answer(&g.groups[0])))
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -626,11 +646,45 @@ mod tests {
         }
         let mut buf = Vec::new();
         b.encode(&mut buf);
-        a.merge(&Exact::decode(&buf).unwrap()).unwrap();
+        a.merge_encoded(&buf).unwrap();
         assert_eq!(a.value().to_bits(), whole.to_bits());
         for &x in &xs[100..] {
             a.add(x, true).unwrap();
         }
         assert_eq!(a.value().to_bits(), exact(&xs[..100]).to_bits());
+    }
+
+    #[test]
+    fn inline_buckets_round_as_the_limbs_do() {
+        let mut s = 1849u64;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            s
+        };
+        let mut checked = 0;
+        for case in 0..100_000 {
+            let lo = (next() % 64) as u8;
+            let hi = (lo + (next() % 3) as u8).min(63);
+            let mut sum = || {
+                let bits = next() % 85;
+                let v = (i128::from(next()) << 64 | i128::from(next())) >> (128 - bits.max(1));
+                if next() & 1 == 0 { v } else { -v }
+            };
+            let mut e = Exact::default();
+            e.bucket(lo, sum()).unwrap();
+            if hi != lo {
+                e.bucket(hi, sum()).unwrap();
+            }
+            if let Some(v) = e.inline_value() {
+                assert_eq!(v.to_bits(), e.limb_value().to_bits(), "case {case}");
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 50_000,
+            "only {checked} cases took the inline path"
+        );
     }
 }

@@ -168,6 +168,11 @@ path = "tests/df_host.rs"
 required-features = ["datafusion"]
 
 [[test]]
+name = "df_joinfilters"
+path = "tests/df_joinfilters.rs"
+required-features = ["datafusion"]
+
+[[test]]
 name = "df_latest"
 path = "tests/df_latest.rs"
 required-features = ["datafusion"]

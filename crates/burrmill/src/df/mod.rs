@@ -42,6 +42,7 @@ mod fastcast;
 mod floatsum;
 mod fold;
 mod host;
+mod joinfilters;
 mod lastnonnull;
 mod lists;
 mod names;
