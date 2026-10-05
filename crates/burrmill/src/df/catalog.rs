@@ -11,14 +11,17 @@ use datafusion_common::{DFSchema, Result as DFResult};
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_parquet::source::ParquetSource;
+use datafusion_datasource_parquet::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::async_reader::AsyncFileReader;
 
 pub(super) fn view_schema(schema: &Schema) -> Schema {
     let fields: Vec<Arc<Field>> = schema
@@ -139,6 +142,41 @@ pub fn apply_schema_json(tables: &mut Vec<NestTable>, schema_json: &Path) -> cra
     Ok(())
 }
 
+/// What a scan holds for each segment it opens until the scan ends, beside two copies of its path:
+/// DataFusion's per-file metrics and the opener's state. `tests/df_scanpool.rs` measures it.
+const PER_SEGMENT: usize = 5_632;
+
+/// The bytes `plan`, if it is a segment scan, holds for the segments of `partition` while it runs.
+pub(super) fn bookkeeping(plan: &Arc<dyn ExecutionPlan>, partition: usize) -> usize {
+    plan.downcast_ref::<DataSourceExec>()
+        .and_then(|d| d.data_source().downcast_ref::<FileScanConfig>())
+        .and_then(|c| c.file_groups.get(partition))
+        .map_or(0, |g| {
+            g.iter()
+                .map(|f| PER_SEGMENT + 2 * f.object_meta.location.as_ref().len())
+                .sum()
+        })
+}
+
+/// DataFusion's reader, its per-file metrics registered into a set dropped as soon as it is made.
+/// Kept, they held 4 KiB a segment until the scan ended (#86).
+#[derive(Debug)]
+struct Unmetered(Arc<dyn ParquetFileReaderFactory>);
+
+impl ParquetFileReaderFactory for Unmetered {
+    fn create_reader(
+        &self,
+        partition_index: usize,
+        file: PartitionedFile,
+        metadata_size_hint: Option<usize>,
+        _metrics: &ExecutionPlanMetricsSet,
+    ) -> DFResult<Box<dyn AsyncFileReader + Send>> {
+        let unread = ExecutionPlanMetricsSet::new();
+        self.0
+            .create_reader(partition_index, file, metadata_size_hint, &unread)
+    }
+}
+
 #[derive(Debug)]
 pub struct SegmentTable {
     schema: SchemaRef,
@@ -200,7 +238,12 @@ impl TableProvider for SegmentTable {
             ..Default::default()
         };
         opts.global.pushdown_filters = true;
-        let mut source = ParquetSource::new(self.schema.clone()).with_table_parquet_options(opts);
+        let store = state.runtime_env().object_store(&url)?;
+        let mut source = ParquetSource::new(self.schema.clone())
+            .with_table_parquet_options(opts)
+            .with_parquet_file_reader_factory(Arc::new(Unmetered(Arc::new(
+                DefaultParquetFileReaderFactory::new(store),
+            ))));
         if let Some(pred) = conjunction(filters.iter().cloned()) {
             let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
             source = source.with_predicate(state.create_physical_expr(pred, &df_schema)?);
