@@ -9,13 +9,10 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryBuilder, BooleanArray, Decimal128Array, Float64Array,
-    Float64Builder, UInt16Array, UInt64Array,
+    Array, ArrayRef, AsArray, BinaryBuilder, BooleanArray, Float64Array, Float64Builder,
 };
-use arrow::buffer::BooleanBuffer;
-use arrow::datatypes::{
-    DataType, Decimal128Type, Field, FieldRef, Float64Type, UInt16Type, UInt64Type,
-};
+use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::datatypes::{DataType, Field, FieldRef, Float64Type};
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
@@ -412,11 +409,8 @@ impl AggregateUDFImpl for ExactDoubles {
         }
         let field = |part, t| Arc::new(Field::new(format_state_name(args.name, part), t, true));
         Ok(vec![
-            field("exact_count", DataType::UInt64),
-            field("exact_ids", DataType::UInt16),
-            field("exact_s0", DataType::Decimal128(38, 0)),
-            field("exact_s1", DataType::Decimal128(38, 0)),
-            field("exact_rare", DataType::Binary),
+            field("exact_single", DataType::Float64),
+            field("exact", DataType::Binary),
         ])
     }
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -470,10 +464,29 @@ impl AggregateUDFImpl for ExactDoubles {
     }
 }
 
+/// A group's count and its one value, or, once it has met a second, where its `Exact` is. Most
+/// groups of a view keyed as finely as its rows never do, and stay this size.
+#[derive(Clone, Copy, Default)]
+struct Slot {
+    /// 0 or 1, or `EXACT`.
+    n: u64,
+    /// The one value's bits, or an index into `Groups::exact`.
+    v: u64,
+}
+
+const EXACT: u64 = u64::MAX;
+
+/// What the buckets answer for one value: itself, but +0 for -0 and one NaN for any.
+fn one(x: f64) -> f64 {
+    if x.is_nan() { f64::NAN } else { x + 0.0 }
+}
+
 struct Groups {
     avg: bool,
-    groups: Vec<Exact>,
-    /// Groups holding a boxed `Rare`, for `size`.
+    slots: Vec<Slot>,
+    /// The groups that have met a second value, which count their own values.
+    exact: Vec<Exact>,
+    /// Of `exact`, those holding a boxed `Rare`, for `size`.
     rare: usize,
     /// The one group's batch sums, zero between batches.
     lanes: Option<Box<Lanes>>,
@@ -485,31 +498,50 @@ impl Groups {
     fn new(avg: bool) -> Self {
         Self {
             avg,
-            groups: Vec::new(),
+            slots: Vec::new(),
+            exact: Vec::new(),
             rare: 0,
             lanes: None,
             unchecked: 0,
         }
     }
 
-    fn each(
-        values: &ArrayRef,
-        opt_filter: Option<&BooleanArray>,
-        mut f: impl FnMut(usize, f64) -> Result<()>,
-    ) -> Result<()> {
-        let values = values.as_primitive::<Float64Type>();
-        match Self::mask(values, opt_filter) {
-            None => {
-                for (i, &v) in values.values().iter().enumerate() {
-                    f(i, v)?;
-                }
+    /// Group `g`'s `Exact`, moving its one value there first if it has one.
+    fn exact_mut(&mut self, g: usize) -> &mut Exact {
+        let s = &mut self.slots[g];
+        if s.n != EXACT {
+            let mut e = Exact::default();
+            if s.n == 1 {
+                // One value cannot be out of range.
+                e.add(f64::from_bits(s.v), false).expect("one value");
+                e.n = 1;
             }
-            Some(m) => {
-                for i in m.set_indices() {
-                    f(i, values.value(i))?;
-                }
-            }
+            self.rare += usize::from(e.rare.is_some());
+            *s = Slot {
+                n: EXACT,
+                v: self.exact.len() as u64,
+            };
+            self.exact.push(e);
         }
+        &mut self.exact[s.v as usize]
+    }
+
+    /// Adds one more value `x` to group `g`, with every range check.
+    fn add_one(&mut self, g: usize, x: f64) -> Result<()> {
+        let s = &mut self.slots[g];
+        if s.n == 0 {
+            *s = Slot {
+                n: 1,
+                v: x.to_bits(),
+            };
+            return Ok(());
+        }
+        let e = self.exact_mut(g);
+        let was = e.rare.is_some();
+        e.add(x, false)?;
+        e.n += 1;
+        let now = e.rare.is_some();
+        self.rare += usize::from(!was && now);
         Ok(())
     }
 
@@ -526,13 +558,13 @@ impl Groups {
         }
     }
 
-    /// Adds a whole batch to group 0, or takes it back out.
+    /// Adds a whole batch to group 0, or takes it back out. `Single` keeps group 0 in `exact`.
     fn add_all(&mut self, values: &ArrayRef, back: bool) -> Result<()> {
         let values = values.as_primitive::<Float64Type>();
         let lanes = self
             .lanes
             .get_or_insert_with(|| Box::new([[0; LANES]; BUCKETS]));
-        let e = &mut self.groups[0];
+        let e = &mut self.exact[self.slots[0].v as usize];
         let was = e.rare.is_some();
         let n = match Self::mask(values, None) {
             None => e.add_many(values.values().iter().copied(), back, lanes)?,
@@ -546,15 +578,24 @@ impl Groups {
     /// Adds each `(group, value)`. A value landing in a bucket its group already holds is added with
     /// no branch on which, and range is checked over every group each `CHECK_EVERY` values or more.
     fn add_rows(&mut self, rows: impl Iterator<Item = (usize, f64)>) -> Result<()> {
-        let (mut added, mut wide) = (0, false);
+        let mut added = 0;
         for (g, x) in rows {
-            let e = &mut self.groups[g];
-            e.n += 1;
             added += 1;
+            let s = &mut self.slots[g];
+            if s.n == 0 {
+                *s = Slot {
+                    n: 1,
+                    v: x.to_bits(),
+                };
+                continue;
+            }
+            let e = self.exact_mut(g);
+            e.n += 1;
             let Some((b, v)) = units(x) else {
                 let was = e.rare.is_some();
                 e.add(x, false)?;
-                self.rare += usize::from(!was && e.rare.is_some());
+                let now = e.rare.is_some();
+                self.rare += usize::from(!was && now);
                 continue;
             };
             if v == 0 {
@@ -570,39 +611,54 @@ impl Groups {
                 (e.ids[0], e.sums[0]) = (b as u8, v);
             } else {
                 e.bucket_slow(b as u8, v)?;
-                self.rare += usize::from(e.rare.is_some());
+                let now = e.rare.is_some();
+                self.rare += usize::from(now);
             }
         }
         self.unchecked += added;
         // No more often than once per slot it reads, so the scan costs at most one compare a value.
-        if self.unchecked >= CHECK_EVERY.max((self.groups.len() + BUCKETS * self.rare) as u64) {
+        if self.unchecked >= CHECK_EVERY.max((self.exact.len() + BUCKETS * self.rare) as u64) {
             self.unchecked = 0;
-            wide |= self.groups.iter().any(Exact::out_of_range);
-        }
-        if wide {
-            return Err(too_wide());
+            if self.exact.iter().any(Exact::out_of_range) {
+                return Err(too_wide());
+            }
         }
         Ok(())
     }
 
-    fn merge_one(&mut self, g: usize, state: &[u8]) -> Result<()> {
-        let e = &mut self.groups[g];
-        let was = e.rare.is_some();
-        e.merge_encoded(state)?;
-        self.rare += usize::from(!was && e.rare.is_some());
-        Ok(())
+    /// The slots `emit_to` asks for, and the `Exact`s they point into, renumbered to match.
+    fn take(&mut self, emit_to: EmitTo) -> (Vec<Slot>, Vec<Exact>) {
+        if let EmitTo::All = emit_to {
+            self.rare = 0;
+            return (
+                std::mem::take(&mut self.slots),
+                std::mem::take(&mut self.exact),
+            );
+        }
+        let mut taken = emit_to.take_needed(&mut self.slots);
+        let mut old: Vec<Option<Exact>> = std::mem::take(&mut self.exact)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let mut out = Vec::new();
+        for (slots, to) in [(&mut taken, &mut out), (&mut self.slots, &mut self.exact)] {
+            for s in slots.iter_mut().filter(|s| s.n == EXACT) {
+                to.push(old[s.v as usize].take().expect("one slot per exact"));
+                s.v = to.len() as u64 - 1;
+            }
+        }
+        self.rare = self.exact.iter().filter(|e| e.rare.is_some()).count();
+        (taken, out)
     }
 
-    fn take(&mut self, emit_to: EmitTo) -> Vec<Exact> {
-        let taken = emit_to.take_needed(&mut self.groups);
-        self.rare -= taken.iter().filter(|e| e.rare.is_some()).count();
-        taken
-    }
-
-    fn finish(&self, groups: &[Exact]) -> ArrayRef {
-        let mut b = Float64Builder::with_capacity(groups.len());
-        for e in groups {
-            b.append_option(self.answer(e));
+    fn finish(&self, slots: &[Slot], exact: &[Exact]) -> ArrayRef {
+        let mut b = Float64Builder::with_capacity(slots.len());
+        for s in slots {
+            b.append_option(match s.n {
+                0 => None,
+                EXACT => self.answer(&exact[s.v as usize]),
+                _ => Some(one(f64::from_bits(s.v))),
+            });
         }
         Arc::new(b.finish())
     }
@@ -615,40 +671,38 @@ impl Groups {
         }
     }
 
-    /// Each group's state as five columns: its count, its inline bucket ids and sums, and for a group
-    /// in `Rare` its whole `encode`d state, which then stands in for the other four. Fixed-width
-    /// columns, because a view grouping as many keys as rows pays for its state once a row.
-    fn encode(groups: &[Exact]) -> Vec<ArrayRef> {
-        let len = groups.len();
-        let (mut count, mut ids) = (Vec::with_capacity(len), Vec::with_capacity(len));
-        let (mut s0, mut s1) = (Vec::with_capacity(len), Vec::with_capacity(len));
-        let mut rare = None::<BinaryBuilder>;
+    /// Each group's state as two columns: a group holding one value has it as a double, any other
+    /// its whole `encode`d `Exact` as bytes.
+    fn encode(slots: &[Slot], exact: &[Exact]) -> Vec<ArrayRef> {
+        let len = slots.len();
+        let mut single = Float64Builder::with_capacity(len);
+        let mut bytes = None::<BinaryBuilder>;
         let mut buf = Vec::new();
-        for (i, e) in groups.iter().enumerate() {
-            count.push(e.n);
-            ids.push(u16::from_le_bytes(e.ids));
-            s0.push(e.sums[0]);
-            s1.push(e.sums[1]);
-            if e.rare.is_some() {
-                let r = rare.get_or_insert_with(|| {
-                    let mut r = BinaryBuilder::with_capacity(len, 0);
-                    r.append_nulls(i);
-                    r
-                });
-                buf.clear();
-                e.encode(&mut buf);
-                r.append_value(&buf);
-            } else if let Some(r) = &mut rare {
+        for (i, s) in slots.iter().enumerate() {
+            match s.n {
+                0 => single.append_null(),
+                EXACT => {
+                    single.append_null();
+                    buf.clear();
+                    exact[s.v as usize].encode(&mut buf);
+                    bytes
+                        .get_or_insert_with(|| {
+                            let mut r = BinaryBuilder::with_capacity(len, 0);
+                            r.append_nulls(i);
+                            r
+                        })
+                        .append_value(&buf);
+                    continue;
+                }
+                _ => single.append_value(f64::from_bits(s.v)),
+            }
+            if let Some(r) = &mut bytes {
                 r.append_null();
             }
         }
-        let sums = |s| Decimal128Array::from(s).with_data_type(DataType::Decimal128(38, 0));
         vec![
-            Arc::new(UInt64Array::from(count)),
-            Arc::new(UInt16Array::from(ids)),
-            Arc::new(sums(s0)),
-            Arc::new(sums(s1)),
-            rare.map_or_else(
+            Arc::new(single.finish()),
+            bytes.map_or_else(
                 || arrow::array::new_null_array(&DataType::Binary, len),
                 |mut r| Arc::new(r.finish()),
             ),
@@ -657,49 +711,21 @@ impl Groups {
 
     /// Adds `encode`d state row `i` to group `g` of each row.
     fn merge_states(&mut self, states: &[ArrayRef], group: impl Fn(usize) -> usize) -> Result<()> {
-        let [count, ids, s0, s1, rare] = states else {
+        let [single, bytes] = states else {
             return internal_err!("exact sum state of {} columns", states.len());
         };
-        let count = count.as_primitive::<UInt64Type>();
-        let ids = ids.as_primitive::<UInt16Type>();
-        let (s0, s1) = (
-            s0.as_primitive::<Decimal128Type>(),
-            s1.as_primitive::<Decimal128Type>(),
-        );
-        let rare = rare.as_binary::<i32>();
-        for i in (0..count.len()).filter(|&i| count.is_valid(i)) {
-            let g = group(i);
-            if rare.is_valid(i) {
-                self.merge_one(g, rare.value(i))?;
-                continue;
+        let single = single.as_primitive::<Float64Type>();
+        let bytes = bytes.as_binary::<i32>();
+        for i in 0..single.len() {
+            if single.is_valid(i) {
+                self.add_one(group(i), single.value(i))?;
+            } else if bytes.is_valid(i) {
+                let e = self.exact_mut(group(i));
+                let was = e.rare.is_some();
+                e.merge_encoded(bytes.value(i))?;
+                let now = e.rare.is_some();
+                self.rare += usize::from(!was && now);
             }
-            let e = &mut self.groups[g];
-            let [b0, b1] = ids.value(i).to_le_bytes();
-            let (v0, v1) = (s0.value(i), s1.value(i));
-            // Most groups meet one state, so the first is taken as it is.
-            if e.n == 0
-                && e.ids == [NONE; 2]
-                && e.rare.is_none()
-                && [b0, b1]
-                    .iter()
-                    .all(|&b| b == NONE || (b as usize) < BUCKETS)
-                && b0 != b1
-                && v0.unsigned_abs().max(v1.unsigned_abs()) <= LIMIT
-            {
-                (e.n, e.ids, e.sums) = (count.value(i), [b0, b1], [v0, v1]);
-                continue;
-            }
-            let was = e.rare.is_some();
-            e.n += count.value(i);
-            for (b, s) in [(b0, v0), (b1, v1)] {
-                if b != NONE && s != 0 {
-                    if b as usize >= BUCKETS {
-                        return internal_err!("exact sum state names bucket {b}");
-                    }
-                    e.bucket(b, s)?;
-                }
-            }
-            self.rare += usize::from(!was && e.rare.is_some());
         }
         Ok(())
     }
@@ -713,7 +739,7 @@ impl GroupsAccumulator for Groups {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        self.groups.resize_with(total_num_groups, Exact::default);
+        self.slots.resize(total_num_groups, Slot::default());
         let values = values[0].as_primitive::<Float64Type>();
         match Self::mask(values, opt_filter) {
             None => self.add_rows(
@@ -732,18 +758,18 @@ impl GroupsAccumulator for Groups {
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
-        self.groups.resize_with(total_num_groups, Exact::default);
+        self.slots.resize(total_num_groups, Slot::default());
         self.merge_states(values, |i| group_indices[i])
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let taken = self.take(emit_to);
-        Ok(self.finish(&taken))
+        let (slots, exact) = self.take(emit_to);
+        Ok(self.finish(&slots, &exact))
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let taken = self.take(emit_to);
-        Ok(Self::encode(&taken))
+        let (slots, exact) = self.take(emit_to);
+        Ok(Self::encode(&slots, &exact))
     }
 
     fn convert_to_state(
@@ -751,17 +777,18 @@ impl GroupsAccumulator for Groups {
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        let mut rows = vec![Exact::default(); values[0].len()];
-        Self::each(&values[0], opt_filter, |i, v| {
-            rows[i].add(v, false)?;
-            rows[i].n = 1;
-            Ok(())
-        })?;
-        Ok(Self::encode(&rows))
+        // Each row is a group holding its one value, so the input is the state.
+        let values = values[0].as_primitive::<Float64Type>();
+        let keep = Self::mask(values, opt_filter).map(NullBuffer::from);
+        Ok(vec![
+            Arc::new(Float64Array::new(values.values().clone(), keep)),
+            arrow::array::new_null_array(&DataType::Binary, values.len()),
+        ])
     }
 
     fn size(&self) -> usize {
-        self.groups.capacity() * size_of::<Exact>()
+        self.slots.capacity() * size_of::<Slot>()
+            + self.exact.capacity() * size_of::<Exact>()
             + self.rare * size_of::<Rare>()
             + self.lanes.as_ref().map_or(0, |_| size_of::<Lanes>())
     }
@@ -778,8 +805,9 @@ impl std::fmt::Debug for Single {
 
 impl Single {
     fn group(&mut self) -> &mut Groups {
-        if self.0.groups.is_empty() {
-            self.0.groups.push(Exact::default());
+        if self.0.slots.is_empty() {
+            self.0.slots.push(Slot::default());
+            self.0.exact_mut(0);
         }
         &mut self.0
     }
@@ -804,12 +832,12 @@ impl Accumulator for Single {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let g = self.group();
-        Ok(ScalarValue::Float64(g.answer(&g.groups[0])))
+        Ok(ScalarValue::Float64(g.answer(&g.exact[0])))
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let g = self.group();
-        Groups::encode(&g.groups[..1])
+        Groups::encode(&g.slots, &g.exact)
             .iter()
             .map(|a| ScalarValue::try_from_array(a, 0))
             .collect()
@@ -973,37 +1001,67 @@ mod tests {
                     want[gi[i]].n += 1;
                 }
             }
-            let mut got = Groups::new(false);
             let filter = BooleanArray::from(keep);
-            got.update_batch(std::slice::from_ref(&values), &gi, Some(&filter), groups)
-                .unwrap();
-            for (g, (w, e)) in want.iter().zip(&got.groups).enumerate() {
+            for avg in [false, true] {
+                let answers = |g: &mut Groups| -> Vec<Option<u64>> {
+                    let a = g.evaluate(EmitTo::All).unwrap();
+                    let a = a.as_primitive::<Float64Type>();
+                    a.iter().map(|x| x.map(f64::to_bits)).collect()
+                };
+                let expect = |w: &[Exact]| -> Vec<Option<u64>> {
+                    let g = Groups::new(avg);
+                    w.iter().map(|e| g.answer(e).map(f64::to_bits)).collect()
+                };
+                let updated = || {
+                    let mut g = Groups::new(avg);
+                    g.update_batch(std::slice::from_ref(&values), &gi, Some(&filter), groups)
+                        .unwrap();
+                    g
+                };
+                let mut got = updated();
                 assert_eq!(
-                    (e.n, e.value().to_bits()),
-                    (w.n, w.value().to_bits()),
-                    "case {case} group {g}"
+                    got.rare,
+                    got.exact.iter().filter(|e| e.rare.is_some()).count()
                 );
-            }
-            assert_eq!(
-                got.rare,
-                got.groups.iter().filter(|e| e.rare.is_some()).count()
-            );
-            // Through the state and back, merged twice into groups in the opposite order.
-            let state = got.state(EmitTo::All).unwrap();
-            let mut back = Groups::new(false);
-            let flipped: Vec<usize> = (0..groups).rev().collect();
-            back.merge_batch(&state, &flipped, groups).unwrap();
-            back.merge_batch(&state, &flipped, groups).unwrap();
-            for (g, w) in want.iter().enumerate() {
-                let mut twice = w.clone();
-                let mut buf = Vec::new();
-                w.encode(&mut buf);
-                twice.merge_encoded(&buf).unwrap();
-                let e = &back.groups[groups - 1 - g];
+                assert_eq!(answers(&mut got), expect(&want), "case {case} avg {avg}");
+
+                // Through the state and back, merged twice into groups in the opposite order.
+                let state = updated().state(EmitTo::All).unwrap();
+                let mut back = Groups::new(avg);
+                let flipped: Vec<usize> = (0..groups).rev().collect();
+                back.merge_batch(&state, &flipped, groups).unwrap();
+                back.merge_batch(&state, &flipped, groups).unwrap();
+                let twice: Vec<Exact> = want
+                    .iter()
+                    .rev()
+                    .map(|w| {
+                        let (mut t, mut buf) = (w.clone(), Vec::new());
+                        w.encode(&mut buf);
+                        t.merge_encoded(&buf).unwrap();
+                        t
+                    })
+                    .collect();
                 assert_eq!(
-                    (e.n, e.value().to_bits()),
-                    (twice.n, twice.value().to_bits()),
-                    "case {case} group {g} through the state"
+                    answers(&mut back),
+                    expect(&twice),
+                    "case {case} avg {avg} state"
+                );
+
+                // Each row as its own group's state, as a partial aggregate that stops grouping.
+                let rows = updated()
+                    .convert_to_state(std::slice::from_ref(&values), Some(&filter))
+                    .unwrap();
+                let mut merged = Groups::new(avg);
+                let half = len / 2;
+                for (from, to) in [(0, half), (half, len)] {
+                    let part: Vec<ArrayRef> =
+                        rows.iter().map(|c| c.slice(from, to - from)).collect();
+                    merged.merge_batch(&part, &gi[from..to], groups).unwrap();
+                }
+                assert_eq!(
+                    answers(&mut merged),
+                    expect(&want),
+                    "case {case} avg {avg} rows"
                 );
             }
 
@@ -1016,7 +1074,7 @@ mod tests {
                 want.add(*x, false).unwrap();
                 want.n += 1;
             }
-            let e = &one.0.groups[0];
+            let e = &one.0.exact[0];
             assert_eq!(
                 (e.n, e.value().to_bits()),
                 (want.n, want.value().to_bits()),
@@ -1029,19 +1087,19 @@ mod tests {
     #[test]
     fn a_group_past_the_limit_is_refused_at_the_next_check() {
         let mut g = Groups::new(false);
-        g.groups.resize_with(1, Exact::default);
+        g.slots.resize(1, Slot::default());
         let (b, _) = units(1.0).unwrap();
-        g.groups[0].bucket(b as u8, LIMIT as i128).unwrap();
+        g.exact_mut(0).bucket(b as u8, LIMIT as i128).unwrap();
         g.unchecked = CHECK_EVERY - 2;
         g.add_rows([(0, 1.0)].into_iter()).unwrap();
         assert!(g.add_rows([(0, 1.0)].into_iter()).is_err());
 
         let mut g = Groups::new(false);
-        g.groups.resize_with(1, Exact::default);
+        g.slots.resize(1, Slot::default());
         g.add_rows([(0, 2f64.powi(-40)), (0, 2f64.powi(40)), (0, 2f64.powi(100))].into_iter())
             .unwrap();
-        assert!(g.groups[0].rare.is_some());
-        g.groups[0].bucket(b as u8, LIMIT as i128).unwrap();
+        assert!(g.exact[0].rare.is_some());
+        g.exact[0].bucket(b as u8, LIMIT as i128).unwrap();
         g.unchecked = CHECK_EVERY - 1;
         assert!(g.add_rows([(0, 1.0)].into_iter()).is_err());
     }
