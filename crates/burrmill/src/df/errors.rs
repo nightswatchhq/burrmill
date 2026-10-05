@@ -41,10 +41,46 @@ fn after<'a>(s: &'a str, marker: &str) -> Option<&'a str> {
     s.find(marker).map(|i| &s[i + marker.len()..])
 }
 
-fn unquote(s: &str) -> &str {
-    s.strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .unwrap_or(s)
+/// The parts of the dotted name `quoted_flat_name` printed at the head of `s`. A part needing quotes is
+/// quoted with `""` escapes, so a `.` inside one, or the sentence after the name, is not a separator.
+fn identifiers(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut chars = s.chars().peekable();
+    loop {
+        let mut part = String::new();
+        if chars.peek() == Some(&'"') {
+            chars.next();
+            while let Some(c) = chars.next() {
+                if c == '"' {
+                    if chars.peek() != Some(&'"') {
+                        break;
+                    }
+                    chars.next();
+                }
+                part.push(c);
+            }
+        } else {
+            while let Some(&c) = chars.peek() {
+                if !(c.is_alphanumeric() || c == '_') {
+                    break;
+                }
+                part.push(c);
+                chars.next();
+            }
+            if part.is_empty() {
+                break;
+            }
+        }
+        parts.push(part);
+        let mut ahead = chars.clone();
+        match (ahead.next(), ahead.next()) {
+            (Some('.'), Some(c)) if c == '"' || c.is_alphanumeric() || c == '_' => {
+                chars.next();
+            }
+            _ => break,
+        }
+    }
+    parts
 }
 
 /// DuckDB's first line for a DataFusion error, if it is one nuthatch keys a hint on.
@@ -56,17 +92,13 @@ pub fn duckdb_phrase(msg: &str) -> Option<String> {
         ));
     }
     if let Some(rest) = after(msg, "No field named ") {
-        let field = rest.split(". ").next()?.trim_end_matches('.');
-        return Some(match field.split_once('.') {
-            Some((table, col)) if !field.starts_with('"') => format!(
-                "Binder Error: Table \"{}\" does not have a column named \"{}\"",
-                unquote(table),
-                unquote(col)
-            ),
-            _ => format!(
-                "Binder Error: Referenced column \"{}\" not found in FROM clause!",
-                unquote(field)
-            ),
+        let parts = identifiers(rest);
+        return Some(match parts.as_slice() {
+            [.., table, col] => {
+                format!("Binder Error: Table \"{table}\" does not have a column named \"{col}\"")
+            }
+            [col] => format!("Binder Error: Referenced column \"{col}\" not found in FROM clause!"),
+            [] => return None,
         });
     }
     if msg.contains("For SELECT DISTINCT, ORDER BY expressions") {
@@ -232,6 +264,40 @@ mod tests {
                 .unwrap()
                 .ends_with("This limit was set by the 'max_temp_directory_size' setting.")
         );
+    }
+
+    #[test]
+    fn a_missing_column_is_cut_where_its_name_ends() {
+        assert_eq!(
+            p("Schema error: No field named zzzz.\nValid fields are t.block_number, t.k, t.value.")
+                .unwrap(),
+            "Binder Error: Referenced column \"zzzz\" not found in FROM clause!"
+        );
+        assert_eq!(
+            p("Schema error: No field named t.zzzz.\nValid fields are t.block_number, t.k.")
+                .unwrap(),
+            "Binder Error: Table \"t\" does not have a column named \"zzzz\""
+        );
+        assert_eq!(
+            p("Schema error: No field named \"Parquet error: x\".\nValid fields are t.k.").unwrap(),
+            "Binder Error: Referenced column \"Parquet error: x\" not found in FROM clause!"
+        );
+        assert_eq!(
+            p("Schema error: No field named \"a. b\"\"c\". Did you mean 't.k'?").unwrap(),
+            "Binder Error: Referenced column \"a. b\"c\" not found in FROM clause!"
+        );
+        assert_eq!(
+            p("Schema error: No field named t.\"Big.Col\".\nValid fields are t.k.").unwrap(),
+            "Binder Error: Table \"t\" does not have a column named \"Big.Col\""
+        );
+        assert_eq!(
+            p("Schema error: No field named \"T x\".valu. Did you mean '\"T x\".value'?").unwrap(),
+            "Binder Error: Table \"T x\" does not have a column named \"valu\""
+        );
+    }
+
+    #[test]
+    fn unrecognised_text_passes_and_the_kept_text_trips_nothing() {
         assert_eq!(p("Arrow error: Divide by zero error"), None);
         let r = super::restate(
             "No function matches the given name and argument types 'coalesce(Utf8View, Boolean)'."
