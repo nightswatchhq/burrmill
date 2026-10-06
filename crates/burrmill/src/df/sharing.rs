@@ -42,6 +42,34 @@ fn worth_sharing(p: &LogicalPlan) -> bool {
         .unwrap_or(false)
 }
 
+/// An alias over a subquery worth sharing that is not shared yet, through any aliases of aliases.
+fn candidate(n: &LogicalPlan) -> Option<&LogicalPlan> {
+    let LogicalPlan::SubqueryAlias(s) = n else {
+        return None;
+    };
+    let mut under = s.input.as_ref();
+    while let LogicalPlan::SubqueryAlias(inner) = under {
+        under = inner.input.as_ref();
+    }
+    let shared = matches!(under, LogicalPlan::Extension(e) if e.node.as_any().is::<SharedNode>());
+    (!shared && worth_sharing(&s.input)).then_some(s.input.as_ref())
+}
+
+/// Whether a repeated candidate sits anywhere beneath `p`, subqueries included.
+fn repeats_below(p: &LogicalPlan, counts: &HashMap<u64, usize>) -> Result<bool> {
+    let mut found = false;
+    p.apply_with_subqueries(|n| {
+        if let Some(input) = candidate(n)
+            && counts.contains_key(&key(input))
+        {
+            found = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(found)
+}
+
 fn key(p: &LogicalPlan) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     p.hash(&mut h);
@@ -53,55 +81,56 @@ impl AnalyzerRule for ShareRepeats {
         "share_repeats"
     }
 
-    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
-        let mut counts: HashMap<u64, usize> = HashMap::new();
-        plan.apply_with_subqueries(|n| {
-            if let LogicalPlan::SubqueryAlias(s) = n
-                && worth_sharing(&s.input)
-            {
-                *counts.entry(key(&s.input)).or_default() += 1;
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-        if counts.values().all(|&c| c < 2) {
-            return Ok(plan);
-        }
+    /// Innermost repeats first, one layer per pass. Sharing an outer subquery whole hid every
+    /// repeat inside it from the other occurrences, which then computed it again: a view read by
+    /// four views that are themselves repeated was scanned once per copy, not once.
+    fn analyze(&self, mut plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
         let mut caches: HashMap<u64, (LogicalPlan, Cache)> = HashMap::new();
-        plan.transform_down_with_subqueries(|n| {
-            let LogicalPlan::SubqueryAlias(s) = &n else {
-                return Ok(Transformed::no(n));
-            };
-            let k = key(&s.input);
-            if counts.get(&k).copied().unwrap_or(0) < 2 {
-                return Ok(Transformed::no(n));
+        loop {
+            let mut counts: HashMap<u64, usize> = HashMap::new();
+            plan.apply_with_subqueries(|n| {
+                if let Some(input) = candidate(n) {
+                    *counts.entry(key(input)).or_default() += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            counts.retain(|_, c| *c >= 2);
+            if counts.is_empty() {
+                return Ok(plan);
             }
-            let (input, cache) = caches
-                .entry(k)
-                .or_insert_with(|| {
-                    (
-                        s.input.as_ref().clone(),
-                        Arc::new(tokio::sync::OnceCell::new()),
-                    )
-                })
-                .clone();
-            if input != *s.input {
-                return Ok(Transformed::no(n));
+            let pass = plan.transform_up_with_subqueries(|n| {
+                let Some(input) = candidate(&n) else {
+                    return Ok(Transformed::no(n));
+                };
+                let k = key(input);
+                if !counts.contains_key(&k) || repeats_below(input, &counts)? {
+                    return Ok(Transformed::no(n));
+                }
+                let (first, cache) = caches
+                    .entry(k)
+                    .or_insert_with(|| (input.clone(), Arc::new(tokio::sync::OnceCell::new())))
+                    .clone();
+                if first != *input {
+                    return Ok(Transformed::no(n));
+                }
+                let LogicalPlan::SubqueryAlias(s) = &n else {
+                    unreachable!("candidate is an alias")
+                };
+                let shared = LogicalPlan::Extension(Extension {
+                    node: Arc::new(SharedNode {
+                        input: first,
+                        cache,
+                        id: k,
+                    }),
+                });
+                let alias = SubqueryAlias::try_new(Arc::new(shared), s.alias.clone())?;
+                Ok(Transformed::yes(LogicalPlan::SubqueryAlias(alias)))
+            })?;
+            if !pass.transformed {
+                return Ok(pass.data);
             }
-            let shared = LogicalPlan::Extension(Extension {
-                node: Arc::new(SharedNode {
-                    input,
-                    cache,
-                    id: k,
-                }),
-            });
-            let alias = SubqueryAlias::try_new(Arc::new(shared), s.alias.clone())?;
-            Ok(Transformed::new(
-                LogicalPlan::SubqueryAlias(alias),
-                true,
-                TreeNodeRecursion::Jump,
-            ))
-        })
-        .map(|t| t.data)
+            plan = pass.data;
+        }
     }
 }
 
