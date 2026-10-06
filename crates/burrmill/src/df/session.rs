@@ -349,8 +349,11 @@ impl MiniSession {
                     Arc::new(super::compactviews::CompactViews)
                         as Arc<dyn PhysicalOptimizerRule + Send + Sync>
                 }))
-                .chain([Arc::new(super::cancel::Cancellable(cancel))
-                    as Arc<dyn PhysicalOptimizerRule + Send + Sync>])
+                .chain([
+                    Arc::new(super::cancel::Cancellable(cancel))
+                        as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+                    Arc::new(super::sharing::PublishShared),
+                ])
                 .collect(),
             execution_props: ExecutionProps::new(),
             table_options: TableOptions::new(),

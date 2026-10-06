@@ -128,3 +128,41 @@ fn a_shared_subquery_is_planned_once_however_often_it_is_read() {
     assert_eq!(planned_scans(&e, "place", twice), 1);
     assert_eq!(planned_scans(&e, "roll", twice), 1);
 }
+
+/// A statement's ORDER BY holds over a shared subquery. With the definitions beside it under one
+/// node, DataFusion never recorded the statement's ordering and dropped its sort.
+#[test]
+fn a_statement_over_a_shared_subquery_keeps_its_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let segs = tmp.path().join("segments");
+    std::fs::create_dir(&segs).unwrap();
+    let ids: Vec<String> = (0..50_000u64)
+        .map(|i| format!("k{:05}", (i * 7919) % 20_000))
+        .collect();
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let pos: Vec<u64> = (0..50_000).collect();
+    write(&segs, "place", &ids, &pos);
+    let mut e = Engine::open_segments(&segs).unwrap();
+    e.register_view(
+        "placed",
+        "SELECT id, max(block_number) AS pos, count(*) AS n FROM place GROUP BY id",
+    )
+    .unwrap();
+    let sql = "SELECT x.id, x.n, y.pos FROM placed x JOIN placed y ON x.id = y.id \
+               ORDER BY x.pos DESC";
+    let pos: Vec<u64> = e
+        .sql(sql)
+        .unwrap()
+        .iter()
+        .flat_map(|b| {
+            b.column(2)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        })
+        .collect();
+    assert_eq!(pos.len(), 20_000);
+    assert!(pos.windows(2).all(|w| w[0] >= w[1]), "not in order");
+}

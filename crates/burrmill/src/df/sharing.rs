@@ -30,13 +30,14 @@ use datafusion_expr::logical_plan::{Extension, SubqueryAlias};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
 use datafusion_optimizer::analyzer::AnalyzerRule;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream, collect,
 };
-use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
+use datafusion_session::{ExtensionPlanner, PhysicalOptimizerRule, PhysicalPlanner};
 use futures::StreamExt;
 
 /// One shared subquery's plan, set when the statement starts, and its batches once computed.
@@ -618,7 +619,7 @@ impl ExtensionPlanner for SharedPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session: &dyn Session,
+        session: &dyn Session,
         _ctx: &datafusion_expr::physical_planning_context::PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(n) = node.as_any().downcast_ref::<SharedRef>() {
@@ -639,10 +640,14 @@ impl ExtensionPlanner for SharedPlanner {
             let Some((body, defs)) = physical_inputs.split_last() else {
                 return internal_err!("SharedDefs without its statement");
             };
+            // The statement's ORDER BY, recorded as DataFusion records it at the root, where it
+            // stops at a node of more than one child and would otherwise drop the sort.
+            let body = OutputRequirements::new_add_mode()
+                .optimize(Arc::clone(body), session.config_options())?;
             let exec = SharedDefsExec {
                 states: n.states.clone(),
                 defs: defs.to_vec(),
-                body: Arc::clone(body),
+                body,
             };
             exec.publish();
             return Ok(Some(Arc::new(exec)));
@@ -665,6 +670,35 @@ impl SharedDefsExec {
         for (state, def) in self.states.iter().zip(&self.defs) {
             *state.plan.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(def));
         }
+    }
+}
+
+/// The physical optimizer's last rule: each definition as finally optimised, before anything runs.
+/// A scalar subquery above the statement runs its subqueries before `SharedDefsExec` executes.
+#[derive(Debug)]
+pub(super) struct PublishShared;
+
+impl PhysicalOptimizerRule for PublishShared {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        plan.apply(|p| {
+            if let Some(d) = p.downcast_ref::<SharedDefsExec>() {
+                d.publish();
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(plan)
+    }
+
+    fn name(&self) -> &str {
+        "publish_shared"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
     }
 }
 
@@ -702,6 +736,10 @@ impl ExecutionPlan for SharedDefsExec {
         let mut m = vec![false; self.defs.len()];
         m.push(true);
         m
+    }
+    // The statement's output is what the caller reads; spreading it over partitions undid its order.
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false; self.defs.len() + 1]
     }
     fn apply_expressions(
         &self,
