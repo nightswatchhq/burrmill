@@ -11,6 +11,11 @@
 //! `rn` as the constant 1. `ROW_NUMBER` and `first_value` break ties among equal `o` equally
 //! arbitrarily. Anything else in the window chain, or anything but columns in the projection,
 //! and the plan is left as it is.
+//!
+//! An ordered `first_value` costs per column where a window does not, so a wide row keeps its window
+//! (#90): over BetSwirl's 160,802 placements, twelve text columns took 0.50 s as aggregates and
+//! 0.20 s as the window, the two even at one; beside two partition sums the aggregate still won to
+//! eight columns, 0.28 s against 0.34 s at six.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -80,6 +85,15 @@ fn whole_partition(w: &WindowFunction) -> bool {
     let f = &w.params.window_frame;
     matches!(&f.start_bound, WindowFrameBound::Preceding(v) if v.is_null())
         && matches!(&f.end_bound, WindowFrameBound::Following(v) if v.is_null())
+}
+
+/// The most columns the rewrite keeps by `first_value` before the window is cheaper, given how many
+/// partition aggregates it also replaces.
+fn worth_keeping(aggregates: usize) -> usize {
+    match aggregates {
+        0 => 2,
+        _ => 8,
+    }
 }
 
 enum Source {
@@ -191,6 +205,17 @@ fn rewrite(f: &Filter) -> Result<Option<LogicalPlan>> {
         sources.push(source);
     }
     if rn_index.is_none_or(|i| !matches!(sources[i], Source::RowNumber)) {
+        return Ok(None);
+    }
+    let latest = sources
+        .iter()
+        .filter(|s| matches!(s, Source::Latest(_)))
+        .count();
+    let aggregates = sources
+        .iter()
+        .filter(|s| matches!(s, Source::Aggregate(_)))
+        .count();
+    if latest > worth_keeping(aggregates) {
         return Ok(None);
     }
 

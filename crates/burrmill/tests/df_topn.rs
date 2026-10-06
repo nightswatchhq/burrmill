@@ -161,6 +161,35 @@ fn other_windows_leave_the_plan_alone() {
     same_as_unrewritten(&e, sql);
 }
 
+/// #90: an ordered `first_value` costs per column, and with no partition aggregate to replace, a
+/// row kept whole was more than twice as slow as the window (BetSwirl's placements).
+#[test]
+fn a_wide_row_with_nothing_else_to_replace_stays_a_window() {
+    let (_t, e) = engine();
+    let sql = "SELECT id, poi, amount, block_number, log_index FROM (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY block_number DESC, log_index DESC) AS rn
+        FROM ev) WHERE rn = 1";
+    let plan = text(&e, &format!("EXPLAIN {sql}")).join("\n");
+    assert!(!plan.contains("first_value"), "{plan}");
+    assert_eq!(
+        same_as_unrewritten(&e, sql),
+        vec![
+            "NULL|n2|4|2|0",
+            "a|NULL|1|2|1",
+            "b|q1|7|1|0",
+            "c|r1|NULL|5|0"
+        ]
+    );
+    // Beside the partition sum it replaces, the same row is still worth the aggregate.
+    let beside = "SELECT id, poi, amount, total, rn FROM (
+        SELECT id, poi, amount, SUM(CAST(amount AS HUGEINT)) OVER (PARTITION BY id) AS total,
+               ROW_NUMBER() OVER (PARTITION BY id ORDER BY block_number DESC, log_index DESC) AS rn
+        FROM ev) WHERE rn = 1";
+    let plan = text(&e, &format!("EXPLAIN {beside}")).join("\n");
+    assert!(plan.contains("first_value"), "{plan}");
+    same_as_unrewritten(&e, beside);
+}
+
 /// #89: over a join, a column of the other side named like the partition key is not the key.
 #[test]
 fn a_column_named_like_the_key_from_the_other_side_is_kept() {
