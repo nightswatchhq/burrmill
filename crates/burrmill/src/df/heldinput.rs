@@ -14,7 +14,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::Array;
+use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::{BatchCoalescer, concat_batches};
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
@@ -24,7 +24,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::joins::CrossJoinExec;
+use datafusion_physical_plan::joins::{CrossJoinExec, HashJoinExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::windows::WindowAggExec;
@@ -239,14 +239,23 @@ const GATHER_BYTES: usize = 1 << 20;
 
 /// A sort's input gathered into batches of up to [`GATHER_ROWS`] rows or [`GATHER_BYTES`] bytes, so
 /// its spill merges a few hundred runs rather than one per 128 rows.
+///
+/// A hash join's build side too, with its view columns copied into one buffer per gathered batch
+/// (`compact`). Built from 128-row batches, the join's table kept a buffer for each, and every batch
+/// it put out referenced all of them, which DataFusion walks per batch for its `output_bytes`
+/// metric: 0.8 s of BetSwirl's 1.9 s `bets` statement, against 160,802 rows (#1951).
 #[derive(Debug)]
 pub(super) struct GatherExec {
     inner: Arc<dyn ExecutionPlan>,
+    compact: bool,
 }
 
 impl DisplayAs for GatherExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "GatherExec")
+        match self.compact {
+            true => write!(f, "GatherExec: compacted"),
+            false => write!(f, "GatherExec"),
+        }
     }
 }
 
@@ -272,6 +281,7 @@ impl ExecutionPlan for GatherExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self {
             inner: children.pop().expect("one child"),
+            compact: self.compact,
         }))
     }
     fn execute(
@@ -281,8 +291,12 @@ impl ExecutionPlan for GatherExec {
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.inner.execute(partition, ctx)?;
         let schema = stream.schema();
+        let held = Gathered {
+            compact: self.compact,
+            ..Gathered::default()
+        };
         let out = futures::stream::unfold(
-            (stream, Gathered::default(), false),
+            (stream, held, false),
             |(mut stream, mut held, done)| async move {
                 if done {
                     return None;
@@ -313,13 +327,14 @@ struct Gathered {
     batches: Vec<RecordBatch>,
     rows: usize,
     bytes: usize,
+    compact: bool,
 }
 
 impl Gathered {
     /// The batches held with `batch`, once they reach the bound.
     fn push(&mut self, batch: RecordBatch) -> Result<Option<RecordBatch>> {
         self.rows += batch.num_rows();
-        self.bytes += held_bytes(&batch)?;
+        self.bytes += held_bytes(&batch, self.compact)?;
         self.batches.push(batch);
         match self.rows >= GATHER_ROWS || self.bytes >= GATHER_BYTES {
             true => self.take(),
@@ -330,19 +345,40 @@ impl Gathered {
     fn take(&mut self) -> Result<Option<RecordBatch>> {
         let batches = std::mem::take(&mut self.batches);
         (self.rows, self.bytes) = (0, 0);
-        match batches.as_slice() {
-            [] => Ok(None),
-            [one] => Ok(Some(one.clone())),
-            [first, ..] => Ok(Some(concat_batches(&first.schema(), &batches)?)),
+        let gathered = match batches.as_slice() {
+            [] => return Ok(None),
+            [one] => one.clone(),
+            [first, ..] => concat_batches(&first.schema(), &batches)?,
+        };
+        if !self.compact {
+            return Ok(Some(gathered));
         }
+        let columns = gathered
+            .columns()
+            .iter()
+            .map(|c| match c.data_type() {
+                DataType::Utf8View => Arc::new(c.as_string_view().gc()) as ArrayRef,
+                DataType::BinaryView => Arc::new(c.as_binary_view().gc()),
+                _ => Arc::clone(c),
+            })
+            .collect();
+        Ok(Some(RecordBatch::try_new(gathered.schema(), columns)?))
     }
 }
 
-/// What `batch`'s rows hold, or for a view column every buffer it keeps, which overstates it and
-/// only ever passes a batch on sooner.
-fn held_bytes(batch: &RecordBatch) -> Result<usize> {
+/// What `batch`'s rows hold. A view column counts every buffer it keeps, which overstates it and only
+/// ever passes a batch on sooner; once `compacted`, the bytes its rows will keep.
+fn held_bytes(batch: &RecordBatch, compacted: bool) -> Result<usize> {
     batch.columns().iter().try_fold(0, |n, c| {
         Ok(n + match c.data_type() {
+            DataType::Utf8View if compacted => {
+                let v = c.as_string_view();
+                v.views().inner().len() + v.total_buffer_bytes_used()
+            }
+            DataType::BinaryView if compacted => {
+                let v = c.as_binary_view();
+                v.views().inner().len() + v.total_buffer_bytes_used()
+            }
             DataType::Utf8View | DataType::BinaryView => c.get_array_memory_size(),
             _ => c.to_data().get_slice_memory_size()?,
         })
@@ -350,7 +386,7 @@ fn held_bytes(batch: &RecordBatch) -> Result<usize> {
 }
 
 /// Puts [`ChargedWindowExec`] over every `WindowAggExec`, [`CoalesceExec`] over every cross join and
-/// [`GatherExec`] under every sort without a fetch.
+/// [`GatherExec`] under every sort without a fetch and every hash join's build side.
 #[derive(Debug)]
 pub(super) struct HeldInput;
 
@@ -366,6 +402,14 @@ impl PhysicalOptimizerRule for HeldInput {
                     Arc::new(ChargedWindowExec { window: p }) as Arc<dyn ExecutionPlan>
                 ));
             }
+            if let Some(j) = p.downcast_ref::<HashJoinExec>() {
+                let left = Arc::new(GatherExec {
+                    inner: Arc::clone(j.left()),
+                    compact: true,
+                }) as Arc<dyn ExecutionPlan>;
+                let right = Arc::clone(j.right());
+                return replace_children_if_necessary(p, vec![left, right]).map(Transformed::yes);
+            }
             if p.downcast_ref::<CrossJoinExec>().is_some() {
                 return Ok(Transformed::yes(
                     Arc::new(CoalesceExec { inner: p }) as Arc<dyn ExecutionPlan>
@@ -376,6 +420,7 @@ impl PhysicalOptimizerRule for HeldInput {
             {
                 let input = Arc::new(GatherExec {
                     inner: Arc::clone(s.input()),
+                    compact: false,
                 }) as Arc<dyn ExecutionPlan>;
                 return replace_children_if_necessary(p, vec![input]).map(Transformed::yes);
             }
@@ -403,14 +448,66 @@ mod tests {
     use super::*;
 
     fn gathered(batches: Vec<RecordBatch>) -> Vec<RecordBatch> {
+        gather(batches, false)
+    }
+
+    fn gather(batches: Vec<RecordBatch>, compact: bool) -> Vec<RecordBatch> {
         let schema = batches[0].schema();
         let source = MemorySourceConfig::try_new_exec(&[batches], schema, None).unwrap();
         let ctx = TaskContext::default()
             .with_session_config(SessionConfig::new().with_batch_size(1 << 20));
-        let out = GatherExec { inner: source }
-            .execute(0, Arc::new(ctx))
-            .unwrap();
+        let out = GatherExec {
+            inner: source,
+            compact,
+        }
+        .execute(0, Arc::new(ctx))
+        .unwrap();
         futures::executor::block_on(datafusion_physical_plan::common::collect(out)).unwrap()
+    }
+
+    #[test]
+    fn a_build_side_is_gathered_into_one_buffer_per_batch() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Utf8View,
+            false,
+        )]));
+        // 128-row batches over buffers of their own, as a cast back from offsets leaves them.
+        let batches: Vec<RecordBatch> = (0..100)
+            .map(|b| {
+                let s: Vec<String> = (0..128).map(|i| format!("{b:04}-{i:040}")).collect();
+                let v = StringViewArray::from_iter_values(s.iter());
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(v) as ArrayRef]).unwrap()
+            })
+            .collect();
+        let buffers = |out: &[RecordBatch]| -> Vec<usize> {
+            out.iter()
+                .map(|b| b.column(0).as_string_view().data_buffers().len())
+                .collect()
+        };
+        let plain = gather(batches.clone(), false);
+        assert!(buffers(&plain).iter().any(|&n| n > 1));
+        let compacted = gather(batches.clone(), true);
+        assert!(
+            buffers(&compacted).iter().all(|&n| n == 1),
+            "{:?}",
+            buffers(&compacted)
+        );
+        let values = |out: &[RecordBatch]| -> Vec<String> {
+            out.iter()
+                .flat_map(|b| {
+                    let s = b.column(0).as_string_view();
+                    (0..s.len())
+                        .map(|i| s.value(i).to_string())
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        assert_eq!(values(&compacted), values(&batches));
+        // Its rows' bytes bound a compacted gather, not the buffers they sit in.
+        let rows: usize = compacted.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 12_800);
+        assert!(compacted.len() < 10, "{}", compacted.len());
     }
 
     #[test]

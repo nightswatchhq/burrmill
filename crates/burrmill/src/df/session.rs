@@ -35,9 +35,9 @@ use datafusion_expr::{
     AggregateUDF, Explain, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
-use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::analyzer::resolve_grouping_function::ResolveGroupingFunction;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
+use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule};
 use datafusion_optimizer::optimizer::{Optimizer, OptimizerConfig};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
@@ -270,34 +270,49 @@ impl MiniSession {
             information_schema: std::sync::Mutex::new(None),
             hidden: |_| false,
             known: std::sync::Mutex::new(None),
-            // Checked sums change their output type, so coercion runs again after the rule.
-            analyzer: Analyzer::with_rules(vec![
-                Arc::new(ResolveGroupingFunction::new()),
-                Arc::new(super::nullsub::NullableSubqueries::default()),
-                // Before coercion: DuckDB's text comparisons depend on what was written.
-                Arc::new(super::dialect::DuckComparisons),
-                Arc::new(super::rule::CheckedShifts::default()),
-                Arc::new(TypeCoercion::new()),
-                Arc::new(super::dialect::DuckSemantics::default()),
-                // Before the checked rewrite, which would hide the shape it matches.
-                Arc::new(FoldSubstitution(fold)),
-                Arc::new(super::constants::MoveConstants),
-                Arc::new(CheckedArithmetic::default()),
-                Arc::new(super::topn::TopPerGroup),
-                Arc::new(super::extreme::PartitionExtreme),
-                // Before the split, which then sees a distinct count over bytes like any other.
-                Arc::new(super::distinctrows::DistinctRows::default()),
-                Arc::new(super::distinct::DistinctSplit),
-                Arc::new(super::fastcast::FastTextCasts),
-                Arc::new(super::sharing::ShareRepeats),
-                Arc::new(TypeCoercion::new()),
-                Arc::new(super::doubles::DuckDoubles::default()),
-                Arc::new(super::onerow::SingleRowSubqueries::default()),
-                Arc::new(super::correlate::KeyedCorrelation),
-                Arc::new(super::correlate::SubqueriesBelowAggregates),
-                Arc::new(super::correlate::NonEquiCorrelation),
-                Arc::new(super::latest::LatestCorrelation),
-            ]),
+            analyzer: Analyzer::with_rules(
+                [
+                    Arc::new(ResolveGroupingFunction::new()) as Arc<dyn AnalyzerRule + Send + Sync>,
+                    Arc::new(super::nullsub::NullableSubqueries::default()),
+                    // Before coercion: DuckDB's text comparisons depend on what was written.
+                    Arc::new(super::dialect::DuckComparisons),
+                    Arc::new(super::rule::CheckedShifts::default()),
+                    Arc::new(TypeCoercion::new()),
+                    Arc::new(super::dialect::DuckSemantics::default()),
+                    // Before the checked rewrite, which would hide the shape it matches.
+                    Arc::new(FoldSubstitution(fold)),
+                    Arc::new(super::constants::MoveConstants),
+                    Arc::new(CheckedArithmetic::default()),
+                    Arc::new(super::topn::TopPerGroup),
+                    Arc::new(super::extreme::PartitionExtreme),
+                    // Before the split, which then sees a distinct count over bytes like any other.
+                    Arc::new(super::distinctrows::DistinctRows::default()),
+                    Arc::new(super::distinct::DistinctSplit),
+                    Arc::new(super::fastcast::FastTextCasts),
+                    // After every rule that rewrites a subquery from outside it, as the checked
+                    // sums trace a value to its cast; the rest then see each shared one once.
+                    Arc::new(super::sharing::ShareRepeats),
+                ]
+                .into_iter()
+                .chain(
+                    [
+                        // Checked sums change their output type, so coercion runs again.
+                        Arc::new(TypeCoercion::new()) as Arc<dyn AnalyzerRule + Send + Sync>,
+                        Arc::new(super::doubles::DuckDoubles::default()),
+                        Arc::new(super::onerow::SingleRowSubqueries::default()),
+                        Arc::new(super::correlate::KeyedCorrelation),
+                        Arc::new(super::correlate::SubqueriesBelowAggregates),
+                        Arc::new(super::correlate::NonEquiCorrelation),
+                        Arc::new(super::latest::LatestCorrelation),
+                    ]
+                    .into_iter()
+                    .map(|r| {
+                        Arc::new(super::sharing::OverShared(r))
+                            as Arc<dyn AnalyzerRule + Send + Sync>
+                    }),
+                )
+                .collect(),
+            ),
             // Without `eliminate_group_by_constant`: it recomputes a key that is a function of
             // another key in a projection, where a rewritten `TRY_CAST(k AS BIGINT)`, which DataFusion
             // names `k`, collides with `k` itself and the query was refused.
@@ -334,8 +349,11 @@ impl MiniSession {
                     Arc::new(super::compactviews::CompactViews)
                         as Arc<dyn PhysicalOptimizerRule + Send + Sync>
                 }))
-                .chain([Arc::new(super::cancel::Cancellable(cancel))
-                    as Arc<dyn PhysicalOptimizerRule + Send + Sync>])
+                .chain([
+                    Arc::new(super::cancel::Cancellable(cancel))
+                        as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+                    Arc::new(super::sharing::PublishShared),
+                ])
                 .collect(),
             execution_props: ExecutionProps::new(),
             table_options: TableOptions::new(),

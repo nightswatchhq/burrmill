@@ -490,7 +490,8 @@ fn scans(p: &Arc<dyn datafusion_physical_plan::ExecutionPlan>) -> Result<u64> {
         | "CoalesceExec"
         | "GatherExec"
         | "RangeJoinExec"
-        | "SharedExec" => 0,
+        | "SharedExec"
+        | "SharedDefsExec" => 0,
         other => {
             return Err(BurrmillError::NotAllowed(format!(
                 "cannot bound physical plan operator {other:?}"

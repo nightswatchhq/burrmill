@@ -1,96 +1,246 @@
-//! `ShareRepeats`: a subquery that appears more than once is computed once.
+//! `ShareRepeats`: a subquery that appears more than once is planned and computed once.
 //!
 //! DataFusion inlines CTEs and views, so `per_epoch` used twice in `epoch_boundaries` aggregated
 //! its half-million rows twice, and a view joined twice is planned twice. Identical aliased
 //! subtrees that occur more than once, and contain an aggregate (so what is kept is bounded), are
-//! wrapped in a node sharing one cache: the first consumer computes the batches and the others
-//! read them. The node lets nothing through it from above, so every copy is optimised alike.
+//! defined once under a [`SharedDefs`] node at the root, and each occurrence becomes a
+//! [`SharedRef`] reading one cache: the first consumer computes the batches and the others read
+//! them. Nothing passes a reference from above, so every reader sees the same answer.
+//!
+//! Every copy had been analysed, optimised and planned again, so planning grew with how often a view
+//! was reached rather than with the statement (#92). The analyzer's rules after this one run through
+//! [`OverShared`], a definition at a time, the ones inside first; the ones before it still see every
+//! copy, because they rewrite a subquery from outside it, as the checked sums trace a value to its
+//! cast.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchemaRef, DataFusionError, Result};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::{DFSchemaRef, DataFusionError, Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::logical_plan::{Extension, SubqueryAlias};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
 use datafusion_optimizer::analyzer::AnalyzerRule;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream, collect,
 };
-use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
+use datafusion_session::{ExtensionPlanner, PhysicalOptimizerRule, PhysicalPlanner};
 use futures::StreamExt;
 
-type Cache = Arc<tokio::sync::OnceCell<Arc<Vec<RecordBatch>>>>;
+/// One shared subquery's plan, set when the statement starts, and its batches once computed.
+#[derive(Default)]
+struct State {
+    plan: Mutex<Option<Arc<dyn ExecutionPlan>>>,
+    batches: tokio::sync::OnceCell<Arc<Vec<RecordBatch>>>,
+}
+
+impl fmt::Debug for State {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "State")
+    }
+}
+
+type Shared = Arc<State>;
 
 #[derive(Debug, Default)]
 pub struct ShareRepeats;
 
-fn worth_sharing(p: &LogicalPlan) -> bool {
-    p.exists(|n| Ok(matches!(n, LogicalPlan::Aggregate(_))))
-        .unwrap_or(false)
+/// Per node, bottom up: a key that identical subtrees share, and what decides whether an alias over
+/// it is a candidate.
+#[derive(Clone, Copy)]
+struct Summary {
+    key: u64,
+    aggregate: bool,
+    outer: bool,
 }
 
-fn key(p: &LogicalPlan) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    p.hash(&mut h);
-    h.finish()
+/// The aliases worth sharing, by the address of their input: over an aggregate, not correlated, and
+/// not shared yet.
+#[derive(Default)]
+struct Candidates {
+    stack: Vec<Summary>,
+    marks: Vec<usize>,
+    found: Vec<(*const LogicalPlan, u64)>,
 }
 
-impl AnalyzerRule for ShareRepeats {
-    fn name(&self) -> &str {
-        "share_repeats"
+/// Already shared, through any aliases of aliases; or a window a filter above may still turn into
+/// an aggregate (`TopPerGroup`, `PartitionExtreme`), which it cannot see through a reference.
+fn not_a_candidate(input: &LogicalPlan) -> bool {
+    let mut under = input;
+    loop {
+        under = match under {
+            LogicalPlan::SubqueryAlias(s) => s.input.as_ref(),
+            LogicalPlan::Projection(p) => p.input.as_ref(),
+            _ => break,
+        };
+    }
+    matches!(under, LogicalPlan::Window(_))
+        || matches!(under, LogicalPlan::Extension(e) if e.node.as_any().is::<SharedNode>())
+}
+
+/// What identifies `p` apart from its children. Collisions only cost an equality check.
+fn local(p: &LogicalPlan, h: &mut rustc_hash::FxHasher) {
+    std::mem::discriminant(p).hash(h);
+    let _ = p.apply_expressions(|e| {
+        e.hash(h);
+        Ok(TreeNodeRecursion::Continue)
+    });
+    match p {
+        LogicalPlan::TableScan(t) => {
+            t.table_name.hash(h);
+            t.projection.hash(h);
+            t.fetch.hash(h);
+        }
+        LogicalPlan::SubqueryAlias(s) => s.alias.hash(h),
+        LogicalPlan::Join(j) => j.join_type.hash(h),
+        LogicalPlan::Sort(s) => s.fetch.hash(h),
+        LogicalPlan::Extension(e) => e.node.dyn_hash(h),
+        _ => {}
+    }
+}
+
+impl<'n> TreeNodeVisitor<'n> for Candidates {
+    type Node = LogicalPlan;
+
+    fn f_down(&mut self, _n: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
+        self.marks.push(self.stack.len());
+        Ok(TreeNodeRecursion::Continue)
     }
 
-    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
-        let mut counts: HashMap<u64, usize> = HashMap::new();
-        plan.apply_with_subqueries(|n| {
-            if let LogicalPlan::SubqueryAlias(s) = n
-                && worth_sharing(&s.input)
-            {
-                *counts.entry(key(&s.input)).or_default() += 1;
+    fn f_up(&mut self, n: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
+        let mark = self.marks.pop().expect("f_down marked");
+        // Subqueries are visited before children, so the children are the last entries.
+        let below = self.stack.split_off(mark);
+        let inputs = &below[below.len() - n.inputs().len()..];
+        let mut h = rustc_hash::FxHasher::default();
+        local(n, &mut h);
+        below.iter().for_each(|s| s.key.hash(&mut h));
+        let summary = Summary {
+            key: h.finish(),
+            aggregate: matches!(n, LogicalPlan::Aggregate(_)) || inputs.iter().any(|s| s.aggregate),
+            outer: n.contains_outer_reference() || inputs.iter().any(|s| s.outer),
+        };
+        if let LogicalPlan::SubqueryAlias(s) = n
+            && let [input] = inputs
+            && input.aggregate
+            && !input.outer
+            && !not_a_candidate(&s.input)
+        {
+            self.found.push((Arc::as_ptr(&s.input), input.key));
+        }
+        self.stack.push(summary);
+        Ok(TreeNodeRecursion::Continue)
+    }
+}
+
+/// Whether a repeated candidate sits beneath each repeated candidate, bottom up.
+struct Beneath<'a> {
+    repeated: &'a HashSet<*const LogicalPlan>,
+    stack: Vec<bool>,
+    marks: Vec<usize>,
+    innermost: HashSet<*const LogicalPlan>,
+}
+
+impl<'n> TreeNodeVisitor<'n> for Beneath<'_> {
+    type Node = LogicalPlan;
+
+    fn f_down(&mut self, _n: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
+        self.marks.push(self.stack.len());
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn f_up(&mut self, n: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
+        let mark = self.marks.pop().expect("f_down marked");
+        let below = self.stack.split_off(mark).into_iter().any(|b| b);
+        let repeat = match n {
+            LogicalPlan::SubqueryAlias(s) => {
+                let input = Arc::as_ptr(&s.input);
+                let repeat = self.repeated.contains(&input);
+                if repeat && !below {
+                    self.innermost.insert(input);
+                }
+                repeat
             }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-        if counts.values().all(|&c| c < 2) {
+            _ => false,
+        };
+        self.stack.push(repeat || below);
+        Ok(TreeNodeRecursion::Continue)
+    }
+}
+
+/// This pass's aliases to share, by their input's address: repeated, with no repeat beneath them.
+fn innermost_repeats(plan: &LogicalPlan) -> Result<HashMap<*const LogicalPlan, u64>> {
+    let mut c = Candidates::default();
+    plan.visit_with_subqueries(&mut c)?;
+    let mut counts: HashMap<u64, usize> = HashMap::new();
+    for (_, k) in &c.found {
+        *counts.entry(*k).or_default() += 1;
+    }
+    let repeated: HashSet<*const LogicalPlan> = c
+        .found
+        .iter()
+        .filter(|(_, k)| counts[k] >= 2)
+        .map(|(p, _)| *p)
+        .collect();
+    if repeated.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut b = Beneath {
+        repeated: &repeated,
+        stack: Vec::new(),
+        marks: Vec::new(),
+        innermost: HashSet::new(),
+    };
+    plan.visit_with_subqueries(&mut b)?;
+    Ok(c.found
+        .into_iter()
+        .filter(|(p, _)| b.innermost.contains(p))
+        .collect())
+}
+
+/// Each repeat wrapped in a [`SharedNode`], innermost first, one layer per pass. Sharing an outer
+/// subquery whole hid every repeat inside it from the other occurrences, which then computed it
+/// again: a view read by four views that are themselves repeated was scanned once per copy (#91).
+fn mark(mut plan: LogicalPlan) -> Result<LogicalPlan> {
+    let mut firsts: HashMap<u64, (LogicalPlan, Shared)> = HashMap::new();
+    loop {
+        let chosen = innermost_repeats(&plan)?;
+        if chosen.is_empty() {
             return Ok(plan);
         }
-        let mut caches: HashMap<u64, (LogicalPlan, Cache)> = HashMap::new();
-        plan.transform_down_with_subqueries(|n| {
+        // Top down, so an alias is seen before anything under it moves and its input's address
+        // is still the one counted.
+        let pass = plan.transform_down_with_subqueries(|n| {
             let LogicalPlan::SubqueryAlias(s) = &n else {
                 return Ok(Transformed::no(n));
             };
-            let k = key(&s.input);
-            if counts.get(&k).copied().unwrap_or(0) < 2 {
+            let Some(&k) = chosen.get(&Arc::as_ptr(&s.input)) else {
                 return Ok(Transformed::no(n));
-            }
-            let (input, cache) = caches
+            };
+            let (first, state) = firsts
                 .entry(k)
-                .or_insert_with(|| {
-                    (
-                        s.input.as_ref().clone(),
-                        Arc::new(tokio::sync::OnceCell::new()),
-                    )
-                })
+                .or_insert_with(|| (s.input.as_ref().clone(), Shared::default()))
                 .clone();
-            if input != *s.input {
+            if first != *s.input {
                 return Ok(Transformed::no(n));
             }
             let shared = LogicalPlan::Extension(Extension {
                 node: Arc::new(SharedNode {
-                    input,
-                    cache,
+                    input: first,
+                    state,
                     id: k,
                 }),
             });
@@ -100,14 +250,33 @@ impl AnalyzerRule for ShareRepeats {
                 true,
                 TreeNodeRecursion::Jump,
             ))
-        })
-        .map(|t| t.data)
+        })?;
+        if !pass.transformed {
+            return Ok(pass.data);
+        }
+        plan = pass.data;
     }
 }
 
-pub struct SharedNode {
+impl AnalyzerRule for ShareRepeats {
+    fn name(&self) -> &str {
+        "share_repeats"
+    }
+
+    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+        let shared = |p: LogicalPlan| mark(p).and_then(hoist).map(Transformed::yes);
+        match plan {
+            // EXPLAIN ANALYZE reports the plan under it, definitions included.
+            LogicalPlan::Analyze(_) => plan.map_children(shared).map(|t| t.data),
+            plan => shared(plan).map(|t| t.data),
+        }
+    }
+}
+
+/// One occurrence of a shared subquery while the repeats are found, before [`hoist`].
+struct SharedNode {
     input: LogicalPlan,
-    cache: Cache,
+    state: Shared,
     id: u64,
 }
 
@@ -118,7 +287,7 @@ impl fmt::Debug for SharedNode {
 }
 impl PartialEq for SharedNode {
     fn eq(&self, o: &Self) -> bool {
-        self.id == o.id && Arc::ptr_eq(&self.cache, &o.cache)
+        self.id == o.id && Arc::ptr_eq(&self.state, &o.state)
     }
 }
 impl Eq for SharedNode {}
@@ -156,8 +325,285 @@ impl UserDefinedLogicalNodeCore for SharedNode {
     ) -> Result<Self> {
         Ok(Self {
             input: inputs.swap_remove(0),
-            cache: Arc::clone(&self.cache),
+            state: Arc::clone(&self.state),
             id: self.id,
+        })
+    }
+}
+
+/// Each marked subquery once, under [`SharedDefs`] at the root, and a [`SharedRef`] where each
+/// occurrence was. Bottom up, so a definition holds references to the ones inside it, not copies,
+/// and comes after them.
+fn hoist(plan: LogicalPlan) -> Result<LogicalPlan> {
+    let mut defs: Vec<(u64, Shared, LogicalPlan)> = Vec::new();
+    let mut index: HashMap<u64, usize> = HashMap::new();
+    let body = plan.transform_up_with_subqueries(|n| {
+        let LogicalPlan::Extension(e) = &n else {
+            return Ok(Transformed::no(n));
+        };
+        let Some(s) = e.node.as_any().downcast_ref::<SharedNode>() else {
+            return Ok(Transformed::no(n));
+        };
+        let i = *index.entry(s.id).or_insert_with(|| {
+            defs.push((s.id, Arc::clone(&s.state), s.input.clone()));
+            defs.len() - 1
+        });
+        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+            node: Arc::new(SharedRef {
+                id: s.id,
+                state: Arc::clone(&defs[i].1),
+                schema: Arc::clone(defs[i].2.schema()),
+            }),
+        })))
+    })?;
+    if defs.is_empty() {
+        return Ok(body.data);
+    }
+    let mut node = SharedDefs {
+        ids: Vec::new(),
+        states: Vec::new(),
+        schemas: Vec::new(),
+        defs: Vec::new(),
+        body: body.data,
+    };
+    for (id, state, def) in defs {
+        node.ids.push(id);
+        node.states.push(state);
+        node.schemas.push(Arc::clone(def.schema()));
+        node.defs.push(def);
+    }
+    Ok(LogicalPlan::Extension(Extension {
+        node: Arc::new(node),
+    }))
+}
+
+/// An analyzer rule run over a statement with shared subqueries a definition at a time, the ones
+/// inside first, then the statement. A rule that changes a definition's columns, as the checked
+/// sums do, has the references to it carry the new ones before it reaches their readers, as it
+/// would have had the subquery been inline.
+#[derive(Debug)]
+pub struct OverShared(pub Arc<dyn AnalyzerRule + Send + Sync>);
+
+impl AnalyzerRule for OverShared {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
+        let rule = self.0.as_ref();
+        match plan {
+            LogicalPlan::Analyze(_) => plan
+                .map_children(|p| over(rule, p, config).map(Transformed::yes))
+                .map(|t| t.data),
+            plan => over(rule, plan, config),
+        }
+    }
+}
+
+fn over(
+    rule: &(dyn AnalyzerRule + Send + Sync),
+    plan: LogicalPlan,
+    config: &ConfigOptions,
+) -> Result<LogicalPlan> {
+    let LogicalPlan::Extension(e) = &plan else {
+        return rule.analyze(plan, config);
+    };
+    let Some(d) = e.node.as_any().downcast_ref::<SharedDefs>() else {
+        return rule.analyze(plan, config);
+    };
+    let mut defs = d.defs.clone();
+    let mut schemas = d.schemas.clone();
+    let mut body = d.body.clone();
+    for i in 0..defs.len() {
+        let def = std::mem::take(&mut defs[i]);
+        defs[i] = rule.analyze(def, config)?;
+        if *defs[i].schema() == schemas[i] {
+            continue;
+        }
+        schemas[i] = Arc::clone(defs[i].schema());
+        let (id, schema) = (d.ids[i], &schemas[i]);
+        for later in &mut defs[i + 1..] {
+            *later = refresh(std::mem::take(later), id, schema)?;
+        }
+        body = refresh(body, id, schema)?;
+    }
+    let body = rule.analyze(body, config)?;
+    Ok(LogicalPlan::Extension(Extension {
+        node: Arc::new(SharedDefs {
+            ids: d.ids.clone(),
+            states: d.states.clone(),
+            schemas,
+            defs,
+            body,
+        }),
+    }))
+}
+
+/// `plan` with each reference to `id` carrying `schema`, and every node above one rebuilt for it.
+fn refresh(plan: LogicalPlan, id: u64, schema: &DFSchemaRef) -> Result<LogicalPlan> {
+    let mut reads = false;
+    plan.apply_with_subqueries(|n| {
+        reads = matches!(n, LogicalPlan::Extension(e)
+            if e.node.as_any().downcast_ref::<SharedRef>().is_some_and(|r| r.id == id));
+        Ok(match reads {
+            true => TreeNodeRecursion::Stop,
+            false => TreeNodeRecursion::Continue,
+        })
+    })?;
+    if !reads {
+        return Ok(plan);
+    }
+    plan.transform_up_with_subqueries(|n| {
+        if let LogicalPlan::Extension(e) = &n
+            && let Some(r) = e.node.as_any().downcast_ref::<SharedRef>()
+            && r.id == id
+        {
+            return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(SharedRef {
+                    id,
+                    state: Arc::clone(&r.state),
+                    schema: Arc::clone(schema),
+                }),
+            })));
+        }
+        n.recompute_schema().map(Transformed::yes)
+    })
+    .map(|t| t.data)
+}
+
+/// Where a shared subquery was: its batches, computed by whichever reader comes first.
+pub struct SharedRef {
+    id: u64,
+    state: Shared,
+    schema: DFSchemaRef,
+}
+
+impl fmt::Debug for SharedRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SharedRef {:016x}", self.id)
+    }
+}
+impl PartialEq for SharedRef {
+    fn eq(&self, o: &Self) -> bool {
+        self.id == o.id && Arc::ptr_eq(&self.state, &o.state) && self.schema == o.schema
+    }
+}
+impl Eq for SharedRef {}
+impl Hash for SharedRef {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.id.hash(h);
+    }
+}
+impl PartialOrd for SharedRef {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        self.id.partial_cmp(&o.id)
+    }
+}
+
+impl UserDefinedLogicalNodeCore for SharedRef {
+    fn name(&self) -> &str {
+        "SharedRef"
+    }
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![]
+    }
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Shared: computed once, id={:016x}", self.id)
+    }
+    fn with_exprs_and_inputs(&self, _exprs: Vec<Expr>, _inputs: Vec<LogicalPlan>) -> Result<Self> {
+        Ok(Self {
+            id: self.id,
+            state: Arc::clone(&self.state),
+            schema: Arc::clone(&self.schema),
+        })
+    }
+}
+
+/// The statement, `body`, and each shared subquery it reads, once. `schemas` are the columns the
+/// references to each carry.
+pub struct SharedDefs {
+    ids: Vec<u64>,
+    states: Vec<Shared>,
+    schemas: Vec<DFSchemaRef>,
+    defs: Vec<LogicalPlan>,
+    body: LogicalPlan,
+}
+
+impl fmt::Debug for SharedDefs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SharedDefs {}", self.ids.len())
+    }
+}
+impl PartialEq for SharedDefs {
+    fn eq(&self, o: &Self) -> bool {
+        self.ids == o.ids
+            && self
+                .states
+                .iter()
+                .zip(&o.states)
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+            && self.defs == o.defs
+            && self.body == o.body
+    }
+}
+impl Eq for SharedDefs {}
+impl Hash for SharedDefs {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.ids.hash(h);
+        self.defs.hash(h);
+        self.body.hash(h);
+    }
+}
+impl PartialOrd for SharedDefs {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        self.ids.partial_cmp(&o.ids)
+    }
+}
+
+impl UserDefinedLogicalNodeCore for SharedDefs {
+    fn name(&self) -> &str {
+        "SharedDefs"
+    }
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        self.defs.iter().chain([&self.body]).collect()
+    }
+    fn schema(&self) -> &DFSchemaRef {
+        self.body.schema()
+    }
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let ids: Vec<String> = self.ids.iter().map(|i| format!("{i:016x}")).collect();
+        write!(
+            f,
+            "SharedDefs: ids=[{}], then the statement",
+            ids.join(", ")
+        )
+    }
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
+        let Some(body) = inputs.pop() else {
+            return internal_err!("SharedDefs without its statement");
+        };
+        if inputs.len() != self.ids.len() {
+            return internal_err!("SharedDefs lost a definition");
+        }
+        Ok(Self {
+            ids: self.ids.clone(),
+            states: self.states.clone(),
+            schemas: self.schemas.clone(),
+            defs: inputs,
+            body,
         })
     }
 }
@@ -173,34 +619,164 @@ impl ExtensionPlanner for SharedPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session: &dyn Session,
+        session: &dyn Session,
         _ctx: &datafusion_expr::physical_planning_context::PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(n) = node.as_any().downcast_ref::<SharedNode>() else {
-            return Ok(None);
+        if let Some(n) = node.as_any().downcast_ref::<SharedRef>() {
+            let schema: SchemaRef = Arc::new(n.schema.as_arrow().clone());
+            let properties = Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(Arc::clone(&schema)),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Bounded,
+            ));
+            return Ok(Some(Arc::new(SharedExec {
+                schema,
+                state: Arc::clone(&n.state),
+                properties,
+            })));
+        }
+        if let Some(n) = node.as_any().downcast_ref::<SharedDefs>() {
+            let Some((body, defs)) = physical_inputs.split_last() else {
+                return internal_err!("SharedDefs without its statement");
+            };
+            // The statement's ORDER BY, recorded as DataFusion records it at the root, where it
+            // stops at a node of more than one child and would otherwise drop the sort.
+            let body = OutputRequirements::new_add_mode()
+                .optimize(Arc::clone(body), session.config_options())?;
+            let exec = SharedDefsExec {
+                states: n.states.clone(),
+                defs: defs.to_vec(),
+                body,
+            };
+            exec.publish();
+            return Ok(Some(Arc::new(exec)));
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Debug)]
+struct SharedDefsExec {
+    states: Vec<Shared>,
+    defs: Vec<Arc<dyn ExecutionPlan>>,
+    body: Arc<dyn ExecutionPlan>,
+}
+
+impl SharedDefsExec {
+    /// Each definition where its references find it: as planned, for the rules that measure a
+    /// reference's input, and as finally optimised, when the statement starts.
+    fn publish(&self) {
+        for (state, def) in self.states.iter().zip(&self.defs) {
+            *state.plan.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(def));
+        }
+    }
+}
+
+/// The physical optimizer's last rule: each definition as finally optimised, before anything runs.
+/// A scalar subquery above the statement runs its subqueries before `SharedDefsExec` executes.
+#[derive(Debug)]
+pub(super) struct PublishShared;
+
+impl PhysicalOptimizerRule for PublishShared {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        plan.apply(|p| {
+            if let Some(d) = p.downcast_ref::<SharedDefsExec>() {
+                d.publish();
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(plan)
+    }
+
+    fn name(&self) -> &str {
+        "publish_shared"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+/// The plan a shared reference reads, as planned so far.
+pub(super) fn definition(p: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
+    p.downcast_ref::<SharedExec>()?
+        .state
+        .plan
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+impl DisplayAs for SharedDefsExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "SharedDefsExec: {} shared, then the statement",
+            self.defs.len()
+        )
+    }
+}
+
+impl ExecutionPlan for SharedDefsExec {
+    fn name(&self) -> &str {
+        "SharedDefsExec"
+    }
+    fn properties(&self) -> &Arc<PlanProperties> {
+        self.body.properties()
+    }
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.defs.iter().chain([&self.body]).collect()
+    }
+    fn maintains_input_order(&self) -> Vec<bool> {
+        let mut m = vec![false; self.defs.len()];
+        m.push(true);
+        m
+    }
+    // The statement's output is what the caller reads; spreading it over partitions undid its order.
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false; self.defs.len() + 1]
+    }
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let Some(body) = children.pop() else {
+            return internal_err!("SharedDefsExec without its statement");
         };
-        let child = Arc::clone(&physical_inputs[0]);
-        let schema = child.schema();
-        let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(Arc::clone(&schema)),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Final,
-            Boundedness::Bounded,
-        ));
-        Ok(Some(Arc::new(SharedExec {
-            child,
-            schema,
-            cache: Arc::clone(&n.cache),
-            properties,
-        })))
+        let exec = SharedDefsExec {
+            states: self.states.clone(),
+            defs: children,
+            body,
+        };
+        exec.publish();
+        Ok(Arc::new(exec))
+    }
+    fn execute(
+        &self,
+        partition: usize,
+        ctx: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        // The plans as the physical optimizer left them, before anything can read one.
+        self.publish();
+        self.body.execute(partition, ctx)
     }
 }
 
 #[derive(Debug)]
 struct SharedExec {
-    child: Arc<dyn ExecutionPlan>,
     schema: SchemaRef,
-    cache: Cache,
+    state: Shared,
     properties: Arc<PlanProperties>,
 }
 
@@ -218,7 +794,7 @@ impl ExecutionPlan for SharedExec {
         &self.properties
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.child]
+        vec![]
     }
     fn apply_expressions(
         &self,
@@ -228,24 +804,28 @@ impl ExecutionPlan for SharedExec {
     }
     fn with_new_children(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SharedExec {
-            child: children.swap_remove(0),
-            schema: Arc::clone(&self.schema),
-            cache: Arc::clone(&self.cache),
-            properties: Arc::clone(&self.properties),
-        }))
+        Ok(self)
     }
     fn execute(
         &self,
         _partition: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let (child, cache) = (Arc::clone(&self.child), Arc::clone(&self.cache));
+        let state = Arc::clone(&self.state);
         let stream = futures::stream::once(async move {
-            let batches = cache
-                .get_or_try_init(|| async move { collect(child, ctx).await.map(Arc::new) })
+            let plan = state
+                .plan
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .ok_or_else(|| {
+                    DataFusionError::Internal("a shared subquery read before it was defined".into())
+                })?;
+            let batches = state
+                .batches
+                .get_or_try_init(|| async move { collect(plan, ctx).await.map(Arc::new) })
                 .await
                 .map_err(|e| DataFusionError::Context("shared subquery".into(), Box::new(e)))?;
             Ok::<_, DataFusionError>(futures::stream::iter(
@@ -264,5 +844,73 @@ impl ExecutionPlan for SharedExec {
             Arc::clone(&self.schema),
             stream,
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_expr::logical_plan::Projection;
+    use datafusion_expr::{LogicalPlanBuilder, col, lit};
+
+    use super::*;
+
+    /// Turns the one `1 AS x` it finds from a BIGINT into an INT, as a rule that retypes a
+    /// definition's column does.
+    #[derive(Debug)]
+    struct Narrow;
+
+    impl AnalyzerRule for Narrow {
+        fn name(&self) -> &str {
+            "narrow"
+        }
+        fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+            plan.transform_up(|n| match &n {
+                LogicalPlan::Projection(p) if p.expr == vec![lit(1i64).alias("x")] => {
+                    Projection::try_new(vec![lit(1i32).alias("x")], Arc::clone(&p.input))
+                        .map(|p| Transformed::yes(LogicalPlan::Projection(p)))
+                }
+                _ => Ok(Transformed::no(n)),
+            })
+            .map(|t| t.data)
+        }
+    }
+
+    #[test]
+    fn a_reference_takes_the_columns_a_rule_gives_its_definition() {
+        let def = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(1i64).alias("x")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let state = Shared::default();
+        let reference = LogicalPlan::Extension(Extension {
+            node: Arc::new(SharedRef {
+                id: 7,
+                state: Arc::clone(&state),
+                schema: Arc::clone(def.schema()),
+            }),
+        });
+        let body = LogicalPlanBuilder::from(reference)
+            .project(vec![col("x").alias("y")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(SharedDefs {
+                ids: vec![7],
+                states: vec![state],
+                schemas: vec![Arc::clone(def.schema())],
+                defs: vec![def],
+                body,
+            }),
+        });
+        let out = OverShared(Arc::new(Narrow))
+            .analyze(plan, &ConfigOptions::default())
+            .unwrap();
+        assert_eq!(
+            out.schema().field(0).data_type(),
+            &arrow::datatypes::DataType::Int32,
+            "{out}"
+        );
     }
 }
