@@ -165,11 +165,17 @@ fn rewrite(f: &Filter) -> Result<Option<LogicalPlan>> {
     // What each projected column comes from.
     // Aliases keep positions, so the filter's own input finds `rn` whatever qualifies it.
     let rn_index = f.input.schema().index_of_column(rn).ok();
+    // By position in the window's input: over a join, `p.pos` beside a key `r.pos` is not the key.
+    let key_at: Vec<Option<usize>> = key_cols
+        .iter()
+        .map(|k| base.schema().index_of_column(k).ok())
+        .collect();
     let mut sources = Vec::with_capacity(p.expr.len());
     for (i, e) in p.expr.iter().enumerate() {
         let Expr::Column(c) = unalias(e) else {
             return Ok(None);
         };
+        let at = base.schema().index_of_column(c).ok();
         let source = match windows.get(&c.name) {
             Some(w) if matches!(&w.fun, WindowFunctionDefinition::WindowUDF(_)) => {
                 if Some(i) != rn_index {
@@ -178,13 +184,8 @@ fn rewrite(f: &Filter) -> Result<Option<LogicalPlan>> {
                 Source::RowNumber
             }
             Some(w) => Source::Aggregate(w.clone()),
-            None if key_cols
-                .iter()
-                .any(|k| k.name == c.name && base.schema().has_column(c)) =>
-            {
-                Source::Key(c.clone())
-            }
-            None if base.schema().has_column(c) => Source::Latest(c.clone()),
+            None if at.is_some() && key_at.contains(&at) => Source::Key(c.clone()),
+            None if at.is_some() => Source::Latest(c.clone()),
             None => return Ok(None),
         };
         sources.push(source);

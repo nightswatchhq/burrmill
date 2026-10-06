@@ -161,6 +161,22 @@ fn other_windows_leave_the_plan_alone() {
     same_as_unrewritten(&e, sql);
 }
 
+/// #89: over a join, a column of the other side named like the partition key is not the key.
+#[test]
+fn a_column_named_like_the_key_from_the_other_side_is_kept() {
+    let (_t, e) = engine();
+    let sql = "SELECT x, y, rn FROM (
+        SELECT r.block_number AS x, p.block_number AS y,
+               ROW_NUMBER() OVER (PARTITION BY r.block_number ORDER BY p.block_number DESC) AS rn
+        FROM ev r JOIN ev p ON p.id = r.id AND p.block_number <= r.block_number) WHERE rn = 1";
+    let plan = text(&e, &format!("EXPLAIN {sql}")).join("\n");
+    assert!(plan.contains("first_value"), "{plan}");
+    assert_eq!(
+        same_as_unrewritten(&e, sql),
+        vec!["1|1|1", "2|2|1", "5|5|1"]
+    );
+}
+
 // DistinctSplit: COUNT(DISTINCT x) beside other aggregates, in two levels.
 #[test]
 fn distinct_count_beside_other_aggregates() {
