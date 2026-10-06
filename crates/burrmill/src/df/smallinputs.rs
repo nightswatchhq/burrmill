@@ -46,6 +46,9 @@ pub(super) fn bytes_read(p: &Arc<dyn ExecutionPlan>) -> Option<u64> {
     if p.is::<EmptyExec>() || p.is::<PlaceholderRowExec>() {
         return Some(0);
     }
+    if let Some(definition) = super::sharing::definition(p) {
+        return bytes_read(&definition);
+    }
     let children = p.children();
     if children.is_empty() {
         return None;

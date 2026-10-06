@@ -107,3 +107,24 @@ fn a_view_repeated_inside_a_repeated_view_is_read_once() {
     assert_eq!(executed_scans(&e, "place", sql), 1);
     assert_eq!(executed_scans(&e, "roll", sql), 1);
 }
+
+/// Scans in the physical plan, whether or not they run.
+fn planned_scans(e: &Engine, table: &str, sql: &str) -> usize {
+    let plan = rows(e, &format!("EXPLAIN {sql}")).join("\n");
+    plan.lines()
+        .filter(|l| l.contains("DataSourceExec") && l.contains(&format!("{table}-")))
+        .count()
+}
+
+/// #92: each copy of a shared subquery was analysed, optimised and planned again, so planning grew
+/// with how often a view was reached. Each is planned once now, however often it is read.
+#[test]
+fn a_shared_subquery_is_planned_once_however_often_it_is_read() {
+    let (_t, e) = engine();
+    assert_eq!(planned_scans(&e, "place", "SELECT * FROM bet"), 1);
+    assert_eq!(planned_scans(&e, "roll", "SELECT * FROM bet"), 1);
+    let twice = "SELECT x.id, y.n FROM bet x JOIN bet y ON x.id = y.id";
+    assert_eq!(rows(&e, twice), vec!["a|2", "b|1", "c|1"]);
+    assert_eq!(planned_scans(&e, "place", twice), 1);
+    assert_eq!(planned_scans(&e, "roll", twice), 1);
+}
