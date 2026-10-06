@@ -149,6 +149,11 @@ path = "tests/df_buildside.rs"
 required-features = ["datafusion"]
 
 [[test]]
+name = "df_joinbuffers"
+path = "tests/df_joinbuffers.rs"
+required-features = ["datafusion"]
+
+[[test]]
 name = "df_sharing"
 path = "tests/df_sharing.rs"
 required-features = ["datafusion"]
