@@ -164,6 +164,11 @@ path = "tests/df_narrow.rs"
 required-features = ["datafusion"]
 
 [[test]]
+name = "df_names"
+path = "tests/df_names.rs"
+required-features = ["datafusion"]
+
+[[test]]
 name = "df_distinctrows"
 path = "tests/df_distinctrows.rs"
 required-features = ["datafusion"]
