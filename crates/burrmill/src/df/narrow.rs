@@ -627,7 +627,8 @@ impl ExecutionPlan for NarrowedExec {
     }
 }
 
-/// Whether `plan` holds a mark join or an expression with a subquery in it.
+/// Whether `plan` holds a mark join, a subquery, or an expression with a subquery or an outer
+/// reference in it.
 fn awkward(plan: &LogicalPlan) -> bool {
     plan.exists(|p| {
         if let LogicalPlan::Join(j) = p
@@ -635,12 +636,19 @@ fn awkward(plan: &LogicalPlan) -> bool {
         {
             return Ok(true);
         }
+        if let LogicalPlan::Subquery(_) = p {
+            return Ok(true);
+        }
         let mut sub = false;
         p.apply_expressions(|e| {
             sub = e.exists(|x| {
                 Ok(matches!(
                     x,
-                    Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_)
+                    Expr::ScalarSubquery(_)
+                        | Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::OuterReferenceColumn(..)
                 ))
             })?;
             Ok(match sub {

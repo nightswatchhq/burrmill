@@ -385,11 +385,29 @@ fn a_side_holding_a_subquery_is_not_narrowed() {
         &format!("SELECT * FROM ({chain}) x ORDER BY id DESC LIMIT 3"),
     );
     assert_eq!(got, all[..3].to_vec());
+    // Nor are the rows kept from one held once.
+    let kept = "SELECT m.id, m.pos, l.n FROM marked m LEFT JOIN lastev l ON l.id = m.id";
+    let all = rows(
+        &e,
+        &format!("SELECT * FROM ({kept}) x ORDER BY id DESC, pos"),
+    );
+    let got = rows(
+        &e,
+        &format!("SELECT * FROM ({kept}) x ORDER BY id DESC, pos LIMIT 3"),
+    );
+    assert_eq!(got, all[..3].to_vec());
+    assert_eq!(
+        definitions(
+            &e,
+            &format!("SELECT * FROM ({kept}) x ORDER BY id DESC, pos LIMIT 3")
+        ),
+        0
+    );
 }
 
-/// Nothing changes without a limit.
+/// Nothing is narrowed without a limit.
 #[test]
-fn a_statement_without_a_limit_is_planned_as_before() {
+fn a_statement_without_a_limit_is_not_narrowed() {
     let (_t, e) = engine();
     let plan = rows(&e, "EXPLAIN SELECT * FROM entity ORDER BY id").join("\n");
     assert!(!plan.contains("__burrmill_keys"), "{plan}");
