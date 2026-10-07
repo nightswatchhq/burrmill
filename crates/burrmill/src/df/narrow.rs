@@ -182,6 +182,7 @@ impl Cx<'_> {
             {
                 let left = match self.descend(&j.left, order, rows)? {
                     Some(l) => l,
+                    None if awkward(&j.left) => return Ok(None),
                     None => self.keep(j.left.as_ref().clone(), order, rows)?,
                 };
                 let right = match self.reduce(&left, j)? {
@@ -228,14 +229,17 @@ impl Cx<'_> {
         };
         let reference = self.defs.define(kept);
         self.kept.push(reference.clone());
-        Ok(reference)
+        Ok(narrowed(reference))
     }
 
     /// `j`'s right side reading only the keys `left`, its narrowed left side, carries, or `None`
     /// when no key of the join can be traced to rows already narrowed. A join that matches NULL to
-    /// NULL is left whole: the keys are matched as a semi join matches them, NULL to nothing.
+    /// NULL is left whole: the keys are matched as a semi join matches them, NULL to nothing. So is
+    /// a side still holding a subquery or a mark join: DataFusion's sort pushdown panicked on the
+    /// one under a semi join (Lodestar's indexers page in the release gate), and with scalar
+    /// subqueries beside them the statement never finished.
     fn reduce(&mut self, left: &LogicalPlan, j: &Join) -> Result<Option<LogicalPlan>> {
-        if j.null_equality != NullEquality::NullEqualsNothing {
+        if j.null_equality != NullEquality::NullEqualsNothing || awkward(&j.right) {
             return Ok(None);
         }
         let mut source: Option<Source> = None;
@@ -307,6 +311,11 @@ impl Cx<'_> {
         }
         if self.kept.contains(plan) {
             return Some((Source::Kept(plan.clone()), e.clone()));
+        }
+        if let LogicalPlan::Extension(x) = plan
+            && let Some(n) = x.node.as_any().downcast_ref::<Narrowed>()
+        {
+            return self.trace(e, &n.input);
         }
         if let Some(i) = side_of(plan) {
             return Some((Source::Side(i), e.clone()));
@@ -438,7 +447,7 @@ fn semi(plan: &LogicalPlan, on: Vec<(Expr, Expr)>, keys: &LogicalPlan) -> Result
     )?))
 }
 
-/// The distinct keys of the rows a limit kept, no more of them than those rows: the side a hash
+/// The rows a limit kept, or their distinct keys: no more rows than the limit, and the side a hash
 /// join should build on. Planned as [`NarrowedExec`], which passes its input through.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct Narrowed {
@@ -614,6 +623,32 @@ impl ExecutionPlan for NarrowedExec {
     ) -> Result<SendableRecordBatchStream> {
         self.input.execute(partition, ctx)
     }
+}
+
+/// Whether `plan` holds a mark join or an expression with a subquery in it.
+fn awkward(plan: &LogicalPlan) -> bool {
+    plan.exists(|p| {
+        if let LogicalPlan::Join(j) = p
+            && matches!(j.join_type, JoinType::LeftMark | JoinType::RightMark)
+        {
+            return Ok(true);
+        }
+        let mut sub = false;
+        p.apply_expressions(|e| {
+            sub = e.exists(|x| {
+                Ok(matches!(
+                    x,
+                    Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_)
+                ))
+            })?;
+            Ok(match sub {
+                true => TreeNodeRecursion::Stop,
+                false => TreeNodeRecursion::Continue,
+            })
+        })?;
+        Ok(sub)
+    })
+    .unwrap_or(true)
 }
 
 /// Whether every column `e` reads is one of `schema`'s.

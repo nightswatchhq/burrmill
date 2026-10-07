@@ -780,34 +780,11 @@ impl PhysicalOptimizerRule for PublishShared {
     }
 }
 
-/// The most rows `p` can produce, when a limit beneath it says so: through the operators that pass
-/// fewer rows or as many, and into the definition a shared reference reads.
-pub(super) fn at_most_rows(p: &Arc<dyn ExecutionPlan>) -> Option<usize> {
-    // A limit per partition, as a local limit or a sort that keeps its partitions applies it.
-    if let Some(n) = p.fetch() {
-        return Some(n.saturating_mul(p.properties().partitioning.partition_count().max(1)));
-    }
-    if let Some(d) = definition(p) {
-        return at_most_rows(&d);
-    }
-    match p.children().as_slice() {
-        // An aggregate without groups answers one row over none.
-        [c] if passes_rows(p) => at_most_rows(c).map(|n| n.max(1)),
-        _ => None,
-    }
-}
-
-/// Whether a hash join should build on `p`: a limit holds it to a few rows, or it is the keys of
-/// the rows a statement's limit kept ([`super::narrow`]).
+/// Whether a hash join should build on `p`: it is the rows a statement's limit kept, or their keys
+/// ([`super::narrow`]). Only those: a plan the narrowing did not touch keeps its build sides.
 pub(super) fn few_rows(p: &Arc<dyn ExecutionPlan>) -> bool {
     if p.is::<super::narrow::NarrowedExec>() {
         return true;
-    }
-    if p.fetch().is_some() {
-        return at_most_rows(p).is_some_and(|n| n <= super::narrow::MOST_ROWS);
-    }
-    if let Some(d) = definition(p) {
-        return few_rows(&d);
     }
     match p.children().as_slice() {
         [c] if passes_rows(p) => few_rows(c),
@@ -925,24 +902,6 @@ impl ExecutionPlan for SharedExec {
     }
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
-    }
-    // A definition a limit holds says how many rows it can answer, for DataFusion's join selection;
-    // any other says nothing, as before.
-    fn partition_statistics(
-        &self,
-        _partition: Option<usize>,
-    ) -> Result<Arc<datafusion_common::Statistics>> {
-        let mut s = datafusion_common::Statistics::new_unknown(&self.schema);
-        let def = self
-            .state
-            .plan
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if let Some(n) = def.and_then(|d| at_most_rows(&d)) {
-            s.num_rows = datafusion_common::stats::Precision::Inexact(n);
-        }
-        Ok(Arc::new(s))
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]

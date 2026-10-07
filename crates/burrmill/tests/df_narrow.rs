@@ -343,6 +343,26 @@ fn a_joined_side_is_held_only_when_a_later_join_reads_its_keys() {
     assert_eq!(got, want);
 }
 
+/// A side holding a subquery is left whole. A `NOT IN` beside an `OR` plans as a mark join with
+/// scalar subqueries over it: with the keys filter on that, this statement never finished, and on
+/// Lodestar's indexers page DataFusion's sort pushdown panicked in the release gate.
+#[test]
+fn a_side_holding_a_subquery_is_not_narrowed() {
+    let (_t, mut e) = engine();
+    e.register_view(
+        "marked",
+        "SELECT id, pos FROM ev WHERE pos < 20000 OR id NOT IN (SELECT id FROM one WHERE pos < 50000)",
+    )
+    .unwrap();
+    let chain = "SELECT e.id, m.pos FROM ent e LEFT JOIN marked m ON m.id = e.id";
+    let all = rows(&e, &format!("SELECT * FROM ({chain}) x ORDER BY id DESC"));
+    let got = rows(
+        &e,
+        &format!("SELECT * FROM ({chain}) x ORDER BY id DESC LIMIT 3"),
+    );
+    assert_eq!(got, all[..3].to_vec());
+}
+
 /// Nothing changes without a limit.
 #[test]
 fn a_statement_without_a_limit_is_planned_as_before() {
