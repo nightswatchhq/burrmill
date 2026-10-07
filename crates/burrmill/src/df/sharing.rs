@@ -783,8 +783,9 @@ impl PhysicalOptimizerRule for PublishShared {
 /// The most rows `p` can produce, when a limit beneath it says so: through the operators that pass
 /// fewer rows or as many, and into the definition a shared reference reads.
 pub(super) fn at_most_rows(p: &Arc<dyn ExecutionPlan>) -> Option<usize> {
+    // A limit per partition, as a local limit or a sort that keeps its partitions applies it.
     if let Some(n) = p.fetch() {
-        return Some(n);
+        return Some(n.saturating_mul(p.properties().partitioning.partition_count().max(1)));
     }
     if let Some(d) = definition(p) {
         return at_most_rows(&d);
@@ -796,13 +797,14 @@ pub(super) fn at_most_rows(p: &Arc<dyn ExecutionPlan>) -> Option<usize> {
     }
 }
 
-/// Whether a hash join should build on `p`: a limit holds it to a few rows, or it is what the
-/// narrowed rows of a statement's limit carried ([`super::narrow`]).
+/// Whether a hash join should build on `p`: a limit holds it to a few rows, or it is the keys of
+/// the rows a statement's limit kept ([`super::narrow`]).
 pub(super) fn few_rows(p: &Arc<dyn ExecutionPlan>) -> bool {
-    if p.fetch().is_some_and(|n| n <= super::narrow::MOST_ROWS)
-        || p.is::<super::narrow::NarrowedExec>()
-    {
+    if p.is::<super::narrow::NarrowedExec>() {
         return true;
+    }
+    if p.fetch().is_some() {
+        return at_most_rows(p).is_some_and(|n| n <= super::narrow::MOST_ROWS);
     }
     if let Some(d) = definition(p) {
         return few_rows(&d);
@@ -924,8 +926,8 @@ impl ExecutionPlan for SharedExec {
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
-    // A definition that keeps a few rows says so, which is what lets a join collect it whole and
-    // build on it; any other says nothing, as before.
+    // A definition a limit holds says how many rows it can answer, for DataFusion's join selection;
+    // any other says nothing, as before.
     fn partition_statistics(
         &self,
         _partition: Option<usize>,

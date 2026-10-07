@@ -42,7 +42,8 @@ pub(super) fn narrow(plan: LogicalPlan) -> Result<LogicalPlan> {
     with_definitions(plan, &mut |p, defs| {
         let mut cx = Cx {
             defs,
-            sources: Vec::new(),
+            kept: Vec::new(),
+            sides: Vec::new(),
             fresh: 0,
         };
         // Outermost first: the optimizer copies a limit into each left side, and only the
@@ -54,14 +55,21 @@ pub(super) fn narrow(plan: LogicalPlan) -> Result<LogicalPlan> {
 
 struct Cx<'a> {
     defs: &'a mut Definitions,
-    /// References to the rows narrowed so far, each computed once: the kept rows of each chain and
-    /// each joined side read through their keys. A later join of the chain takes its keys from them.
-    sources: Vec<LogicalPlan>,
+    /// References to the kept rows of each narrowed chain, each computed once.
+    kept: Vec<LogicalPlan>,
+    /// Each joined side narrowed so far, and its reference once a later join of the chain has taken
+    /// keys from it. One no join reads stays where it was, streamed into its join.
+    sides: Vec<(LogicalPlan, Option<LogicalPlan>)>,
     fresh: usize,
 }
 
 impl Cx<'_> {
     fn at(&mut self, n: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // A recursive term is run once per round over that round's rows: nothing in it is computed
+        // once for the statement.
+        if let LogicalPlan::RecursiveQuery(_) = n {
+            return Ok(Transformed::new(n, false, TreeNodeRecursion::Jump));
+        }
         let (input, order, rows) = match &n {
             LogicalPlan::Sort(Sort {
                 expr,
@@ -87,6 +95,16 @@ impl Cx<'_> {
         let Some(narrowed) = self.descend(input, order, rows)? else {
             return Ok(Transformed::no(n));
         };
+        let sides = std::mem::take(&mut self.sides);
+        let narrowed = narrowed
+            .transform_up(|p| match side_of(&p) {
+                Some(i) => Ok(Transformed::yes(match &sides[i] {
+                    (_, Some(reference)) => reference.clone(),
+                    (side, None) => side.clone(),
+                })),
+                None => Ok(Transformed::no(p)),
+            })?
+            .data;
         let input = Arc::new(narrowed);
         let n = match n {
             LogicalPlan::Sort(s) => LogicalPlan::Sort(Sort { input, ..s }),
@@ -168,14 +186,16 @@ impl Cx<'_> {
                 };
                 let right = match self.reduce(&left, j)? {
                     Some(r) => {
-                        let r = self.defs.define(r);
-                        self.sources.push(r.clone());
-                        Arc::new(r)
+                        self.sides.push((r, None));
+                        Arc::new(side(
+                            self.sides.len() - 1,
+                            &self.sides[self.sides.len() - 1].0,
+                        ))
                     }
                     None => Arc::clone(&j.right),
                 };
                 Ok(Some(LogicalPlan::Join(Join::try_new(
-                    Arc::new(narrowed(left)),
+                    Arc::new(left),
                     right,
                     j.on.clone(),
                     j.filter.clone(),
@@ -207,7 +227,7 @@ impl Cx<'_> {
                 .build()?,
         };
         let reference = self.defs.define(kept);
-        self.sources.push(reference.clone());
+        self.kept.push(reference.clone());
         Ok(reference)
     }
 
@@ -218,7 +238,7 @@ impl Cx<'_> {
         if j.null_equality != NullEquality::NullEqualsNothing {
             return Ok(None);
         }
-        let mut source: Option<LogicalPlan> = None;
+        let mut source: Option<Source> = None;
         let mut pairs: Vec<(Expr, Expr)> = Vec::new();
         for (l, r) in &j.on {
             let Some((from, e)) = self.trace(l, left) else {
@@ -231,8 +251,21 @@ impl Cx<'_> {
             }
             pairs.push((e, r.clone()));
         }
-        let Some(source) = source else {
-            return Ok(None);
+        // Keys of the kept rows are as few as they are; a joined side's grow with its fan-out.
+        let (source, few) = match source {
+            None => return Ok(None),
+            Some(Source::Kept(k)) => (k, true),
+            Some(Source::Side(i)) => {
+                let reference = match &self.sides[i].1 {
+                    Some(r) => r.clone(),
+                    None => {
+                        let r = self.defs.define(self.sides[i].0.clone());
+                        self.sides[i].1 = Some(r.clone());
+                        r
+                    }
+                };
+                (reference, false)
+            }
         };
         let alias = format!("__burrmill_keys_{}", self.fresh);
         self.fresh += 1;
@@ -254,10 +287,9 @@ impl Cx<'_> {
                 Vec::<Expr>::new(),
             )?
             .build()?;
-        let keys = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-            Arc::new(narrowed(keys)),
-            alias.as_str(),
-        )?);
+        let keys = if few { narrowed(keys) } else { keys };
+        let keys =
+            LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(Arc::new(keys), alias.as_str())?);
         let on: Vec<(Expr, Expr)> = pairs
             .into_iter()
             .zip(&names)
@@ -269,15 +301,15 @@ impl Cx<'_> {
     /// Where `e`, over the columns of `plan` as [`Cx::descend`] built it, comes from: rows already
     /// narrowed, and `e` over their columns. A limit between only drops rows, so the keys found may
     /// be more than `plan` holds, never fewer, and a left join's padding NULLs match nothing.
-    fn trace(&self, e: &Expr, plan: &LogicalPlan) -> Option<(LogicalPlan, Expr)> {
+    fn trace(&self, e: &Expr, plan: &LogicalPlan) -> Option<(Source, Expr)> {
         if e.is_volatile() {
             return None;
         }
-        if self.sources.contains(plan) {
-            return Some((plan.clone(), e.clone()));
+        if self.kept.contains(plan) {
+            return Some((Source::Kept(plan.clone()), e.clone()));
         }
-        if let Some(input) = under_narrowed(plan) {
-            return self.trace(e, input);
+        if let Some(i) = side_of(plan) {
+            return Some((Source::Side(i), e.clone()));
         }
         match plan {
             LogicalPlan::Projection(p) => self.trace(&through_projection(e, p)?, &p.input),
@@ -406,8 +438,8 @@ fn semi(plan: &LogicalPlan, on: Vec<(Expr, Expr)>, keys: &LogicalPlan) -> Result
     )?))
 }
 
-/// Rows derived from those a limit kept, or their keys: the side a hash join should build on.
-/// Planned as [`NarrowedExec`], which passes its input through.
+/// The distinct keys of the rows a limit kept, no more of them than those rows: the side a hash
+/// join should build on. Planned as [`NarrowedExec`], which passes its input through.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct Narrowed {
     input: LogicalPlan,
@@ -419,10 +451,64 @@ fn narrowed(input: LogicalPlan) -> LogicalPlan {
     })
 }
 
-fn under_narrowed(plan: &LogicalPlan) -> Option<&LogicalPlan> {
+/// Where the keys for a joined side come from.
+#[derive(PartialEq)]
+enum Source {
+    /// The kept rows of a chain, by their reference.
+    Kept(LogicalPlan),
+    /// A joined side narrowed earlier in the chain, by its place in [`Cx::sides`].
+    Side(usize),
+}
+
+/// A narrowed joined side while its chain is built, replaced before the statement leaves the rule
+/// by the side itself or, when a later join took keys from it, by its reference.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+struct Side {
+    index: usize,
+    input: LogicalPlan,
+}
+
+fn side(index: usize, input: &LogicalPlan) -> LogicalPlan {
+    LogicalPlan::Extension(Extension {
+        node: Arc::new(Side {
+            index,
+            input: input.clone(),
+        }),
+    })
+}
+
+fn side_of(plan: &LogicalPlan) -> Option<usize> {
     match plan {
-        LogicalPlan::Extension(e) => e.node.as_any().downcast_ref::<Narrowed>().map(|n| &n.input),
+        LogicalPlan::Extension(e) => e.node.as_any().downcast_ref::<Side>().map(|s| s.index),
         _ => None,
+    }
+}
+
+impl UserDefinedLogicalNodeCore for Side {
+    fn name(&self) -> &str {
+        "NarrowedSide"
+    }
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+    fn schema(&self) -> &DFSchemaRef {
+        self.input.schema()
+    }
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "NarrowedSide {}", self.index)
+    }
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
+        Ok(Self {
+            index: self.index,
+            input: inputs.swap_remove(0),
+        })
     }
 }
 

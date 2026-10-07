@@ -311,6 +311,58 @@ fn a_semi_join_builds_on_the_kept_keys() {
     }
 }
 
+/// The definitions a statement's plan holds, as `EXPLAIN` lists them.
+fn definitions(e: &Engine, sql: &str) -> usize {
+    let plan = rows(e, &format!("EXPLAIN {sql}")).join("\n");
+    plan.lines()
+        .find_map(|l| {
+            let at = l.find("SharedDefs: ids=[")? + "SharedDefs: ids=[".len();
+            Some(l[at..].split(']').next()?.split(',').count())
+        })
+        .unwrap_or(0)
+}
+
+/// The kept rows are held once; a joined side is held only when a later join takes its keys from
+/// it, and otherwise streams into its join as before.
+#[test]
+fn a_joined_side_is_held_only_when_a_later_join_reads_its_keys() {
+    let (_t, e) = engine();
+    let one = "SELECT e.id, x.pos FROM ent e LEFT JOIN ev x ON x.id = e.id ORDER BY e.id LIMIT 10";
+    assert_eq!(definitions(&e, one), 1);
+    let read = "SELECT e.id, r.amount FROM ent e LEFT JOIN lastev l ON l.id = e.id \
+                LEFT JOIN evrow r ON r.pos = l.last_pos ORDER BY e.id LIMIT 10";
+    assert_eq!(definitions(&e, read), 2);
+    let (got, want) = page(
+        &e,
+        "SELECT e.id, r.amount FROM ent e LEFT JOIN lastev l ON l.id = e.id \
+         LEFT JOIN evrow r ON r.pos = l.last_pos",
+        "e.id",
+        0,
+        10,
+    );
+    assert_eq!(got, want);
+}
+
+/// Nothing changes without a limit.
+#[test]
+fn a_statement_without_a_limit_is_planned_as_before() {
+    let (_t, e) = engine();
+    let plan = rows(&e, "EXPLAIN SELECT * FROM entity ORDER BY id").join("\n");
+    assert!(!plan.contains("__burrmill_keys"), "{plan}");
+    assert_eq!(definitions(&e, "SELECT * FROM entity ORDER BY id"), 0);
+}
+
+/// A recursive term runs once a round over that round's rows, so a limit in it keeps its rows
+/// there. Taken out to be computed once, its work table was read before anything filled it.
+#[test]
+fn a_limit_in_a_recursive_term_stays_in_it() {
+    let (_t, e) = engine();
+    let sql = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL \
+               SELECT n + 1 FROM (SELECT r.n FROM r LEFT JOIN one o ON o.pos = r.n \
+               ORDER BY r.n LIMIT 5) s WHERE n < 6) SELECT n FROM r ORDER BY n";
+    assert_eq!(rows(&e, sql), vec!["1", "2", "3", "4", "5", "6"]);
+}
+
 /// nuthatch#1951: the first page of an entity derived every entity before the limit applied. The
 /// aggregates on the joined sides now see only the ten kept ids.
 #[test]
