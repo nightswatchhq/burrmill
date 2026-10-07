@@ -30,6 +30,7 @@ mod latest;
 mod narrow;
 mod nullsub;
 mod onerow;
+mod outerorder;
 pub use depth::check_expr_bounds;
 mod buildside;
 mod distinct;
