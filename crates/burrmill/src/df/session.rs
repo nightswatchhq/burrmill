@@ -523,6 +523,7 @@ impl QueryPlanner for MiniQueryPlanner {
         DefaultPhysicalPlanner::with_extension_planners(vec![
             Arc::new(OwnedFoldPlanner),
             Arc::new(super::sharing::SharedPlanner),
+            Arc::new(super::narrow::NarrowedPlanner),
         ])
         .create_physical_plan(logical_plan, session)
         .await
@@ -756,7 +757,8 @@ impl Session for MiniSession {
                 self.config.options().as_ref(),
                 |_, _| {},
             )?;
-            return self.optimizer.optimize(analyzed, self, |_, _| {});
+            let optimized = self.optimizer.optimize(analyzed, self, |_, _| {})?;
+            return super::narrow::narrow(optimized);
         };
         // As the umbrella crate's `SessionState::optimize`: without this, EXPLAIN shows only the
         // plan as parsed, never what the analyzer and optimizer made of it.
@@ -778,6 +780,10 @@ impl Session for MiniSession {
             };
             stringified_plans.push(p.to_stringified(plan_type));
         })?;
+        let optimized = super::narrow::narrow(optimized)?;
+        stringified_plans.push(optimized.to_stringified(PlanType::OptimizedLogicalPlan {
+            optimizer_name: "narrow_joins".into(),
+        }));
         Ok(LogicalPlan::Explain(Explain {
             verbose: e.verbose,
             explain_format: e.explain_format.clone(),

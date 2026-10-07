@@ -27,6 +27,7 @@ mod correlate;
 mod depth;
 mod dialect;
 mod latest;
+mod narrow;
 mod nullsub;
 mod onerow;
 pub use depth::check_expr_bounds;
