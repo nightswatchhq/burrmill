@@ -19,7 +19,9 @@ fn segment(dir: &std::path::Path, n: u64) -> (std::path::PathBuf, u64) {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(UInt64Array::from_iter_values(rows.clone().map(|i| n * 1000 + i))),
+            Arc::new(UInt64Array::from_iter_values(
+                rows.clone().map(|i| n * 1000 + i),
+            )),
             Arc::new(StringArray::from_iter_values(
                 rows.clone().map(|i| format!("w{}", (i * 7 + n) % 97)),
             )),
@@ -44,15 +46,23 @@ fn engine(dir: &std::path::Path) -> Engine {
     let declared = [("block_number", "u64"), ("who", "string"), ("q", "u64")]
         .map(|(c, t)| (c.to_string(), t.to_string()));
     let mut e = Engine::open_empty().unwrap();
-    e.register_facts("t", &declared, (1..=8).map(|n| segment(dir, n)).collect(), &[], (None, None))
-        .unwrap();
-    e.register_view(
-        "v",
-        "SELECT who, sum(q) AS s FROM t GROUP BY who ORDER BY sum(q) DESC, who",
+    e.register_facts(
+        "t",
+        &declared,
+        (1..=8).map(|n| segment(dir, n)).collect(),
+        &[],
+        (None, None),
     )
     .unwrap();
-    e.register_view("top", "SELECT who, s FROM v ORDER BY s LIMIT 5").unwrap();
-    e.register_view("over_v", "SELECT * FROM v WHERE s > 0").unwrap();
+    e.register_view(
+        "v",
+        "SELECT who, CAST(sum(q) AS BIGINT) AS s FROM t GROUP BY who ORDER BY sum(q) DESC, who",
+    )
+    .unwrap();
+    e.register_view("top", "SELECT who, s FROM v ORDER BY s, who LIMIT 5")
+        .unwrap();
+    e.register_view("over_v", "SELECT * FROM v WHERE s > 0")
+        .unwrap();
     e
 }
 
@@ -76,7 +86,8 @@ fn plan(e: &Engine, sql: &str) -> String {
     plan
 }
 
-const ORDERED: &str = "SELECT who, sum(q) AS s FROM t GROUP BY who ORDER BY sum(q) DESC, who";
+const ORDERED: &str =
+    "SELECT who, CAST(sum(q) AS BIGINT) AS s FROM t GROUP BY who ORDER BY sum(q) DESC, who";
 
 #[test]
 fn a_views_order_is_the_answers_when_nothing_above_reorders() {
@@ -88,12 +99,16 @@ fn a_views_order_is_the_answers_when_nothing_above_reorders() {
         "SELECT * FROM v",
         "SELECT who, s FROM v",
         "SELECT * FROM over_v",
-        "SELECT * FROM (SELECT who, sum(q) AS s FROM t GROUP BY who ORDER BY sum(q) DESC, who)",
+        "SELECT * FROM (SELECT who, CAST(sum(q) AS BIGINT) AS s FROM t GROUP BY who ORDER BY sum(q) DESC, who)",
         "WITH c AS (SELECT * FROM v) SELECT * FROM c",
     ] {
         assert_eq!(rows(&e, sql), expect, "{sql}");
     }
-    assert_eq!(rows(&e, "SELECT * FROM v LIMIT 4"), expect[..4], "a limit takes the first rows");
+    assert_eq!(
+        rows(&e, "SELECT * FROM v LIMIT 4"),
+        expect[..4],
+        "a limit takes the first rows"
+    );
 }
 
 #[test]
@@ -105,14 +120,24 @@ fn an_outer_order_and_a_views_limit_still_decide() {
     assert_eq!(rows(&e, "SELECT * FROM v ORDER BY who"), by_who);
 
     let mut least = rows(&e, ORDERED);
-    least.reverse();
+    least.sort_by_key(|r| {
+        (
+            r["s"].as_i64().unwrap(),
+            r["who"].as_str().unwrap().to_string(),
+        )
+    });
     least.truncate(5);
-    let top = rows(&e, "SELECT * FROM top");
-    let s = |r: &Vec<Value>| r.iter().map(|r| r["s"].clone()).collect::<Vec<_>>();
-    assert_eq!(s(&top), s(&least));
+    assert_eq!(rows(&e, "SELECT * FROM top"), least);
+    let mut whos: Vec<Value> = least.iter().map(|r| r["who"].clone()).collect();
+    whos.sort_by_key(|w| w.as_str().unwrap().to_string());
+    let joined = "SELECT who FROM top JOIN (SELECT DISTINCT who FROM t) USING (who) ORDER BY who";
+    let joined: Vec<Value> = rows(&e, joined)
+        .into_iter()
+        .map(|r| r["who"].clone())
+        .collect();
     assert_eq!(
-        rows(&e, "SELECT count(*) AS n FROM top JOIN t USING (who)")[0]["n"],
-        rows(&e, "SELECT count(*) AS n FROM t WHERE who IN (SELECT who FROM top)")[0]["n"],
+        joined, whos,
+        "a limit below a join keeps the rows its order chose"
     );
 }
 
