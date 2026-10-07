@@ -158,3 +158,18 @@ fn a_sort_that_cannot_reach_the_answer_is_not_run() {
     }
     assert!(plan(&e, "SELECT * FROM v").contains("SortExec"));
 }
+
+/// The walk grows its stack as DataFusion's own do: unprotected, 45 chained views overflowed a test
+/// thread's stack that 85 fit in without the rule.
+#[test]
+fn a_long_chain_of_views_fits_the_stack_it_did_before() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut e = engine(tmp.path());
+    e.register_view("vv0", "SELECT * FROM v WHERE s >= 0")
+        .unwrap();
+    for i in 1..=80 {
+        let body = format!("SELECT * FROM vv{} WHERE s >= 0", i - 1);
+        e.register_view(&format!("vv{i}"), &body).unwrap();
+    }
+    assert_eq!(rows(&e, "SELECT count(*) AS n FROM vv80")[0]["n"], 97);
+}

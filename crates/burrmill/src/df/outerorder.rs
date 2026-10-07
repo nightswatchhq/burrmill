@@ -29,6 +29,7 @@ impl AnalyzerRule for OutermostOrder {
 }
 
 /// `decides`: a sort here would order the answer, or choose the rows of a limit above.
+#[recursive::recursive]
 fn keep(plan: LogicalPlan, decides: bool) -> Result<LogicalPlan> {
     let plan = plan
         .map_subqueries(|q| keep(q, true).map(Transformed::yes))?
