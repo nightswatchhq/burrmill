@@ -161,20 +161,22 @@ impl Cx<'_> {
             // The optimizer's copy of a limit: any `rows` of what it keeps are any `rows` of its input.
             LogicalPlan::Limit(l) if order.is_none() => {
                 use datafusion_expr::logical_plan::{FetchType, SkipType};
-                let as_many = matches!(
-                    (l.get_skip_type(), l.get_fetch_type()),
-                    (Ok(SkipType::Literal(0)), Ok(FetchType::Literal(Some(f)))) if f >= rows
-                );
-                if !as_many {
-                    return Ok(None);
-                }
+                let fetch = match (l.get_skip_type(), l.get_fetch_type()) {
+                    (Ok(SkipType::Literal(0)), Ok(FetchType::Literal(Some(f)))) if f >= rows => f,
+                    _ => return Ok(None),
+                };
                 let Some(input) = self.descend(&l.input, None, rows)? else {
                     return Ok(None);
                 };
-                Ok(Some(LogicalPlan::Limit(Limit {
+                let limited = LogicalPlan::Limit(Limit {
                     input: Arc::new(input),
                     ..l.clone()
-                })))
+                });
+                // As few rows as the kept ones: a join over them builds on them.
+                Ok(Some(match fetch <= MOST_ROWS {
+                    true => narrowed(limited),
+                    false => limited,
+                }))
             }
             LogicalPlan::Join(j)
                 if j.join_type == JoinType::Left

@@ -300,14 +300,38 @@ fn a_semi_join_builds_on_the_kept_keys() {
         .collect();
     assert!(!semis.is_empty(), "{plan}");
     for l in semis {
-        let at = l.find("build_input_rows=").expect(l) + "build_input_rows=".len();
-        let n: u64 = l[at..]
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse()
-            .unwrap();
-        assert!(n <= 10, "built on {n} rows: {l}");
+        assert!(built_on(l) <= 10, "{l}");
+    }
+}
+
+fn built_on(l: &str) -> u64 {
+    let at = l.find("build_input_rows=").expect(l) + "build_input_rows=".len();
+    l[at..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap()
+}
+
+/// With a `LIMIT` and no order, the optimizer copies the limit into each left side of the chain.
+/// Each of those copies is a few rows too: by bytes read the joins over them built on the joined
+/// side instead, and `bet(id)` on BetSwirl ran out of its 512 MB building five of them.
+#[test]
+fn every_join_over_the_kept_rows_builds_on_them() {
+    let (_t, e) = engine();
+    let plan = rows(
+        &e,
+        "EXPLAIN ANALYZE SELECT * FROM entity WHERE id = 'k0003' LIMIT 1",
+    )
+    .join("\n");
+    let joins: Vec<&str> = plan
+        .lines()
+        .filter(|l| l.contains("HashJoinExec"))
+        .collect();
+    assert!(joins.len() >= 4, "{plan}");
+    for l in joins {
+        assert!(built_on(l) <= 1, "{l}");
     }
 }
 
