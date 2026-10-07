@@ -30,6 +30,7 @@ datafusion = [
     "dep:object_store",
     "dep:regex",
     "dep:serde_json",
+    "dep:recursive",
     "dep:tokio",
     "arrow/ipc",
     "dep:arrow-schema",
@@ -61,6 +62,8 @@ rayon.workspace = true
 sqlparser = { workspace = true, features = ["visitor"] }
 
 async-trait = { version = "0.1", optional = true }
+# Grows the stack in burrmill's own plan walks, as DataFusion's `recursive_protection` does.
+recursive = { version = "0.1.1", optional = true }
 bytes = { version = "1", optional = true }
 regex = { version = "1", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
@@ -231,6 +234,11 @@ required-features = ["datafusion"]
 [[test]]
 name = "df_sharedpool"
 path = "tests/df_sharedpool.rs"
+required-features = ["datafusion"]
+
+[[test]]
+name = "df_outerorder"
+path = "tests/df_outerorder.rs"
 required-features = ["datafusion"]
 
 [[test]]

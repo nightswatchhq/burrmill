@@ -105,6 +105,12 @@ impl MiniSession {
         config.options_mut().sql_parser.enable_ident_normalization = false;
         // DuckDB types `1.5` as DECIMAL(2,1), and nuthatch prints a DECIMAL as a string.
         config.options_mut().sql_parser.parse_float_as_decimal = true;
+        // It drops the ORDER BY of every view and derived table; `OutermostOrder` keeps the one that
+        // orders the answer.
+        config
+            .options_mut()
+            .sql_parser
+            .enable_subquery_sort_elimination = false;
         // Each sorting partition reserves this up front to merge its spilled runs; DataFusion's
         // 10 MB each is more than a small budget holds, and a sort that cannot reserve it refuses.
         if let Some(b) = budget {
@@ -272,7 +278,10 @@ impl MiniSession {
             known: std::sync::Mutex::new(None),
             analyzer: Analyzer::with_rules(
                 [
-                    Arc::new(ResolveGroupingFunction::new()) as Arc<dyn AnalyzerRule + Send + Sync>,
+                    // First, so no later rule meets a sort that cannot order the answer.
+                    Arc::new(super::outerorder::OutermostOrder)
+                        as Arc<dyn AnalyzerRule + Send + Sync>,
+                    Arc::new(ResolveGroupingFunction::new()),
                     Arc::new(super::nullsub::NullableSubqueries::default()),
                     // Before coercion: DuckDB's text comparisons depend on what was written.
                     Arc::new(super::dialect::DuckComparisons),
