@@ -96,6 +96,11 @@ fn engine() -> (tempfile::TempDir, Engine) {
             "SELECT id || '-x' AS k, count(*) AS c FROM ev GROUP BY id",
         ),
         (
+            "nullish",
+            "SELECT CASE WHEN id < 'k0003' THEN NULL ELSE id END AS id, count(*) AS c \
+             FROM ev GROUP BY 1",
+        ),
+        (
             "entity",
             "SELECT e.id, e.v, l.n, l.total, l.last_pos, r.amount AS last_amount, t.c, \
                     k.gr, k.pr \
@@ -228,6 +233,20 @@ fn a_limit_after_a_filter_answers_the_filtered_row() {
         );
         assert_eq!(got, all, "{id}");
     }
+}
+
+/// A join that matches NULL to NULL keeps its NULL matches: a semi join on the keys would not.
+#[test]
+fn a_join_matching_null_to_null_keeps_its_null_matches() {
+    let (_t, e) = engine();
+    let select = "SELECT e.id, n.c FROM ent e LEFT JOIN nullish n \
+                  ON n.id IS NOT DISTINCT FROM CASE WHEN e.v = 0 THEN NULL ELSE e.id END";
+    let (got, want) = page(&e, select, "e.id", 0, 8);
+    assert_eq!(got, want);
+    assert!(
+        !got[0].ends_with("|NULL"),
+        "k0000 matches the NULL group: {got:?}"
+    );
 }
 
 /// A row number over every row is not one over the kept rows' partitions: the key filter stays

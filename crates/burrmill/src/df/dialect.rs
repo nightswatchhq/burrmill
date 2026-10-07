@@ -239,12 +239,12 @@ pub struct Known {
 
 /// Each name counted by the tables that carry it, so a table can be added or taken away without
 /// building the rest again.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, PartialEq, Debug)]
 struct Names {
     exact: std::collections::HashMap<String, usize>,
     folded: std::collections::HashMap<String, std::collections::BTreeMap<String, usize>>,
     /// Each table's and view's columns in order, by lowercased name, for expanding `*`.
-    tables: std::collections::HashMap<String, Vec<String>>,
+    tables: std::collections::HashMap<String, std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 impl Names {
@@ -297,7 +297,10 @@ impl Known {
         for c in &columns {
             n.add(c);
         }
-        n.tables.insert(name.to_lowercase(), columns);
+        n.tables
+            .entry(name.to_lowercase())
+            .or_default()
+            .insert(name.to_string(), columns);
     }
 
     /// What [`Known::add_table`] added for `name` and `columns`, taken away again.
@@ -307,11 +310,17 @@ impl Known {
         for c in columns {
             n.remove(c);
         }
-        n.tables.remove(&name.to_lowercase());
+        let lower = name.to_lowercase();
+        if let Some(t) = n.tables.get_mut(&lower) {
+            t.remove(name);
+            if t.is_empty() {
+                n.tables.remove(&lower);
+            }
+        }
     }
 
     pub fn columns(&self, lowercased: &str) -> Option<Vec<String>> {
-        self.base.tables.get(lowercased).cloned()
+        self.base.tables.get(lowercased)?.values().next().cloned()
     }
 
     pub fn add(&mut self, name: &str) {
@@ -3828,5 +3837,33 @@ impl ScalarUDFImpl for Decode {
         } else {
             ColumnarValue::Array(out)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Known;
+
+    fn cols(c: &[&str]) -> Vec<String> {
+        c.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Tables added, replaced and removed one at a time leave the names a rebuild would give,
+    /// including two tables whose names differ only in case.
+    #[test]
+    fn names_kept_as_tables_change_are_the_names_rebuilt() {
+        let mut k = Known::default();
+        k.add_table("Bets", cols(&["Id", "amount"]));
+        k.add_table("bets", cols(&["id", "Total"]));
+        k.add_table("users", cols(&["Id"]));
+        k.remove_table("users", &cols(&["Id"]));
+        k.add_table("users", cols(&["address"]));
+        k.remove_table("bets", &cols(&["id", "Total"]));
+        let rebuilt = Known::of_tables([
+            ("Bets", cols(&["Id", "amount"])),
+            ("users", cols(&["address"])),
+        ]);
+        assert_eq!(*k.base, *rebuilt.base);
+        assert_eq!(k.columns("bets"), Some(cols(&["Id", "amount"])));
     }
 }

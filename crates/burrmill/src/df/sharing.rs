@@ -821,7 +821,9 @@ fn passes_rows(p: &Arc<dyn ExecutionPlan>) -> bool {
     use datafusion_physical_plan::repartition::RepartitionExec;
     p.is::<ProjectionExec>()
         || p.is::<FilterExec>()
-        || p.is::<datafusion_physical_plan::aggregates::AggregateExec>()
+        // Grouping sets answer a row per set for each group.
+        || p.downcast_ref::<datafusion_physical_plan::aggregates::AggregateExec>()
+            .is_some_and(|a| a.group_expr().is_single())
         || p.is::<datafusion_physical_plan::sorts::sort::SortExec>()
         || p.is::<RepartitionExec>()
         || p.is::<CoalescePartitionsExec>()

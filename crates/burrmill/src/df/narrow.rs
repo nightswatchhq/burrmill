@@ -1,16 +1,15 @@
 //! `NarrowJoins`: an `ORDER BY ... LIMIT` or a `LIMIT` over left joins keeps its rows from the
 //! preserved side first, and each joined side reads only the keys those rows carry.
 //!
-//! A nest's entity view is a chain of left joins from one row per entity, so the SDK's first page
-//! of twenty bets derived all 160,802 through about twenty hash joins before the limit applied
-//! (nuthatch#1951). The rows a left join keeps are its preserved side's, each at least once, so the
-//! top `n` of the join come from the top `n` of that side: those are computed once, and every
-//! other side of the chain is semi-joined to the keys they carry, pushed as far down as it can go.
-//! Ties at the `n`th key are broken as arbitrarily as before.
+//! A nest's entity view is a chain of left joins from one row per entity, so a page of it derived
+//! every entity before the limit applied (nuthatch#1951). The rows a left join keeps are its
+//! preserved side's, each at least once, so the top `n` of the join come from the top `n` of that
+//! side: those are computed once, and every other side of the chain is semi-joined to the keys they
+//! carry, pushed as far down as it can go. Ties at the `n`th key are broken as arbitrarily as before.
 //!
-//! It runs once, after the optimizer, so the keys are the joins' own equi-keys and the statement's
-//! filters have already reached the preserved side. A shared subquery is not narrowed: other
-//! readers want all of it, so a key filter stops above its reference.
+//! It runs once, after the optimizer, so the keys are the joins' own equi-keys. A filter between
+//! the limit and the joins stops it. A shared subquery is not narrowed: other readers want all of
+//! it, so a key filter stops above its reference.
 
 use std::fmt;
 use std::sync::Arc;
@@ -43,23 +42,21 @@ pub(super) fn narrow(plan: LogicalPlan) -> Result<LogicalPlan> {
     with_definitions(plan, &mut |p, defs| {
         let mut cx = Cx {
             defs,
-            leaves: Vec::new(),
-            narrowed: Vec::new(),
+            sources: Vec::new(),
             fresh: 0,
         };
         // Outermost first: the optimizer copies a limit into each left side, and only the
-        // statement's own decides which rows are kept.
-        p.transform_down_with_subqueries(|n| cx.at(n))
-            .map(|t| t.data)
+        // statement's own decides which rows are kept. Not into subqueries: one still correlated
+        // cannot have its rows computed once for the statement.
+        p.transform_down(|n| cx.at(n)).map(|t| t.data)
     })
 }
 
 struct Cx<'a> {
     defs: &'a mut Definitions,
-    /// References to the kept rows of each narrowed chain.
-    leaves: Vec<LogicalPlan>,
-    /// The joined sides already narrowed, which can supply keys to a later join of their chain.
-    narrowed: Vec<*const LogicalPlan>,
+    /// References to the rows narrowed so far, each computed once: the kept rows of each chain and
+    /// each joined side read through their keys. A later join of the chain takes its keys from them.
+    sources: Vec<LogicalPlan>,
     fresh: usize,
 }
 
@@ -171,9 +168,9 @@ impl Cx<'_> {
                 };
                 let right = match self.reduce(&left, j)? {
                     Some(r) => {
-                        let r = Arc::new(r);
-                        self.narrowed.push(Arc::as_ptr(&r));
-                        r
+                        let r = self.defs.define(r);
+                        self.sources.push(r.clone());
+                        Arc::new(r)
                     }
                     None => Arc::clone(&j.right),
                 };
@@ -210,13 +207,17 @@ impl Cx<'_> {
                 .build()?,
         };
         let reference = self.defs.define(kept);
-        self.leaves.push(reference.clone());
+        self.sources.push(reference.clone());
         Ok(reference)
     }
 
     /// `j`'s right side reading only the keys `left`, its narrowed left side, carries, or `None`
-    /// when no key of the join can be traced to rows already narrowed.
+    /// when no key of the join can be traced to rows already narrowed. A join that matches NULL to
+    /// NULL is left whole: the keys are matched as a semi join matches them, NULL to nothing.
     fn reduce(&mut self, left: &LogicalPlan, j: &Join) -> Result<Option<LogicalPlan>> {
+        if j.null_equality != NullEquality::NullEqualsNothing {
+            return Ok(None);
+        }
         let mut source: Option<LogicalPlan> = None;
         let mut pairs: Vec<(Expr, Expr)> = Vec::new();
         for (l, r) in &j.on {
@@ -265,14 +266,14 @@ impl Cx<'_> {
         semi(&j.right, on, &keys).map(Some)
     }
 
-    /// Where `e`, over `plan`'s columns, comes from: a narrowed chain's kept rows or a side already
-    /// narrowed, and `e` over that input's columns. Any filter between only drops rows, so the keys
-    /// found may be more than `plan` holds, never fewer.
+    /// Where `e`, over the columns of `plan` as [`Cx::descend`] built it, comes from: rows already
+    /// narrowed, and `e` over their columns. A limit between only drops rows, so the keys found may
+    /// be more than `plan` holds, never fewer, and a left join's padding NULLs match nothing.
     fn trace(&self, e: &Expr, plan: &LogicalPlan) -> Option<(LogicalPlan, Expr)> {
         if e.is_volatile() {
             return None;
         }
-        if self.leaves.contains(plan) {
+        if self.sources.contains(plan) {
             return Some((plan.clone(), e.clone()));
         }
         if let Some(input) = under_narrowed(plan) {
@@ -281,15 +282,12 @@ impl Cx<'_> {
         match plan {
             LogicalPlan::Projection(p) => self.trace(&through_projection(e, p)?, &p.input),
             LogicalPlan::SubqueryAlias(s) => self.trace(&through_alias(e, s)?, &s.input),
-            LogicalPlan::Filter(f) => self.trace(e, &f.input),
             LogicalPlan::Limit(l) => self.trace(e, &l.input),
-            LogicalPlan::Join(j) if matches!(j.join_type, JoinType::Left | JoinType::Inner) => {
+            LogicalPlan::Join(j) if j.join_type == JoinType::Left => {
                 if over(e, j.left.schema()) {
                     self.trace(e, &j.left)
-                } else if over(e, j.right.schema())
-                    && self.narrowed.contains(&Arc::as_ptr(&j.right))
-                {
-                    Some((j.right.as_ref().clone(), e.clone()))
+                } else if over(e, j.right.schema()) {
+                    self.trace(e, &j.right)
                 } else {
                     None
                 }

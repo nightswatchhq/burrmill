@@ -37,8 +37,8 @@ impl PhysicalOptimizerRule for BuildOnSmaller {
             let swappable = j.join_type().supports_swap() && !j.null_aware;
             // A side a limit holds to a few rows is the one to build on, whatever it read to get
             // them. A semi join's keys are also collected whole, so the side it filters is read
-            // where it is rather than repartitioned; a left join over the kept rows is not, since
-            // collected it took 30 s over 5,020 rows with repeated keys where partitioned took 0.2.
+            // where it is rather than repartitioned. A left join over the kept rows is not: collected
+            // over a few thousand rows with repeated keys it ran a hundred times slower (#1951).
             let collect = matches!(j.join_type(), JoinType::RightSemi | JoinType::LeftSemi);
             match (few_rows(j.left()), few_rows(j.right())) {
                 (true, _) if !collect => return Ok(Transformed::no(p)),
