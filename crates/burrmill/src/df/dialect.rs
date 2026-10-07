@@ -237,53 +237,90 @@ pub struct Known {
     extra: Names,
 }
 
-#[derive(Default)]
+/// Each name counted by the tables that carry it, so a table can be added or taken away without
+/// building the rest again.
+#[derive(Default, Clone, PartialEq, Debug)]
 struct Names {
-    exact: std::collections::HashSet<String>,
-    folded: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    exact: std::collections::HashMap<String, usize>,
+    folded: std::collections::HashMap<String, std::collections::BTreeMap<String, usize>>,
     /// Each table's and view's columns in order, by lowercased name, for expanding `*`.
-    tables: std::collections::HashMap<String, Vec<String>>,
-}
-
-impl Clone for Names {
-    fn clone(&self) -> Self {
-        Names {
-            exact: self.exact.clone(),
-            folded: self.folded.clone(),
-            tables: self.tables.clone(),
-        }
-    }
+    tables: std::collections::HashMap<String, std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 impl Names {
     fn add(&mut self, name: &str) {
-        self.exact.insert(name.to_string());
-        self.folded
+        *self.exact.entry(name.to_string()).or_default() += 1;
+        *self
+            .folded
             .entry(name.to_lowercase())
             .or_default()
-            .insert(name.to_string());
+            .entry(name.to_string())
+            .or_default() += 1;
+    }
+
+    fn remove(&mut self, name: &str) {
+        if let Some(n) = self.exact.get_mut(name) {
+            *n -= 1;
+            if *n == 0 {
+                self.exact.remove(name);
+            }
+        }
+        let lower = name.to_lowercase();
+        if let Some(f) = self.folded.get_mut(&lower) {
+            if let Some(n) = f.get_mut(name) {
+                *n -= 1;
+                if *n == 0 {
+                    f.remove(name);
+                }
+            }
+            if f.is_empty() {
+                self.folded.remove(&lower);
+            }
+        }
     }
 }
 
 impl Known {
     /// The nest's names, from its tables and views and their columns.
     pub fn of_tables<'a>(tables: impl IntoIterator<Item = (&'a str, Vec<String>)>) -> Self {
-        let mut n = Names::default();
+        let mut k = Known::default();
         for (name, columns) in tables {
-            n.add(name);
-            for c in &columns {
-                n.add(c);
-            }
-            n.tables.insert(name.to_lowercase(), columns);
+            k.add_table(name, columns);
         }
-        Known {
-            base: Arc::new(n),
-            extra: Names::default(),
+        k
+    }
+
+    /// A table or view and its columns, added to the nest's names.
+    pub fn add_table(&mut self, name: &str, columns: Vec<String>) {
+        let n = Arc::make_mut(&mut self.base);
+        n.add(name);
+        for c in &columns {
+            n.add(c);
+        }
+        n.tables
+            .entry(name.to_lowercase())
+            .or_default()
+            .insert(name.to_string(), columns);
+    }
+
+    /// What [`Known::add_table`] added for `name` and `columns`, taken away again.
+    pub fn remove_table(&mut self, name: &str, columns: &[String]) {
+        let n = Arc::make_mut(&mut self.base);
+        n.remove(name);
+        for c in columns {
+            n.remove(c);
+        }
+        let lower = name.to_lowercase();
+        if let Some(t) = n.tables.get_mut(&lower) {
+            t.remove(name);
+            if t.is_empty() {
+                n.tables.remove(&lower);
+            }
         }
     }
 
     pub fn columns(&self, lowercased: &str) -> Option<Vec<String>> {
-        self.base.tables.get(lowercased).cloned()
+        self.base.tables.get(lowercased)?.values().next().cloned()
     }
 
     pub fn add(&mut self, name: &str) {
@@ -292,12 +329,15 @@ impl Known {
 
     /// An identifier written in another case than the one name it can mean, as that name.
     fn resolve(&self, written: &str) -> Option<&str> {
-        if self.base.exact.contains(written) || self.extra.exact.contains(written) {
+        if self.base.exact.contains_key(written) || self.extra.exact.contains_key(written) {
             return None;
         }
         let lower = written.to_lowercase();
         let (a, b) = (self.base.folded.get(&lower), self.extra.folded.get(&lower));
-        let mut names = a.into_iter().flatten().chain(b.into_iter().flatten());
+        let mut names = a
+            .into_iter()
+            .flat_map(|m| m.keys())
+            .chain(b.into_iter().flat_map(|m| m.keys()));
         let first = names.next()?;
         if names.all(|n| n == first) {
             Some(first.as_str())
@@ -3797,5 +3837,33 @@ impl ScalarUDFImpl for Decode {
         } else {
             ColumnarValue::Array(out)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Known;
+
+    fn cols(c: &[&str]) -> Vec<String> {
+        c.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Tables added, replaced and removed one at a time leave the names a rebuild would give,
+    /// including two tables whose names differ only in case.
+    #[test]
+    fn names_kept_as_tables_change_are_the_names_rebuilt() {
+        let mut k = Known::default();
+        k.add_table("Bets", cols(&["Id", "amount"]));
+        k.add_table("bets", cols(&["id", "Total"]));
+        k.add_table("users", cols(&["Id"]));
+        k.remove_table("users", &cols(&["Id"]));
+        k.add_table("users", cols(&["address"]));
+        k.remove_table("bets", &cols(&["id", "Total"]));
+        let rebuilt = Known::of_tables([
+            ("Bets", cols(&["Id", "amount"])),
+            ("users", cols(&["address"])),
+        ]);
+        assert_eq!(*k.base, *rebuilt.base);
+        assert_eq!(k.columns("bets"), Some(cols(&["Id", "amount"])));
     }
 }

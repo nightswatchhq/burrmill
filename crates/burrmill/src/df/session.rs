@@ -456,17 +456,43 @@ impl MiniSession {
 
     /// Bind `name` to `source`, or unbind it.
     pub fn set_table_source(&mut self, name: &str, source: Option<Arc<dyn TableSource>>) {
-        match source {
-            Some(s) => self.tables.insert(name.to_string(), s),
+        let old = match &source {
+            Some(s) => self.tables.insert(name.to_string(), Arc::clone(s)),
             None => self.tables.remove(name),
         };
-        *self.known.get_mut().expect("known names") = None;
+        self.renamed(name, old.as_ref(), source.as_ref());
     }
 
     pub fn register_table(&mut self, name: &str, table: Arc<dyn TableProvider>) {
-        self.tables
-            .insert(name.to_string(), provider_as_source(table));
-        *self.known.get_mut().expect("known names") = None;
+        let new = provider_as_source(table);
+        let old = self.tables.insert(name.to_string(), Arc::clone(&new));
+        self.renamed(name, old.as_ref(), Some(&new));
+    }
+
+    /// The names of `name`'s table as it was taken out and as it is put in. Rebuilding them all at
+    /// each of a nest's hundred-odd registrations was about a third of what defining its views cost.
+    fn renamed(
+        &mut self,
+        name: &str,
+        old: Option<&Arc<dyn TableSource>>,
+        new: Option<&Arc<dyn TableSource>>,
+    ) {
+        let Some(known) = self.known.get_mut().expect("known names") else {
+            return;
+        };
+        let columns = |t: &Arc<dyn TableSource>| -> Vec<String> {
+            t.schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect()
+        };
+        if let Some(t) = old {
+            known.remove_table(name, &columns(t));
+        }
+        if let Some(t) = new {
+            known.add_table(name, columns(t));
+        }
     }
 
     /// Every table and column name, for resolving identifiers as DuckDB does: built once, again
@@ -523,6 +549,7 @@ impl QueryPlanner for MiniQueryPlanner {
         DefaultPhysicalPlanner::with_extension_planners(vec![
             Arc::new(OwnedFoldPlanner),
             Arc::new(super::sharing::SharedPlanner),
+            Arc::new(super::narrow::NarrowedPlanner),
         ])
         .create_physical_plan(logical_plan, session)
         .await
@@ -756,7 +783,8 @@ impl Session for MiniSession {
                 self.config.options().as_ref(),
                 |_, _| {},
             )?;
-            return self.optimizer.optimize(analyzed, self, |_, _| {});
+            let optimized = self.optimizer.optimize(analyzed, self, |_, _| {})?;
+            return super::narrow::narrow(optimized);
         };
         // As the umbrella crate's `SessionState::optimize`: without this, EXPLAIN shows only the
         // plan as parsed, never what the analyzer and optimizer made of it.
@@ -778,6 +806,10 @@ impl Session for MiniSession {
             };
             stringified_plans.push(p.to_stringified(plan_type));
         })?;
+        let optimized = super::narrow::narrow(optimized)?;
+        stringified_plans.push(optimized.to_stringified(PlanType::OptimizedLogicalPlan {
+            optimizer_name: "narrow_joins".into(),
+        }));
         Ok(LogicalPlan::Explain(Explain {
             verbose: e.verbose,
             explain_format: e.explain_format.clone(),

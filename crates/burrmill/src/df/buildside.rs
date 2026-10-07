@@ -11,13 +11,14 @@
 
 use std::sync::Arc;
 
-use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{JoinType, Result};
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::joins::HashJoinExec;
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_session::PhysicalOptimizerRule;
 
+use super::sharing::few_rows;
 use super::smallinputs::bytes_read;
 
 #[derive(Debug, Default)]
@@ -33,7 +34,31 @@ impl PhysicalOptimizerRule for BuildOnSmaller {
             let Some(j) = p.downcast_ref::<HashJoinExec>() else {
                 return Ok(Transformed::no(p));
             };
-            if !j.join_type().supports_swap() || j.null_aware {
+            let swappable = j.join_type().supports_swap() && !j.null_aware;
+            // The rows a limit kept, or their keys, are the side to build on, whatever was read to
+            // find them. A semi join's keys are also collected whole, so the side it filters is read
+            // where it is rather than repartitioned. A left join over the kept rows is not: collected
+            // over a few thousand rows with repeated keys it ran a hundred times slower (#1951).
+            let collect = matches!(j.join_type(), JoinType::RightSemi | JoinType::LeftSemi);
+            match (few_rows(j.left()), few_rows(j.right())) {
+                (true, _) if !collect => return Ok(Transformed::no(p)),
+                (false, true) if swappable && !collect => {
+                    return Ok(Transformed::yes(j.swap_inputs(*j.partition_mode())?));
+                }
+                (true, _) if *j.partition_mode() == PartitionMode::Partitioned => {
+                    return Ok(Transformed::yes(Arc::new(
+                        j.builder()
+                            .with_partition_mode(PartitionMode::CollectLeft)
+                            .build()?,
+                    )));
+                }
+                (true, _) => return Ok(Transformed::no(p)),
+                (false, true) if swappable => {
+                    return Ok(Transformed::yes(j.swap_inputs(PartitionMode::CollectLeft)?));
+                }
+                _ => {}
+            }
+            if !swappable {
                 return Ok(Transformed::no(p));
             }
             match (bytes_read(j.left()), bytes_read(j.right())) {

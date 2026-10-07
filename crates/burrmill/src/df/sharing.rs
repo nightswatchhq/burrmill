@@ -377,6 +377,72 @@ fn hoist(plan: LogicalPlan) -> Result<LogicalPlan> {
     }))
 }
 
+/// Subqueries a rule after sharing defines once and reads in several places.
+pub(super) struct Definitions {
+    added: Vec<(u64, Shared, LogicalPlan)>,
+}
+
+impl Definitions {
+    /// `plan`, computed once, and a reference to it with its columns.
+    pub(super) fn define(&mut self, plan: LogicalPlan) -> LogicalPlan {
+        let mut h = rustc_hash::FxHasher::default();
+        plan.hash(&mut h);
+        self.added.len().hash(&mut h);
+        let (id, state) = (h.finish(), Shared::default());
+        let reference = LogicalPlan::Extension(Extension {
+            node: Arc::new(SharedRef {
+                id,
+                state: Arc::clone(&state),
+                schema: Arc::clone(plan.schema()),
+            }),
+        });
+        self.added.push((id, state, plan));
+        reference
+    }
+}
+
+/// `f` over the statement and each existing definition, with what it defines placed beside them.
+pub(super) fn with_definitions(
+    plan: LogicalPlan,
+    f: &mut dyn FnMut(LogicalPlan, &mut Definitions) -> Result<LogicalPlan>,
+) -> Result<LogicalPlan> {
+    if let LogicalPlan::Analyze(_) = plan {
+        return plan
+            .map_children(|p| with_definitions(p, f).map(Transformed::yes))
+            .map(|t| t.data);
+    }
+    let mut new = Definitions { added: Vec::new() };
+    let mut node = match &plan {
+        LogicalPlan::Extension(e) => match e.node.as_any().downcast_ref::<SharedDefs>() {
+            Some(d) => SharedDefs {
+                ids: d.ids.clone(),
+                states: d.states.clone(),
+                schemas: d.schemas.clone(),
+                defs: d.defs.clone(),
+                body: d.body.clone(),
+            },
+            None => SharedDefs::around(plan),
+        },
+        _ => SharedDefs::around(plan),
+    };
+    for def in &mut node.defs {
+        *def = f(std::mem::take(def), &mut new)?;
+    }
+    node.body = f(std::mem::take(&mut node.body), &mut new)?;
+    for (id, state, def) in new.added {
+        node.ids.push(id);
+        node.states.push(state);
+        node.schemas.push(Arc::clone(def.schema()));
+        node.defs.push(def);
+    }
+    if node.defs.is_empty() {
+        return Ok(node.body);
+    }
+    Ok(LogicalPlan::Extension(Extension {
+        node: Arc::new(node),
+    }))
+}
+
 /// An analyzer rule run over a statement with shared subqueries a definition at a time, the ones
 /// inside first, then the statement. A rule that changes a definition's columns, as the checked
 /// sums do, has the references to it carry the new ones before it reaches their readers, as it
@@ -533,6 +599,18 @@ pub struct SharedDefs {
     schemas: Vec<DFSchemaRef>,
     defs: Vec<LogicalPlan>,
     body: LogicalPlan,
+}
+
+impl SharedDefs {
+    fn around(body: LogicalPlan) -> Self {
+        Self {
+            ids: Vec::new(),
+            states: Vec::new(),
+            schemas: Vec::new(),
+            defs: Vec::new(),
+            body,
+        }
+    }
 }
 
 impl fmt::Debug for SharedDefs {
@@ -700,6 +778,38 @@ impl PhysicalOptimizerRule for PublishShared {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Whether a hash join should build on `p`: it is the rows a statement's limit kept, or their keys
+/// ([`super::narrow`]). Only those: a plan the narrowing did not touch keeps its build sides.
+pub(super) fn few_rows(p: &Arc<dyn ExecutionPlan>) -> bool {
+    if p.is::<super::narrow::NarrowedExec>() {
+        return true;
+    }
+    match p.children().as_slice() {
+        [c] if passes_rows(p) => few_rows(c),
+        _ => false,
+    }
+}
+
+/// An operator that answers as many rows as its one input or fewer.
+fn passes_rows(p: &Arc<dyn ExecutionPlan>) -> bool {
+    use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_physical_plan::filter::FilterExec;
+    use datafusion_physical_plan::projection::ProjectionExec;
+    use datafusion_physical_plan::repartition::RepartitionExec;
+    p.is::<ProjectionExec>()
+        || p.is::<FilterExec>()
+        // Grouping sets answer a row per set for each group.
+        || p.downcast_ref::<datafusion_physical_plan::aggregates::AggregateExec>()
+            .is_some_and(|a| a.group_expr().is_single())
+        || p.is::<datafusion_physical_plan::sorts::sort::SortExec>()
+        || p.is::<RepartitionExec>()
+        || p.is::<CoalescePartitionsExec>()
+        || matches!(
+            p.name(),
+            "CastViewsExec" | "CompactViewsExec" | "CancelExec" | "GatherExec"
+        )
 }
 
 /// The plan a shared reference reads, as planned so far.
