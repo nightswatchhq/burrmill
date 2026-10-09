@@ -343,7 +343,7 @@ today is byte-identical after every slice, or the slice does not land.
 
 ```sh
 # §1.1: the published artifacts, both stripped at build
-gh release download v4.1.0 --repo nightswatchhq/nuthatch -p 'nuthatch-x86_64-unknown-linux-gnu.tar.gz'
+gh release download v4.1.0 --repo nuthatch-org/nuthatch -p 'nuthatch-x86_64-unknown-linux-gnu.tar.gz'
 objdump -h nuthatch            # section sizes; .text, .eh_frame, .gcc_except_table, .rela.dyn
 
 # §1.2 to §1.4: a symbolled host build of nuthatch at 79d3180, Burrmill pinned at 17e0a22

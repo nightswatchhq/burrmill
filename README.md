@@ -2,7 +2,7 @@
 
 **SQL over sealed Parquet segments plus a live tip, in DuckDB's dialect, with exact integer
 arithmetic that refuses rather than wraps. The analytical engine inside
-[nuthatch](https://github.com/nightswatchhq/nuthatch) since 4.1.0, where DuckDB used to be:
+[nuthatch](https://github.com/nuthatch-org/nuthatch) since 4.1.0, where DuckDB used to be:
 byte-identical to DuckDB on every authored view of the nests it has replaced it on, faster than it on
 the warm view benchmark, slower than it per statement in production, in one Rust binary with no C++
 in it.**
@@ -140,7 +140,7 @@ Said plainly, because a README that implies otherwise is the thing this project 
   162, release binary 112 MB against 41, `target/` 4.76 GB against 3.27, clean test build 84 s
   against 77, incremental 1.8 s against 1.1. DuckDB is one C++ archive compiled once; DataFusion is
   dozens of crates whose generic operators are instantiated per type into every test binary. The
-  footprint is accepted; the build time is [burrmill#7](https://github.com/nightswatchhq/burrmill/issues/7).
+  footprint is accepted; the build time is [burrmill#7](https://github.com/nuthatch-org/burrmill/issues/7).
 - **Small queries.** An eight-row view runs eighteen DataFusion operators. `lodestar_disputes` is
   0.80x DuckDB after the small-input rule, and the worst ratio on the nest.
 - **`HUGEINT` stops at 38 digits.** `DECIMAL(38,0)` reaches 10^38 - 1 where DuckDB's reaches
