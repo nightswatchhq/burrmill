@@ -14,7 +14,7 @@ members = ["crates/burrmill", "crates/burrmill-bench"]
 edition = "2021"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nightswatchhq/burrmill"
+repository = "https://github.com/nuthatch-org/burrmill"
 
 [workspace.dependencies]
 # 59.x, matching DataFusion 55's Arrow. df-gate deliberately carried two Arrows (nuthatch's 58 for
